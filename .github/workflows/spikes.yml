@@ -218,3 +218,149 @@ jobs:
             echo "| h2. HMR in the app's webview | $(result "$HMR_APP") |"
             echo "| Probe removed, tree clean | $(result "$REMOVE") |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # S2.7: does any process of Navaja's tree send a packet, idle or in use?
+  # A capture on the runner, a VM, around two phases: the e2e build idling
+  # 5 min with its window shown, then the whole end-to-end suite, egress
+  # canary included. Each OS captures its own way
+  # (scripts/spikes/s2-7-egress.sh): Linux runs the app in a network
+  # namespace with NAT and captures its veth; macOS captures on pktap, which
+  # names each packet's process; Windows audits WFP connections, process
+  # creation and DNS-client queries. A control request first proves that
+  # the capture sees and attributes traffic, and each phase must show the
+  # app's own WebDriver traffic on loopback. Nothing opens a URL or the logs
+  # folder (architecture §5). The captures go up as an artifact; nothing
+  # else leaves the runner.
+  s2-7:
+    name: S2.7 egress capture (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      MATRIX_OS: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # tcpdump and strace for the capture and ci.yml's network guard;
+      # x11-utils (xwininfo) and ImageMagick (import) to check and grab the
+      # window on the virtual display.
+      - name: Linux system packages for Tauri, the end-to-end run and the capture
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential file libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev xvfb dbus strace tcpdump x11-utils imagemagick
+
+      - name: Install Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      # Restores what ci.yml's os job saved on main, under the same key.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ${{ matrix.os }}
+          save-if: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build the app for the end-to-end run
+        id: build
+        run: pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
+
+      - name: Set up the capture
+        id: setup
+        run: bash scripts/spikes/s2-7-egress.sh setup
+
+      - name: Control, a known request is captured and attributed
+        id: control
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: bash scripts/spikes/s2-7-egress.sh control
+
+      - name: Idle, the app runs 5 min with its window shown, under capture
+        id: idle
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: bash scripts/spikes/s2-7-egress.sh idle
+
+      - name: Idle, no packet from the process tree
+        id: idle_check
+        if: ${{ !cancelled() && (steps.idle.outcome == 'success' || steps.idle.outcome == 'failure') }}
+        run: bash scripts/spikes/s2-7-egress.sh check idle
+
+      - name: In use, the end-to-end suite passes under capture (pnpm e2e)
+        id: in_use
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: bash scripts/spikes/s2-7-egress.sh in-use
+
+      - name: In use, no packet from the process tree
+        id: in_use_check
+        if: ${{ !cancelled() && (steps.in_use.outcome == 'success' || steps.in_use.outcome == 'failure') }}
+        run: bash scripts/spikes/s2-7-egress.sh check in-use
+
+      - name: Tear down the capture
+        if: ${{ always() && steps.setup.outcome != 'skipped' }}
+        run: bash scripts/spikes/s2-7-egress.sh teardown
+
+      # Captures (Linux: the namespace's traffic only; macOS: every
+      # process's, cut to 512 bytes a packet), exported events (Windows),
+      # listings, the app's output and a screenshot.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: s2-7-${{ matrix.os }}
+          path: ${{ runner.temp }}/navaja-s2-7
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        env:
+          OS: ${{ matrix.os }}
+          OUT: ${{ runner.temp }}/navaja-s2-7
+          BUILD: ${{ steps.build.outcome }}
+          SETUP: ${{ steps.setup.outcome }}
+          CONTROL: ${{ steps.control.outcome }}
+          IDLE: ${{ steps.idle.outcome }}
+          IDLE_CHECK: ${{ steps.idle_check.outcome }}
+          IN_USE: ${{ steps.in_use.outcome }}
+          IN_USE_CHECK: ${{ steps.in_use_check.outcome }}
+        run: |
+          result() {
+            case "$1" in
+              success) echo PASS ;;
+              failure) echo FAIL ;;
+              skipped | '') echo 'not run' ;;
+              *) echo "$1" ;;
+            esac
+          }
+          {
+            echo "### S2.7 egress capture: $OS"
+            echo
+            echo '| Check | Result |'
+            echo '|---|---|'
+            echo "| e2e build (\`tauri build --features e2e\`) | $(result "$BUILD") |"
+            echo "| Capture set up | $(result "$SETUP") |"
+            echo "| Control: a known request is captured and attributed | $(result "$CONTROL") |"
+            echo "| Idle: the app runs 5 min with its window shown | $(result "$IDLE") |"
+            echo "| Idle: no packet from the process tree | $(result "$IDLE_CHECK") |"
+            echo "| In use: \`pnpm e2e\` passes, egress canary included | $(result "$IN_USE") |"
+            echo "| In use: no packet from the process tree | $(result "$IN_USE_CHECK") |"
+            echo
+            for phase in control idle in-use; do
+              [ ! -f "$OUT/$phase-findings.md" ] || cat "$OUT/$phase-findings.md"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
