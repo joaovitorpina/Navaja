@@ -289,7 +289,7 @@ cargo deny --all-features check bans licenses sources   # if you added a depende
 pnpm check && pnpm lint && pnpm test  # custom views only: svelte-check, the import allowlist, Prettier, Vitest
 ```
 
-`cargo fmt` never sees your tool's files: `tools/lib.rs` declares them inside `register_tools!`, and rustfmt does not expand macros. Running rustfmt on `mod.rs` also checks the files it declares, such as `tests.rs`; without `--check`, it formats them.
+`cargo fmt` never sees your tool's files: `tools/lib.rs` declares them inside `register_tools!`, and rustfmt does not expand macros. Running rustfmt on `mod.rs` also checks the files it declares, such as `tests.rs`; without `--check`, it formats them. CI runs the same check on every tool folder.
 
 Then commit, and check what your PR touches:
 
