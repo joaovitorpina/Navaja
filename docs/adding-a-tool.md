@@ -90,8 +90,10 @@ Prefer `Transform` or `Generator`. A custom view needs a reason in the PR. A `Ge
 The shell loads `tools/<id>/ui/View.svelte` and passes it `ViewProps` from `$lib/view-kit`. A view may import only (architecture §4):
 - its own files, through relative paths that stay inside `tools/<id>/ui/`;
 - `svelte` and its browser subpaths, but not `svelte/internal`, `svelte/compiler` or `svelte/server`;
-- `$lib/view-kit`, the shell's API for views: `t`, `runTool`, `copyText`, `CopyButton`, `ToolIcon` and their types;
+- `$lib/view-kit`, the shell's API for views: `t`, `runTool`, `copyText`, `CopyButton`, `ToolIcon`, `OUTPUT_ATTRIBUTE` and their types;
 - generated types from `$bindings/<name>`.
+
+Put `OUTPUT_ATTRIBUTE` (`data-output`) on every element that shows tool output, so the shell sends a native copy (Ctrl/Cmd+C or the context menu) whose selection touches it through Rust, like `copyText`, with the markers that keep it out of clipboard history (architecture §5, Clipboard). A copy from a text field stays native, so don't show output in one.
 
 Its tests (`*.test.ts` and `*.spec.ts` files in `ui/`, which Vitest runs) may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`.
 
