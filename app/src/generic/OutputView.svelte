@@ -13,10 +13,15 @@
     $props();
 
   const label = $derived(t(`tool.${toolId}.output.${spec.key}`, spec.label));
-  let revealed = $state<Record<number, boolean>>({});
+  // Reveals belong to one result: every new value starts masked again.
+  let revealed = $derived.by((): Record<number, boolean> => {
+    void value;
+    return {};
+  });
 </script>
 
-<section class="flex flex-col gap-2" aria-label={label}>
+<!-- data-output: native copies that touch this region go through Rust (lib/copy.ts). -->
+<section class="flex flex-col gap-2" aria-label={label} data-output>
   <h2 class="text-sm font-medium text-muted">{label}</h2>
   {#if value === null || value === undefined}
     <p class="text-sm text-muted">—</p>
@@ -36,17 +41,25 @@
           <tr class="border-b border-line">
             <th scope="row" class="py-1.5 pr-4 text-left align-top font-medium">{row.key}</th>
             <td class="py-1.5 font-mono break-all">
-              {#if row.secret && !revealed[i]}
-                <span aria-label={t('shell.hidden_value', 'Hidden value')}>••••••••</span>
-                <button
-                  type="button"
-                  class="ml-2 text-xs underline"
-                  onclick={() => (revealed[i] = true)}>{t('shell.reveal', 'Reveal')}</button
-                >
-              {:else}
-                {row.value}
-              {/if}
+              <!-- Secrets can't be selected, so they never reach the X11/Wayland primary selection. -->
+              <span class={row.secret ? 'select-none' : undefined}>
+                {#if row.secret && !revealed[i]}
+                  <span aria-label={t('shell.hidden_value', 'Hidden value')}>••••••••</span>
+                  <button
+                    type="button"
+                    class="ml-2 text-xs underline"
+                    onclick={() => (revealed = { ...revealed, [i]: true })}
+                    >{t('shell.reveal', 'Reveal')}</button
+                  >
+                {:else}
+                  {row.value}
+                {/if}
+              </span>
               {#if row.note}<div class="font-sans text-xs text-muted">{row.note}</div>{/if}
+            </td>
+            <!-- Copies without revealing. -->
+            <td class="py-1.5 pl-2 text-right align-top">
+              <CopyButton text={row.value} name={`${t('shell.copy', 'Copy')}: ${row.key}`} />
             </td>
           </tr>
         {/each}

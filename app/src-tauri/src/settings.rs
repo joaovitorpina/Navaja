@@ -38,6 +38,9 @@ impl Default for Settings {
 pub struct SettingsStore {
     path: Option<PathBuf>,
     current: Mutex<Settings>,
+    /// Held across a whole save, so saves never interleave. Separate from
+    /// `current`, so `get` (on the main thread) never waits for a disk write.
+    saving: Mutex<()>,
 }
 
 impl SettingsStore {
@@ -49,6 +52,7 @@ impl SettingsStore {
         Self {
             path,
             current: Mutex::new(current),
+            saving: Mutex::new(()),
         }
     }
 
@@ -59,17 +63,22 @@ impl SettingsStore {
             .clone()
     }
 
-    pub fn set(&self, settings: Settings) -> Result<(), String> {
+    /// Saves and then calls `apply` with what was saved, before any other
+    /// save starts, so the file, memory and what `apply` does always agree.
+    /// Must not be called on the main thread when `apply` waits on it.
+    pub fn set(&self, settings: Settings, apply: impl FnOnce(&Settings)) -> Result<(), String> {
         if settings.version != CURRENT_VERSION {
             return Err(format!(
                 "settings version {} is not supported",
                 settings.version
             ));
         }
+        let _saving = self.saving.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(path) = &self.path {
             write_atomic(path, &settings).map_err(|error| error.to_string())?;
         }
-        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = settings;
+        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = settings.clone();
+        apply(&settings);
         Ok(())
     }
 }
@@ -123,7 +132,7 @@ mod tests {
             theme: Theme::Dark,
             ..Settings::default()
         };
-        store.set(dark.clone()).unwrap();
+        store.set(dark.clone(), |_| {}).unwrap();
         assert_eq!(SettingsStore::load(Some(&dir)).get(), dark);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -146,6 +155,39 @@ mod tests {
             version: 99,
             ..Settings::default()
         };
-        assert!(store.set(future).is_err());
+        assert!(store.set(future, |_| {}).is_err());
+    }
+
+    #[test]
+    fn concurrent_saves_leave_file_memory_and_apply_in_agreement() {
+        let dir = scratch("concurrent");
+        let store = std::sync::Arc::new(SettingsStore::load(Some(&dir)));
+        let applied = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let (store, applied) = (store.clone(), applied.clone());
+                std::thread::spawn(move || {
+                    let theme = if i % 2 == 0 {
+                        Theme::Dark
+                    } else {
+                        Theme::Light
+                    };
+                    let settings = Settings {
+                        theme,
+                        ..Settings::default()
+                    };
+                    store
+                        .set(settings, |saved| applied.lock().unwrap().push(saved.theme))
+                        .unwrap();
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let last_applied = *applied.lock().unwrap().last().unwrap();
+        assert_eq!(store.get().theme, last_applied);
+        assert_eq!(SettingsStore::load(Some(&dir)).get().theme, last_applied);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

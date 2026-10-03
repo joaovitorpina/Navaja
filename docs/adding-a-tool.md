@@ -83,7 +83,7 @@ mod tests;
 | `Generator` | Options → output, no input (UUID) | Nothing in TypeScript |
 | `Custom { view }` | Interactive tools the generic views can't express (the port inspector) | `ui/View.svelte` and `ui/i18n/en.ts` in the tool folder; `view` equals the id |
 
-Prefer `Transform` or `Generator`. A custom view needs a reason in the PR.
+Prefer `Transform` or `Generator`. A custom view needs a reason in the PR. A `Generator` action can't be `destructive`; the registry rejects it, because the generator view has no confirmation step.
 
 ### Outputs
 

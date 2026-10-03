@@ -82,15 +82,29 @@ export interface Recorded {
   args: Record<string, unknown>;
 }
 
-/** Mocks the app's commands; `run_tool` answers with `runResult`. */
+/** Answers the `index`-th `run_tool` call (0 is the first, often the run on open). */
+export type RunAnswer = (
+  index: number,
+  args: Record<string, unknown>,
+) => RunEnvelope | Promise<RunEnvelope>;
+
+/**
+ * Mocks the app's commands; `run_tool` answers with `runResult`. `commands`
+ * replaces any command's answer: throw (or reject) to make it fail.
+ */
 export function mockApp(options: {
   elevated?: boolean;
-  runResult?: RunEnvelope;
+  runResult?: RunEnvelope | RunAnswer;
   search?: (query: string) => SearchHit[];
+  commands?: Record<string, (args: Record<string, unknown>) => unknown>;
 }): Recorded[] {
   const calls: Recorded[] = [];
-  mockIPC((cmd, args) => {
-    calls.push({ cmd, args: (args ?? {}) as Record<string, unknown> });
+  let runs = 0;
+  mockIPC(async (cmd, payload) => {
+    const args = (payload ?? {}) as Record<string, unknown>;
+    calls.push({ cmd, args });
+    const override = options.commands?.[cmd];
+    if (override) return override(args);
     switch (cmd) {
       case 'list_tools':
         return catalog;
@@ -99,11 +113,15 @@ export function mockApp(options: {
       case 'app_info':
         return { name: 'Navaja', version: '0.0.0', specVersion: 1, elevated: options.elevated ?? false };
       case 'search': {
-        const query = String((args as { query?: string }).query ?? '');
+        const query = String(args.query ?? '');
         return options.search ? options.search(query) : [];
       }
-      case 'run_tool':
-        return envelopeBytes(options.runResult ?? { ok: { uuids: null } });
+      case 'run_tool': {
+        const { runResult } = options;
+        const envelope =
+          typeof runResult === 'function' ? await runResult(runs++, args) : runResult;
+        return envelopeBytes(envelope ?? { ok: { uuids: null } });
+      }
       case 'cancel_run':
         return true;
       default:

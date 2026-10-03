@@ -4,8 +4,11 @@
   import { t } from '$lib/i18n';
   import { href } from '$lib/router.svelte';
   import { shortcutLabel } from './keys';
+  import { toolGroups } from './order';
 
   let { catalog }: { catalog: Catalog } = $props();
+
+  const groups = $derived(toolGroups(catalog));
 </script>
 
 <div class="mx-auto flex max-w-5xl flex-col gap-6 p-6">
@@ -20,8 +23,7 @@
     </p>
   </header>
 
-  {#each catalog.categories as category (category.id)}
-    {@const tools = catalog.tools.filter((tool) => tool.category === category.id)}
+  {#each groups as { category, tools } (category.id)}
     <section>
       <h2 class="mb-2 text-sm font-semibold text-muted">
         {t(`category.${category.id}`, category.label)}

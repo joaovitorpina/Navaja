@@ -26,7 +26,7 @@ pub struct KeyValueRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub note: Option<String>,
-    /// Masked in the UI until revealed; copied through the sensitive path.
+    /// Masked in the UI until revealed; its Copy button copies it unrevealed.
     /// Always explicit, so a forgotten flag can't silently unmask a value.
     pub secret: bool,
 }

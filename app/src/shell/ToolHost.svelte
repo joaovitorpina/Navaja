@@ -1,15 +1,19 @@
 <script lang="ts">
   // Shows one tool: header plus the view its UiSpec asks for.
+  import type { Component } from 'svelte';
   import type { ToolMeta } from '$bindings/ToolMeta';
   import GeneratorView from '../generic/GeneratorView.svelte';
   import ToolIcon from '$lib/ToolIcon.svelte';
   import { t } from '$lib/i18n';
+  import type { ViewProps } from '$lib/view-kit';
 
   let { meta }: { meta: ToolMeta } = $props();
 
   // Custom views live with their tool and are found here, so adding one
   // never edits the shell (docs/architecture.md §4).
-  const customViews = import.meta.glob('@tools/*/ui/View.svelte');
+  const customViews = import.meta.glob<Component<ViewProps>>('@tools/*/ui/View.svelte', {
+    import: 'default',
+  });
 
   function customView(id: string) {
     const key = Object.keys(customViews).find((k) => k.endsWith(`/${id}/ui/View.svelte`));
@@ -32,9 +36,7 @@
     {:else if meta.ui.kind === 'custom'}
       {@const load = customView(meta.ui.view)}
       {#if load}
-        {#await load() then module}
-          {@const View = (module as { default: import('svelte').Component<{ meta: ToolMeta }> })
-            .default}
+        {#await load() then View}
           <View {meta} />
         {/await}
       {:else}
