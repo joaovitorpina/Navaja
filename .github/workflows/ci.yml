@@ -35,11 +35,40 @@ jobs:
       - name: Frozen identifiers are consistent
         run: bash scripts/check-identifiers.sh
 
+      # A pinned release, checked against its published SHA-256. Bump the
+      # version and the checksum together; the checksum is in
+      # gitleaks_<version>_checksums.txt on the release.
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          dir="$RUNNER_TEMP/gitleaks"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 --proto '=https' \
+            --output "$dir/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  $dir/$archive" | sha256sum --check --strict
+          tar -xzf "$dir/$archive" -C "$dir"
+          "$dir/gitleaks" version
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: gitleaks over fixtures and snapshots
+        run: bash scripts/check-fixture-secrets.sh
+
       - name: Install Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
 
       - name: rustfmt
         run: cargo fmt --all --check
+
+      # tools/lib.rs declares every tool module inside register_tools!, and
+      # rustfmt does not expand macros, so the step above never reaches them.
+      # Given a tool's mod.rs, rustfmt follows its `mod tests;` and other
+      # out-of-line modules itself.
+      - name: rustfmt over tool modules (declared inside a macro)
+        run: rustfmt --edition 2024 --check tools/*/mod.rs
 
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
@@ -82,6 +111,11 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # Dev dependencies included; the list is deny.toml's, plus the
+      # per-package exceptions in js-licenses.toml.
+      - name: JS licence allowlist
+        run: cargo xtask licenses
 
       - name: svelte-check and tsc
         run: pnpm check
@@ -171,6 +205,23 @@ jobs:
 
       - name: doctests
         run: cargo test --doc --workspace
+
+      # The macOS release is a universal DMG, and this runner is arm64, so
+      # nothing else compiles the Intel slice. Clippy runs on it with the
+      # same bans (clippy.toml, the workspace lints) and -D warnings as the
+      # clippy step above, tests included, so code behind cfg(target_arch)
+      # is covered on both sides. The step keys on runner.os, so a new macOS
+      # label keeps it. It fails on a runner that is not arm64, since then
+      # nothing would lint the arm64 slice. Its output lands in
+      # target/x86_64-apple-darwin, which rust-cache keeps with the rest.
+      - name: Intel macOS passes clippy (x86_64-apple-darwin)
+        if: runner.os == 'macOS'
+        env:
+          HOST_ARCH: ${{ runner.arch }}
+        run: |
+          [ "$HOST_ARCH" = ARM64 ] || { echo "::error::expected an arm64 runner, got $HOST_ARCH"; exit 1; }
+          rustup target add x86_64-apple-darwin
+          cargo clippy --workspace --all-targets --target x86_64-apple-darwin -- -D warnings
 
       - name: Build the app (front end embedded, no bundle)
         run: pnpm tauri build --debug --no-bundle

@@ -203,7 +203,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
    - two offline backups;
    - `docs/release.md`.
 4. **Provenance:** attestations and a minisign-signed `SHA256SUMS`.
-5. **Package-manager repos:** `xtask manifests`, the tap and bucket repos, and `xtask notices` (THIRD_PARTY_NOTICES).
+5. **Package-manager repos:** `xtask manifests`, the tap and bucket repos, and `xtask notices` (THIRD_PARTY_NOTICES; the npm side can reuse the package listing in `xtask licenses`).
 6. **S6.2**, then `install.md` and `privacy.md`.
    - install.md covers SmartScreen "More info → Run anyway", Smart App Control, Gatekeeper "Open Anyway", the Linux tray host and the NVIDIA variables.
    - privacy.md lists the OS services in a macOS text field's context menu: Look Up, Translate, Search With Google, Share and Services. They send the selected text only when the user picks one.
@@ -281,9 +281,13 @@ cargo xtask check                    # crate edges, dependency closures, release
 cargo xtask acl                      # after a command or capability change: rewrite acl.lock.json, then review its diff
 cargo xtask bindings --check         # ts-rs output == committed bindings
 cargo xtask tool-gate origin/main    # tool PR touches only what architecture §4 allows
+cargo fmt --all --check
+rustfmt --edition 2024 --check tools/*/mod.rs  # tool modules, which cargo fmt skips (declared inside a macro)
 cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace        # includes serial live port tests from M4
 cargo deny check bans licenses sources
+cargo xtask licenses                 # npm licences vs deny.toml's allowlist + js-licenses.toml (after pnpm install)
+bash scripts/check-fixture-secrets.sh  # gitleaks over tracked fixtures and snapshots (needs gitleaks on PATH)
 pnpm check && pnpm lint && pnpm test # svelte-check, ESLint+Prettier, Vitest+axe
 pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json && pnpm e2e
 # Linux, as CI runs it after the same build: the end-to-end suite under the strace network guard
@@ -292,12 +296,27 @@ WEBKIT_DISABLE_DMABUF_RENDERER=1 dbus-run-session -- xvfb-run -a bash app/e2e/st
 
 The end-to-end build is isolated from a Navaja you already run: it has its own identifier, starts its WebDriver server only when the harness asks, and gets a fresh temporary `NAVAJA_APP_DIR` (architecture §5).
 
+**JS licences** (`cargo xtask licenses`):
+- It lists every installed npm package with `pnpm licenses list`, dev dependencies included, since the front end bundles some of them.
+- Each installed version's licence is read from its own `package.json` (`license`, or the legacy `licenses`), the way pnpm reads a manifest. pnpm's reported licence is not used: when a manifest declares none, or says `SEE LICENSE IN <file>`, pnpm reports the licence names it finds in the LICENSE file's text.
+- Each licence is read as an SPDX expression and checked against deny.toml's `[licenses].allow`, the same list cargo-deny uses for crates.
+- Anything else needs an entry in `js-licenses.toml`: the package, its licence exactly as its `package.json` declares it (`Unknown` when it declares none), and a one-line reason. A package that changes licence falls out of its entry.
+- A missing, custom or unparseable licence fails unless it has an entry, and so does `SEE LICENSE IN <file>`. Before adding an entry for a package that declares no licence, read its LICENSE file. Every failing package is reported.
+- It sees what is installed on the running OS, so another OS's native binaries (esbuild, Tailwind, Tauri CLI) are not listed. An entry that no installed package uses under its licence only warns, since another OS may need it.
+
+**Secrets in fixtures** (`scripts/check-fixture-secrets.sh`):
+- gitleaks scans the tracked files under `tests/fixtures/` and `snapshots/` and every `*.snap`, with its built-in rules.
+- Fixtures and snapshots must be UTF-8 text, such as redacted dumps or JSON. gitleaks skips binary files, archives, UTF-16 text and symlinks without saying so, so the script fails on any of them before gitleaks runs. Git decides what is binary (`i/-text` in `git ls-files --eol`).
+- gitleaks also skips the paths its built-in config allowlists, such as images and fonts, `*.pdf` and `*.bin`, lockfiles, and anything under `node_modules/` or `vendor/`. A fixture must not be named like one.
+- With no such files it passes and says so. Otherwise it fails on a finding, or when gitleaks is missing or fails.
+- CI installs gitleaks 8.30.1 from its GitHub release and checks the archive's SHA-256 first.
+
 **Workflows:**
 
 | Workflow | Runs |
 |---|---|
-| `ci.yml` checks (ubuntu-24.04) | fmt, ESLint and Prettier (`pnpm lint`), svelte-check, cargo-deny on 4 targets, `xtask check`, `bindings --check`, `tool-gate`, the JS licence allowlist, gitleaks over fixtures and snapshots |
-| `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --no-bundle` → the same build with `--features e2e` and `e2e.conf.json` → WebdriverIO. Linux runs the suite under the strace guard, inside `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The job stops after 45 min, so a hung run fails instead of holding the runner for GitHub's 6 h. macOS also runs `cargo check --target x86_64-apple-darwin` |
+| `ci.yml` checks (ubuntu-24.04) | rustfmt (`cargo fmt`, plus `rustfmt --check tools/*/mod.rs` for the tool modules it skips), ESLint and Prettier (`pnpm lint`), svelte-check, cargo-deny on 4 targets, `xtask check`, `bindings --check`, `tool-gate`, the JS licence allowlist (`xtask licenses`), gitleaks over fixtures and snapshots (`scripts/check-fixture-secrets.sh`) |
+| `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --no-bundle` → the same build with `--features e2e` and `e2e.conf.json` → WebdriverIO. Linux runs the suite under the strace guard, inside `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The job stops after 45 min, so a hung run fails instead of holding the runner for GitHub's 6 h. macOS also runs clippy, with the same bans and `-D warnings`, on the Intel slice of the universal build: `cargo clippy --workspace --all-targets --target x86_64-apple-darwin -- -D warnings`. That step keys on `runner.os` and fails if the runner is not arm64, since then nothing would lint the arm64 slice |
 | `advisories.yml` | Daily `cargo deny check advisories`. Opens an issue but never blocks a PR |
 | `bundle.yml` | Weekly, keyless build of the release matrix: NSIS and zip, universal DMG, deb, rpm and AppImage in `container: ubuntu:22.04` |
 | `spikes.yml` | Manual. macOS spike steps that need no human |
@@ -306,6 +325,7 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 **CI hygiene:**
 - Runner labels are pinned, never `-latest`; `ubuntu-latest` moves to 26.04 in Oct-Nov 2026.
 - Actions are pinned by SHA.
+- A tool that no pinned action installs is downloaded at a pinned version and checked against its published SHA-256 before use (gitleaks). Renovate does not bump these; update the version and checksum together.
 - Swatinem/rust-cache with a per-OS key, saved only on main.
 - Release jobs restore no cache.
 

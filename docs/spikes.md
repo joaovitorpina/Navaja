@@ -8,7 +8,7 @@ A spike is a short, time-boxed experiment. It settles a question before the code
 - Keep to the time box. When it runs out, record what you have and decide.
 - A gating spike runs before the work it gates.
 - A fallback you take becomes an ADR in `docs/adr/`.
-- Keep raw outputs (captures, logs, numbers) next to the entry or in `crates/*/tests/fixtures/`. Redact arguments and anything secret.
+- Keep raw outputs (captures, logs, numbers) next to the entry or in `crates/*/tests/fixtures/`, as UTF-8 text such as redacted dumps or JSON. Redact arguments and anything secret. gitleaks checks fixtures and snapshots for secrets, but skips binary captures, archives, UTF-16 text, symlinks and the paths it allowlists, such as an image, a `.bin` or a lockfile (roadmap §2, "Secrets in fixtures").
 
 ## Template
 

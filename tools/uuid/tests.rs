@@ -32,7 +32,10 @@ fn ten_thousand_v7_are_unique_and_sorted() {
     assert!(ids.iter().all(|id| parse(id).get_version_num() == 7));
     let unique: HashSet<&String> = ids.iter().collect();
     assert_eq!(unique.len(), ids.len());
-    assert!(ids.windows(2).all(|w| w[0] < w[1]), "v7 batch must be strictly increasing");
+    assert!(
+        ids.windows(2).all(|w| w[0] < w[1]),
+        "v7 batch must be strictly increasing"
+    );
 }
 
 #[test]
@@ -48,7 +51,9 @@ fn v7_stays_ordered_across_runs() {
 #[test]
 fn formats_and_case() {
     let one = |format: &str, uppercase: bool| {
-        run(json!({ "format": format, "uppercase": uppercase })).unwrap().remove(0)
+        run(json!({ "format": format, "uppercase": uppercase }))
+            .unwrap()
+            .remove(0)
     };
     assert_eq!(one("simple", false).len(), 32);
     assert!(!one("simple", false).contains('-'));
@@ -56,7 +61,10 @@ fn formats_and_case() {
     assert!(braced.starts_with('{') && braced.ends_with('}'));
     let urn = one("urn", true);
     assert!(urn.starts_with("urn:uuid:"), "{urn}");
-    assert_eq!(urn["urn:uuid:".len()..], urn["urn:uuid:".len()..].to_uppercase());
+    assert_eq!(
+        urn["urn:uuid:".len()..],
+        urn["urn:uuid:".len()..].to_uppercase()
+    );
     let upper = one("hyphenated", true);
     assert_eq!(upper, upper.to_uppercase());
 }
