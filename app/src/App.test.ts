@@ -175,7 +175,7 @@ describe('shell', () => {
     render(App);
     expect(await screen.findByRole('status')).toHaveProperty(
       'textContent',
-      expect.stringContaining('running as administrator'),
+      expect.stringContaining('running with administrator or root rights'),
     );
   });
 

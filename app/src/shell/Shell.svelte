@@ -45,7 +45,7 @@
   <div role="status" class="border-b border-line bg-subtle px-4 py-2 text-sm">
     {t(
       'shell.elevated',
-      'Navaja is running as administrator. It doesn’t need to: every tool works the same without it.',
+      'Navaja is running with administrator or root rights. It doesn’t need them.',
     )}
   </div>
 {/if}

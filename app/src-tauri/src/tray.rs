@@ -5,12 +5,15 @@
 //! - macOS: template icon, tinted by the system; click opens the menu.
 //! - Linux (StatusNotifierItem): menu only, since click events don't arrive.
 
+use std::sync::Arc;
+
 use tauri::image::Image;
 use tauri::menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Runtime};
 
-use crate::window;
+use crate::state::AppState;
+use crate::window::{self, Request};
 
 const OPEN: &str = "open";
 const SEARCH: &str = "search";
@@ -23,7 +26,11 @@ const ICON: &[u8] = include_bytes!("../icons/tray/template.png");
 const ICON: &[u8] = include_bytes!("../icons/tray/color-32.png");
 
 /// `tools` are `(id, name)` pairs of registered tools with `tray: true`.
-pub fn create<R: Runtime>(app: &AppHandle<R>, tools: &[(String, String)]) -> tauri::Result<()> {
+pub fn create<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &Arc<AppState>,
+    tools: &[(String, String)],
+) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, OPEN, "Open Navaja", true, None::<&str>)?;
     let search = MenuItem::with_id(app, SEARCH, "Search tools…", true, None::<&str>)?;
     let tool_items = tools
@@ -49,35 +56,44 @@ pub fn create<R: Runtime>(app: &AppHandle<R>, tools: &[(String, String)]) -> tau
         .tooltip("Navaja")
         .menu(&menu)
         .show_menu_on_left_click(!cfg!(windows))
-        .on_menu_event(on_menu_event)
-        .on_tray_icon_event(on_tray_icon_event)
+        .on_menu_event({
+            let state = Arc::clone(state);
+            move |app, event| on_menu_event(app, &state, &event)
+        })
+        .on_tray_icon_event({
+            let state = Arc::clone(state);
+            move |tray, event| on_tray_icon_event(tray, &state, &event)
+        })
         .build(app)?;
     Ok(())
 }
 
-fn on_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
+fn on_menu_event<R: Runtime>(app: &AppHandle<R>, state: &AppState, event: &MenuEvent) {
     let id = event.id().as_ref();
-    if id == QUIT {
-        app.exit(0);
-        return;
-    }
-    let Some(main) = window::main_window(app) else {
-        return;
-    };
-    let result = match id {
-        OPEN => window::reveal(&main),
-        SEARCH => window::reveal(&main).and_then(|()| window::open_palette(&main)),
+    let request = match id {
+        QUIT => {
+            app.exit(0);
+            return;
+        }
+        OPEN => Request::default(),
+        SEARCH => Request {
+            tool: None,
+            palette: true,
+        },
         _ => match id.strip_prefix(TOOL) {
-            Some(tool) => window::reveal(&main).and_then(|()| window::open_tool(&main, tool)),
-            None => Ok(()),
+            Some(tool) => Request {
+                tool: Some(tool.to_owned()),
+                palette: false,
+            },
+            None => return,
         },
     };
-    if let Err(error) = result {
+    if let Err(error) = window::open(app, &state.window, &request) {
         tracing::warn!(%error, "tray action failed");
     }
 }
 
-fn on_tray_icon_event<R: Runtime>(tray: &TrayIcon<R>, event: TrayIconEvent) {
+fn on_tray_icon_event<R: Runtime>(tray: &TrayIcon<R>, state: &AppState, event: &TrayIconEvent) {
     if !cfg!(windows) {
         return;
     }
@@ -86,8 +102,7 @@ fn on_tray_icon_event<R: Runtime>(tray: &TrayIcon<R>, event: TrayIconEvent) {
         button_state: MouseButtonState::Up,
         ..
     } = event
-        && let Some(main) = window::main_window(tray.app_handle())
-        && let Err(error) = window::toggle(&main)
+        && let Err(error) = window::toggle_from_tray(tray.app_handle(), &state.window)
     {
         tracing::warn!(%error, "tray toggle failed");
     }
