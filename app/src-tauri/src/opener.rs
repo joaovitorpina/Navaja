@@ -8,6 +8,11 @@
 //! `/usr/bin/open`, which hands the target to LaunchServices and exits; on
 //! Linux, `xdg-open` (or gio, gnome-open, kde-open) after a double fork and
 //! `setsid`.
+//!
+//! On Linux a hand-off succeeds as soon as the launcher has been executed:
+//! the `open` crate under the plugin does not wait for it. A launcher that
+//! fails after that, with no default browser set for example, shows no
+//! alert and logs nothing.
 
 use std::path::Path;
 
