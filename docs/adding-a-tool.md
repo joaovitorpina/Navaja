@@ -213,7 +213,7 @@ The shell loads `tools/<id>/ui/View.svelte` and passes it `ViewProps` from `$lib
 
 Its tests (`*.test.ts` and `*.spec.ts` files in `ui/`, which Vitest runs) may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`.
 
-`pnpm lint` must pass. It checks these imports and the Prettier formatting of the code in `ui/` (`pnpm format` fixes the formatting). A comment can't turn the check off, and `import.meta.glob` or a computed `import()` is an error. If a view needs something else from the shell, add it to `$lib/view-kit` in a `host-change` PR first.
+`pnpm check`, `pnpm lint` and `pnpm test` must pass (§5). `pnpm check` runs svelte-check over `ui/`, with warnings as errors. `pnpm lint` checks these imports and the Prettier formatting of the code in `ui/` (`pnpm format` fixes the formatting). A comment can't turn the check off, and `import.meta.glob` or a computed `import()` is an error. If a view needs something else from the shell, add it to `$lib/view-kit` in a `host-change` PR first.
 
 ### Outputs
 
@@ -256,12 +256,15 @@ These are enforced by lints, cargo-deny, `registry_test.rs` and review:
 
 ```sh
 cargo fmt --all --check
+rustfmt --edition 2024 --check tools/<id>/mod.rs   # cargo fmt skips tool modules
 cargo test -p navaja-tools            # your tests + the registry checks
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask check                     # dependency rules
 cargo deny --all-features check bans licenses sources   # if you added a dependency
-pnpm lint && pnpm test                # custom views only: the import allowlist, Prettier, Vitest
+pnpm check && pnpm lint && pnpm test  # custom views only: svelte-check, the import allowlist, Prettier, Vitest
 ```
+
+`cargo fmt` never sees your tool's files: `tools/lib.rs` declares them inside `register_tools!`, and rustfmt does not expand macros. Running rustfmt on `mod.rs` also checks the files it declares, such as `tests.rs`; without `--check`, it formats them.
 
 Then commit, and check what your PR touches:
 
