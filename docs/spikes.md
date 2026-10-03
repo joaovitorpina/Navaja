@@ -37,9 +37,23 @@ Copy this for each spike and fill it in.
 - **Question:** can a custom view and its tests live in `tools/<id>/ui/`, outside `app/`, and still be type-checked, tested, built, hot-reloaded and packaged like code in `app/src`?
 - **Method:** Windows 11 Pro 10.0.26300, Node 24.15.0, pnpm 11.28.3, Vite 8.3.2, Vitest 5.0.3, svelte-check 4.7.6, Svelte 5.57.1. A throwaway `tools/probe/ui/` held `View.svelte` (importing `$lib/view-kit`, `$bindings/Category` and `./label.ts`), `label.ts`, and `View.test.ts` (importing `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`). Runs: a view with a type error plus a test that fails on purpose; a view importing a missing `./` module; a correct view with a passing test, then `vite build`; a view using a Tailwind class found nowhere else, then `vite build`. Each resolution setting below was also removed once to confirm it is needed. The probe was deleted afterwards.
   - **ESLint and Prettier** (later on 2026-10-03; ESLint 10.11.0, typescript-eslint 8.71.0, eslint-plugin-svelte 3.23.0, Prettier 3.9.9, prettier-plugin-svelte 4.1.1): a second throwaway `tools/probe/ui/` held `View.svelte`, `label.ts`, `View.test.ts` and `sub/helper.js`, with one allowlist violation of each kind plus `/* eslint-disable */`, `// eslint-disable-next-line` and `<!-- eslint-disable -->` comments. The real `pnpm lint` ran on it, then the Prettier half of the script on its own, since the ESLint half stops the script first. The layouts that fail were tried too: the config only in `app/`, and a config file planted in `tools/probe/ui/`. That probe was deleted as well.
+  - **Automated run** (`.github/workflows/spikes.yml`, job `s2-2`): run by hand, and on a PR that changes the workflow or `scripts/spikes/`, on windows-2025, ubuntu-24.04 and macos-26.
+    - `scripts/spikes/s2-2-probe.sh create` writes a throwaway system tool with a custom view, `tools/probe/`, laid out as [adding-a-tool.md](adding-a-tool.md) describes, and adds `probe,` to `tools/lib.rs`. Nothing commits it.
+    - Its view imports `$lib/view-kit`, a `$bindings` type and its sibling `label.ts`. On mount it runs its one action through `runTool` and shows the fixed answer. It uses one Tailwind class found nowhere else in the repository, `tracking-[0.4242em]`.
+    - The script also writes an end-to-end spec to `app/e2e/spikes/`. `pnpm e2e` runs only `app/e2e/specs/`, so the spec runs only when named with `--spec`.
+    - Then one step per check. A failed check does not stop the ones after it.
+      - Registry: `cargo test -p navaja-tools`, whose output must include the probe's own test.
+      - `pnpm check`.
+      - `pnpm lint` passes. Then a file in the view folder that imports `$lib/ipc` must make it fail, with exactly that one error.
+      - `pnpm test`, whose JSON report must list `tools/probe/ui/View.test.ts` as passed.
+      - `pnpm build`: the view's code must sit in a chunk other than the entry, and its class in the emitted CSS.
+      - The end-to-end build (`pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json`), then the probe's spec alone. The spec opens `#/tool/probe` and expects the label, the answer from Rust and the class's letter spacing. On Linux it runs inside `dbus-run-session` and `xvfb-run`, as in `ci.yml`, but without the strace guard, which runs only the whole suite.
+      - HMR: `scripts/spikes/hmr-check.mjs` starts the app's Vite dev server on a free port. It requests `ToolHost.svelte`, the view its glob names and the view's `label.ts`, and connects to the HMR WebSocket. It edits `View.svelte`, then `label.ts`, and waits up to 20 s for an `update` for each, then fetches the updated modules. No webview runs, so nothing re-renders the view.
+    - The last step writes a PASS/FAIL table per OS to the run summary.
+    - `scripts/spikes/s2-2-check.sh` holds the checks that take more than one command, so a local run does what CI does.
 - **PASS if:** HMR, build, packaged app, svelte-check, ESLint and Vitest all work on 3 OSes
 - **FAIL then:** tsconfig and Vitest aliases; otherwise `app/src/tools/<id>/` (needs sign-off)
-- **Result:** not finished (2026-10-03). svelte-check, Vitest, `vite build`, ESLint and Prettier work on Windows, but only with the tsconfig, Vite, Tailwind, ESLint and Prettier settings below. HMR, the packaged app, macOS and Linux are not verified yet.
+- **Result:** not finished (2026-10-03). svelte-check, Vitest, `vite build`, ESLint and Prettier work on Windows, but only with the tsconfig, Vite, Tailwind, ESLint and Prettier settings below. A local Windows run of the `spikes.yml` scripts also passed the packaged app and HMR, the latter checked at the dev server only. `spikes.yml` has not run on CI yet, so macOS and Linux are not verified.
 - **Numbers and evidence:**
 
   | Check (Windows) | Without settings (PR #4 head) | With settings |
@@ -58,9 +72,18 @@ Copy this for each spike and fill it in.
   | ESLint, `<!-- eslint-disable -->` above an `import()` in markup | — | ignored: the import is still reported |
   | ESLint, `export default []` planted as `tools/probe/ui/eslint.config.js` | with config lookup it wins: the view's files come out as `File ignored because no matching configuration was supplied` | `--config eslint.config.mjs` ignores it; the violations are reported |
   | Prettier, the probe files | — | the shared config applies, through `--config` and through lookup of the root `prettier.config.mjs` alike (the single-quoted `.ts` files pass), and `.svelte` goes through the plugin: the over-long line in `View.svelte` fails the check, exit 1 |
-  | HMR, packaged app (`tauri build`), macOS, Linux | not run | not run |
+  | `spikes.yml` scripts, run locally: registry, `pnpm check`, `pnpm lint`, `pnpm test`, `pnpm build` | — | all pass. `cargo test -p navaja-tools`: 15 passed, the probe's own test among them. svelte-check: 0 errors, 0 warnings; a type error added to `label.ts` and one added to the end-to-end spec were caught (svelte-check and `tsc -p e2e/tsconfig.json`). Vitest: 240 tests in 12 files, `View.test.ts` among them. Build: the view in `View-*.js` (1,090 bytes; the entry is 144 kB), its class in the CSS. Without the probe the build has neither, although the docs and `scripts/spikes/` name the class |
+  | `spikes.yml`, the forbidden import (`$lib/ipc` in `tools/probe/ui/forbidden.ts`) | — | `pnpm lint` exits 1 with `1 problem (1 error, 0 warnings)`, from `navaja/view-imports`, naming `'$lib/ipc'` |
+  | Packaged app: the end-to-end build, then the probe's spec (WebdriverIO reports msedge 154.0.0.0) | — | passes: the view shows its label, "Answer from Rust" from its own `run_tool` call, and a non-zero letter spacing from its class. The same spec expecting another answer fails with `Received: "Answer from Rust"` |
+  | HMR, `View.svelte` edited (`hmr-check.mjs`, dev server, no webview) | — | an `update` (`js-update`) for the view 14-15 ms after the write, in each of 6 runs; the module at that update's timestamp holds the edit |
+  | HMR, `label.ts` edited | — | an `update` for `View.svelte`, the module that accepts it, 1-2 ms after the write; the view at that timestamp imports `label.ts?t=…`, which holds the edit. With a 5 ms timeout the check fails and restores both files |
+  | macOS, Linux | not run | not run: `spikes.yml` has not run on CI |
 
-  The "without" column for the type error, the missing import and the failing test comes from the PR #4 review, which ran the same probe on the PR head. For the ESLint rows, "without" means the config sits in `app/` alone, or a tool folder holds its own. The other rows were run here.
+  The "without" column for the type error, the missing import and the failing test comes from the PR #4 review, which ran the same probe on the PR head. For the ESLint rows, "without" means the config sits in `app/` alone, or a tool folder holds its own. The `spikes.yml` rows come from its scripts, run locally on the Windows machine above (Node 24.15.0, Tauri 2.12.1, WebdriverIO 9.32.0, `@wdio/tauri-service` 1.4.0, vite-plugin-svelte 7.3.1), not from CI. The other rows were run here.
+
+  The last local run went through the job's steps in order, as `spikes.yml` runs them, in about 55 s with warm caches: Vitest 16 s, the incremental end-to-end build 9 s and its spec 7 s, svelte-check 6 s, and 4 s or less for each of the others. Every step passed, and after `s2-2-probe.sh remove` no probe file or `tools/lib.rs` change showed in `git status`.
+
+  The HMR times run from the write to the update message, so they cover Vite's file watcher and its HMR pass, not a re-render. Vite names the module that accepts an update, not always the file that changed: `label.ts` accepts no updates itself, so its edit updates the view that imports it.
 
   The resolution failures come from pnpm's isolated layout: it installs packages under `app/node_modules` only, so bare imports from `tools/` find nothing. `svelte` and `$bindings/*` were not affected (vite-plugin-svelte dedupes `svelte`, and `$bindings` is an alias).
 
@@ -72,7 +95,7 @@ Copy this for each spike and fill it in.
   - `$lib/view-kit` exists and is what views import from the shell. ToolHost types the glob against its `ViewProps`.
   - ESLint's config is `app/eslint/config.js`, loaded by the root `eslint.config.mjs`. Its patterns are relative to the repository root and cover `app/` and `tools/*/ui/`, so the root must be ESLint's base path. `pnpm lint` runs from the root with `--config eslint.config.mjs`: with `--config` the base path is the working directory, and a config file placed under `tools/` is never used. Editors use config lookup instead, which finds the root `eslint.config.mjs` and takes its folder as the base path. The import allowlist (architecture §4) is in place, and `app/eslint/config.test.ts` runs the real config through ESLint's Node API on a file under `tools/`, so a change that drops `tools/` fails a test.
   - Prettier's config is `app/prettier.config.js`, loaded by the root `prettier.config.mjs`. It resolves the Svelte plugin from `app/`.
-  - Still open before S2.2 can pass: HMR and the packaged app on Windows, and the same checks on macOS and Linux in CI (CI runs `pnpm lint` on Linux only, in the checks job). Once it passes, this entry needs an ADR for the tsconfig and Vite settings, since the roadmap counts them as the first fallback.
+  - Still open before S2.2 can pass: a `spikes.yml` run on all three runners, recorded here. Until then no CI job checks a custom view: the repository holds none, and `ci.yml` runs `pnpm lint` on Linux only. The HMR check in `spikes.yml` stops at the dev server: no webview re-renders the view. Once S2.2 passes, this entry needs an ADR for the tsconfig and Vite settings, since the roadmap counts them as the first fallback.
 
 ## S2.3 Tray icon
 
