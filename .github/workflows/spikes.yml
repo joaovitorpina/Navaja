@@ -287,6 +287,11 @@ jobs:
         id: build
         run: pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
 
+      # The dead proxy needs macOS 14 (ci.yml checks every build there).
+      - name: The app targets the minimum macOS (tauri.conf.json)
+        if: runner.os == 'macOS'
+        run: bash scripts/check-macos-target.sh target/debug/navaja
+
       - name: Set up the capture
         id: setup
         run: bash scripts/spikes/s2-7-egress.sh setup

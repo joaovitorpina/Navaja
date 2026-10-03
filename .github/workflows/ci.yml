@@ -231,6 +231,20 @@ jobs:
         shell: bash
         run: pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
 
+      # Navaja needs macOS 14 (the dead proxy, docs/architecture.md §5), so
+      # every build above must target it: clippy's build scripts and proc
+      # macros, nextest's test binaries, the Intel step's C objects and the
+      # app. The step reads the version back from each Mach-O file. The
+      # runner sets no MACOSX_DEPLOYMENT_TARGET, so the plain cargo builds
+      # get it from .cargo/config.toml.
+      - name: macOS builds target the minimum macOS (tauri.conf.json)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo "MACOSX_DEPLOYMENT_TARGET in the runner's environment: ${MACOSX_DEPLOYMENT_TARGET:-unset}"
+          bash scripts/check-macos-target.sh target/debug
+          bash scripts/check-macos-target.sh target/x86_64-apple-darwin
+
       - name: End-to-end tests
         if: runner.os != 'Linux'
         run: pnpm e2e
