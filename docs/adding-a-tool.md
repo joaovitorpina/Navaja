@@ -93,7 +93,7 @@ The shell loads `tools/<id>/ui/View.svelte` and passes it `ViewProps` from `$lib
 - `$lib/view-kit`, the shell's API for views: `t`, `runTool`, `copyText`, `CopyButton`, `ToolIcon` and their types;
 - generated types from `$bindings/<name>`.
 
-Its tests (`*.test.ts` files in `ui/`, which Vitest runs) may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`.
+Its tests (`*.test.ts` and `*.spec.ts` files in `ui/`, which Vitest runs) may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`.
 
 `pnpm lint` must pass. It checks these imports and the Prettier formatting of the code in `ui/` (`pnpm format` fixes the formatting). A comment can't turn the check off, and `import.meta.glob` or a computed `import()` is an error. If a view needs something else from the shell, add it to `$lib/view-kit` in a `host-change` PR first.
 
