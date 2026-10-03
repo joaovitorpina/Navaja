@@ -1,10 +1,7 @@
 // A tiny hash router: #/, #/tool/<id>, #/settings, #/about.
 
 export type Route =
-  | { kind: 'home' }
-  | { kind: 'tool'; id: string }
-  | { kind: 'settings' }
-  | { kind: 'about' };
+  { kind: 'home' } | { kind: 'tool'; id: string } | { kind: 'settings' } | { kind: 'about' };
 
 const TOOL_ID = /^[a-z][a-z0-9_]*$/;
 

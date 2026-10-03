@@ -77,7 +77,9 @@
         {#each hits as hit (hit.id)}
           {@render toolLink(hit.id)}
         {:else}
-          <li class="px-2 py-1.5 text-sm text-muted">{t('shell.nav.no_match', 'No tools match.')}</li>
+          <li class="px-2 py-1.5 text-sm text-muted">
+            {t('shell.nav.no_match', 'No tools match.')}
+          </li>
         {/each}
       </ul>
       <p class="sr-only" aria-live="polite">

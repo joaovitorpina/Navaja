@@ -33,4 +33,6 @@
       'Copy failed',
     )}{:else}{label}{/if}
 </button>
-<span class="sr-only" aria-live="polite">{state === 'copied' ? t('shell.copied', 'Copied') : ''}</span>
+<span class="sr-only" aria-live="polite"
+  >{state === 'copied' ? t('shell.copied', 'Copied') : ''}</span
+>

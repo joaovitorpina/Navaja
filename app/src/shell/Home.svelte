@@ -16,9 +16,8 @@
     <h1 class="text-2xl font-semibold">Navaja</h1>
     <p class="text-muted">
       {t('shell.home.tagline', 'Offline developer toolbox. Nothing you paste leaves this machine.')}
-      {t('shell.home.palette_hint', 'Press')} <kbd class="rounded border border-line px-1 text-xs"
-        >{shortcutLabel()}</kbd
-      >
+      {t('shell.home.palette_hint', 'Press')}
+      <kbd class="rounded border border-line px-1 text-xs">{shortcutLabel()}</kbd>
       {t('shell.home.palette_hint_end', 'to jump to a tool.')}
     </p>
   </header>
