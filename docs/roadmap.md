@@ -1,0 +1,334 @@
+# Navaja roadmap: milestones, spikes and verification
+
+This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The design is in [architecture.md](architecture.md), and spike results are recorded in [spikes.md](spikes.md). A reference such as "architecture §7" points to a numbered section of architecture.md.
+
+## 1. Milestones
+
+**Rules:**
+- **Done** means the definition of done in §2 below holds on Windows 11, Ubuntu 24.04 and macOS 26.
+- **Spikes** are time-boxed, with PASS and FAIL criteria written first. Results go in `docs/spikes.md`. A fallback that gets taken becomes an ADR.
+- **Budgets** are rough, about 21 focused weeks in total. A milestone that runs a third over budget drops items from its cut list, in order.
+- **macOS work** that needs no human runs on `spikes.yml` (macos-26 and macos-26-intel). A Mac session at the end of each milestone covers UI-only checks.
+
+### M1 · Stack decision recorded (≈0.5 wk, no source code)
+
+1. **`docs/adr/0001-stack.md`** (Accepted) contains:
+   - the stack comparison and the decision for each open item;
+   - the pinned versions;
+   - **frozen identifiers**: repo, `io.github.joaovitorpina.Navaja`, feed URL, `APP_DIR` names, winget id and moniker, the exact NSIS publisher string, tap and bucket;
+   - the signing cost table;
+   - the Wayland shortcut exception;
+   - why the kill walks the tree per PID (process groups and job objects would take in ancestors);
+   - the accepted small v1 additions.
+2. **`docs/architecture.md`**, this roadmap and the `docs/spikes.md` template.
+3. **BRIEF.md:** tick the name (with GitHub status), CLI, updates, UDP and Docker questions, each linked to the ADR. The Windows cwd question stays open until M4.
+4. **Repo files:**
+   - `LICENSE` (MIT, João Vitor Pina);
+   - a README stub saying "offline developer toolbox", never "Swiss Army knife";
+   - `SECURITY.md`, `.gitignore` and `.gitattributes` (`* text=auto eol=lf`);
+   - `assets/brand/GUIDELINES.md` with the mark, palette tokens and tool-icon rules.
+5. **`ci.yml`:** an eol check and an identifier grep, run on windows-2025, ubuntu-24.04 and macos-26.
+6. **GitHub settings:**
+   - squash merges only;
+   - private vulnerability reporting;
+   - a read-only default token;
+   - "Allow GitHub Actions to create and approve pull requests";
+   - milestones M2a-M6.
+
+**Exit:**
+- No source code on main.
+- Each identifier is defined once in the ADR. `scripts/check-identifiers.sh` passes on every runner for the repository URL, app id, feed, winget id, tap, bucket and publisher.
+- CI is green on three runners.
+
+### M2a · Shell and registry (≈4 wk). Brief M2: window, navigation, search, tray, registry, UUID end to end, CI on 3 OSes
+
+1. **Skeleton PR, green on day one:**
+   - stub crates, each with one real test;
+   - an exact `@tauri-apps/cli` pin and `typescript ~6.0.3`;
+   - `tauri.conf.json` with the identifier, CSP, `create: false` and `bundle.publisher`;
+   - placeholder icons (Windows `tauri-build` needs `icon.ico`);
+   - one Vitest test;
+   - lints and `deny.toml`.
+2. **CI** per §2 below, then branch protection, a PR-title check (conventional commits) and Renovate.
+3. **`navaja-core`** (architecture §3) with unit tests for panics, unknown tools and actions, error codes, input never echoed, cancellation and output shapes.
+4. **`tools/`:** `registry_test.rs` and `tools/uuid/`, then **S2.1**.
+5. **xtask:** `check`, `bindings` and `tool-gate`, with tests proving that tokio, hyper or tauri under navaja-tools fails the check.
+6. **App crate:**
+   - the runner and the commands from architecture §5, except updates;
+   - settings, logging and crash files;
+   - `platform/` and `copy_text`.
+7. **S2.2**, then the front end:
+   - ipc, registry, router, i18n and view-kit;
+   - the shell;
+   - GenericToolView with Generator and Text outputs;
+   - theme;
+   - accessibility basics.
+8. **Window code:** `window.rs`, `guard.rs`, and `args.rs` with single instance and the elevation banner.
+9. **S2.3**, then a minimal tray (Open, Search, `meta.tray` entries, Quit) and the StatusNotifier host check in `platform/linux.rs`.
+10. **End-to-end tests:** smoke (palette → UUID), single instance and the egress canary. A Linux strace guard is added, then **S2.6** and **S2.7**.
+11. **`docs/adding-a-tool.md`.**
+
+**Exit:**
+- CI is required and green on three OSes.
+- On Windows 11, Ubuntu 24.04 (Wayland and X11) and macOS 26, release builds start hidden and show without a flash.
+- UUID comes from `list_tools()`, and searching "uid" ranks it first.
+- 10,000 v7 UUIDs are unique and sorted.
+- Copy stays out of Windows clipboard history.
+- `--tool uuid` focuses the running instance.
+- The tray works on Windows, macOS, Ubuntu GNOME with the AppIndicator extension, and KDE.
+- A panicking tool returns `core.panicked` and the app keeps serving.
+- The egress canary and strace guard are green.
+- A throwaway tool written from the docs passes `tool-gate`.
+
+**Cut first:** palette shell commands; the theme override; F6.
+
+### M2b · Lifecycle, footprint, bundles (≈2.5 wk)
+
+1. **S2.4**, then close behaviour per OS through `ShellPlatform`.
+2. **`xtask measure`**, then **S2.5**. Implement the winning hide policy, delete the other path, and record the numbers in ADR 0002.
+3. **Final brand SVGs** and `xtask icons`, which wraps `tauri icon` and also produces the macOS template tray icon.
+4. **`bundle.yml`:** a weekly, keyless build of the exact release matrix.
+5. **Stretch, the first thing to cut:** the global-shortcut recorder and `docs/wayland-shortcut.md`.
+6. **`CONTRIBUTING.md`** with the QA checklist.
+
+**Exit:**
+- Close behaves correctly per OS, and every quit path works while the window is hidden.
+- ADR 0002 has numbers per OS.
+- `bundle.yml` is green for every format.
+- Screen readers pass: NVDA, VoiceOver and Orca.
+- 100-200 % scaling, light and dark themes, and the brand review all pass.
+
+**Cut first:** the global shortcut; window-state.
+
+### M3 · Text tools (≈3 wk)
+
+1. **S3.1.** Only if it fails, add `run_tool_raw` and/or a raw output tail.
+2. **Editor:** CodeMirror and its thresholds, plus Code output with preview and "Copy all".
+3. **Views:** TransformView; KeyValue, Diagnostics and Binary outputs; ConfirmDialog in view-kit; Vitest and axe for each spec variant.
+4. **JSON:** `tools/json/format.rs`, with proptest against serde_json and fixtures for deep nesting, duplicate keys, huge numbers, surrogates and a BOM. Then **S3.2**, then `mod.rs` and its end-to-end spec.
+5. **`tools/base64`, `url`, `hash` and `jwt`:** one PR each, with **nothing under `app/`**.
+6. **Re-run S2.5.** Base64 becomes the worked example in `adding-a-tool.md`.
+
+**Exit:**
+- All tools work on three OSes, with 10,000 proptest cases.
+- Each tool PR passes `tool-gate` and touches only its folder plus one `lib.rs` line.
+- A 10 MB single-line paste causes no long task over 1 s, and a 50 MB paste formats and copies.
+- Hash output matches `certutil`, `sha256sum` and `shasum`.
+- An expired JWT shows "expired" with the relative time.
+- axe reports nothing, and a keyboard-only pass succeeds.
+
+**Cut first:** editor markers; the JWE header view.
+
+### M4 · Port inspector (≈5 wk)
+
+1. **navaja-ports skeleton** (architecture §7).
+2. **S4.1**, then `sys/linux/`:
+   - `/proc/net` and fd inodes;
+   - sockets that cannot be attributed are reported with their uid and PID `NeedsRoot`;
+   - a cgroup-to-unit lookup.
+3. **`sys/windows/`:** owner tables with `liCreateTimestamp`, Toolhelp, cmdline, cwd for `why`, and owner verification.
+4. **S4.2**, then `sys/macos/`: libproc, plus `pcblist_n` or uid-only attribution, and `KERN_PROC_PID`.
+5. **gather, explain and render:**
+   - golden tests from hand-written Facts;
+   - `xtask capture-ports`, which redacts arguments by default;
+   - insta snapshots on every OS.
+6. **S4.3a, then kill (architecture §7), then S4.3b.**
+7. **Copy commands and strings:** guarded elevation copy commands; Reason strings in `tools/ports/ui/i18n/en.ts`.
+8. **`tools/ports/`** with `tray: true`, PortTable, WhyPanel and KillDialog.
+9. **Live tests:** `tests/live.rs` spawns a listener and a child tree on `127.0.0.1:0`, in a serial group. Plus an end-to-end ports spec.
+
+**Exit:**
+- Live tests are green on three runners: list, why, kill, port freed, stale plan refused.
+- The **first brief output matches byte for byte**, with the brief's `pd` placeholder passed as the command prefix.
+- Reused-PID and stale-PPID fixtures are refused.
+- Elevated or root listeners show a reason and a guarded command; no field is ever blank.
+- A nodemon port is freed without killing the terminal or the IDE.
+- `plan_kill` refuses PID 4, PID 1, svchost, launchd, Navaja itself and the compositor.
+- UDP works, IPv4 and IPv6 are merged, and dev ports are highlighted.
+- The tray entry appears with no change to `tray.rs`.
+- The ports PR passes `tool-gate`.
+- The BRIEF.md cwd question is ticked.
+
+**Cut first:** `pcblist_n`; "Stop <supervisor>" plans.
+
+### M5 · Port special cases (≈3.5 wk)
+
+1. **S5.1-S5.3**, keeping the raw outputs as fixtures.
+2. **`services.rs` and `httpsys.rs`:** http.sys request queues only if S5.3 passes.
+3. **`reserved.rs`, `wsl.rs`** (wslrelay and portproxy only), the verdict order, and the **second brief output as a golden test**.
+4. **S5.4a**, then navaja-docker with fake-engine tests on three OSes: answering, hung, and a remote pipe.
+5. **`docker` feature:** registers the engine; the deny wrappers are re-checked.
+6. **Ports UI:** container and compose project names, `stop_container`, the Linux fallbacks, then **S5.4b**.
+7. **CI:** Linux CI runs a busybox container and stops it through Navaja.
+
+**Exit:**
+- Both goldens pass on three OSes.
+- Services offer Stop-Service.
+- Port 445 is labelled SMB, with no IIS advice.
+- Reserved-range verdicts are correct in three locales.
+- Docker is tested automatically on Ubuntu, and by hand on Docker Desktop for Windows and macOS.
+- Remote endpoints are refused with no connection attempt.
+- With no engine running, `why` takes 1.5 s or less.
+
+**Cut first:** the portproxy verdict; http.sys queues.
+
+### M6 · Release = v1 (≈3 wk)
+
+1. **One PR enables `updater` by default:**
+   - `updater.rs` and the final `channel.rs`;
+   - FirstRunDialog and UpdateDialog;
+   - Settings "Check now";
+   - the tray item.
+2. **Release mechanics:**
+   - `hooks.nsh` and the portable-zip marker;
+   - the release config overlay;
+   - `release.yml` plus a reusable `release-build.yml` (release-plz, then tauri-action v1, then `verify-release`);
+   - then **S6.1**.
+3. **minisign key:**
+   - a real key in a protected `release` environment, limited to `v*` tags;
+   - two offline backups;
+   - `docs/release.md`.
+4. **Provenance:** attestations and a minisign-signed `SHA256SUMS`.
+5. **Package-manager repos:** `xtask manifests`, the tap and bucket repos, and `xtask notices` (THIRD_PARTY_NOTICES).
+6. **S6.2**, then `install.md` and `privacy.md`. install.md covers SmartScreen "More info → Run anyway", Smart App Control, Gatekeeper "Open Anyway", the Linux tray host and the NVIDIA variables.
+7. **Final QA:**
+   - `measure`;
+   - S2.7 again, now with the updater;
+   - the full manual matrix;
+   - two rehearsals on a scratch repo.
+8. **Release:**
+   - run a TMview trademark search for classes 9 and 42 before tagging;
+   - tag **v1.0.0**;
+   - submit the binaries to Defender;
+   - open the first winget PR by hand;
+   - apply to SignPath.
+
+**Exit:**
+- v1.0.0 is published with every artifact, signature and `latest.json`.
+- Clean installs work on Windows (setup.exe, Scoop), macOS (DMG, tap), Ubuntu 22.04/24.04 (deb, AppImage) and Fedora (rpm).
+- **Without consent:** no packets leave Navaja's process tree in 10 minutes.
+- **With consent:** traffic goes only to github.com and release-assets.githubusercontent.com.
+- One-click update works on every format.
+- Tampered, downgraded and off-repo feeds are refused.
+- Managed installs show the package manager's upgrade command.
+
+**Cut first:** winget, moved to 1.0.1.
+
+### M7 · After v1 (outline)
+
+- **Signing:** SignPath, using the split pipeline (`--no-binary-patching` on Windows, `tauri signer sign --app-version`). Apple Developer ID and the official cask when the budget allows.
+- **System tools:** environment and PATH, hosts and DNS, certificates. Each is a tool folder that passes the system-tool gate and reads local state only.
+- **Extensions** (architecture §9), after a spike on the wasmtime adapter (S7.1, defined when M7 starts).
+- **Then:** the Tauri v3 migration, the privileged helper, file input and output, and the Wayland portal shortcut.
+
+### Spikes (PASS → proceed; FAIL → fallback)
+
+| Spike | Gates | PASS | FAIL → |
+|---|---|---|---|
+| S2.1 IDE | macro registry | RustRover and rust-analyzer navigate and complete through `register_tools!` | Two-line form `mod x;` plus a list entry (needs sign-off) |
+| S2.2 Views outside `app/` | custom-view discovery | HMR, build, packaged app, svelte-check, ESLint and Vitest all work on 3 OSes | tsconfig and Vitest aliases; otherwise `app/src/tools/<id>/` (needs sign-off) |
+| S2.3 Tray icon | tray | Crisp at 100-200 % on Windows; macOS template icon works | Per-scale PNGs, or `with_inner_tray_icon` with an .ico |
+| S2.4 Linux tray host | close behaviour | The host check is true exactly when the icon shows (GNOME with and without the extension, Fedora, KDE, X11) | Close always quits; "keep in tray" becomes opt-in |
+| S2.5 Hide policy | window lifecycle | Destroying the webview saves at least 50 MB on Windows, and a cold show takes 500 ms or less at the median | Always warm |
+| S2.6 WebdriverIO | e2e gating | 10 of 10 runs per OS, under 10 min | macOS end-to-end tests become non-gating, plus a manual smoke test |
+| S2.7 Egress | offline claim | A VM NIC capture shows no packets from the process tree, idle or in use | Browser args or policies; anything left over is disclosed verbatim in privacy.md |
+| S3.1 IPC and editor | large text | The envelope and the input each take 300 ms or less at 20 MB; CodeMirror keystroke p95 is 50 ms or less | Raw IPC tail; lower thresholds |
+| S3.2 JSON at scale | JSON tool | 50 MB in 1 s or less; peak memory at most 3 times the input; 100k nesting levels without overflow | Profile, or lower the live limit |
+| S4.1 Access matrix | Platform modules | Every field returns a value or one classified reason (same user, elevated, other user, SYSTEM, PPL, WOW64) | `NotSupported` for that class |
+| S4.2 `pcblist_n` | macOS, other users | The right PID for a root listener without root, on arm64 and Intel | uid only, plus a copyable `sudo lsof` |
+| S4.3a/b Supervisors and kill | kill rule | nodemon, `node --watch`, dotnet watch, watchexec, uvicorn, pm2 and systemd all explained; the kill frees the port; ancestors stay alive | Adjust the R and respawner rules |
+| S5.1 netsh locales | reserved ranges | Identical ranges in en-US, pt-BR and de-DE | "Likely reserved" wording |
+| S5.2 Probe codes | reserved ranges | A reserved port is told apart from a held one, with no firewall prompt | Drop the probe; use "likely" wording |
+| S5.3 http.sys | PID 4 | URL ACLs and the request queue are readable without elevation | Static table plus "needs elevation" |
+| S5.4a/b Engines | Docker | Container and project are named on Docker Desktop (Windows, macOS) and on rootful and rootless Engine; remote endpoints are refused with no traffic | Engine marked unsupported and documented |
+| S6.1 Release dry run | M6 | All formats install and update with one click; a tampered or downgraded update is refused; the winget marker works; unsigned rpm installs | Fix or drop the format by ADR. A marker failure falls back to Direct |
+| S6.2 Clean machines | install docs | The written steps get a fresh Windows 11 (Smart App Control on, evaluation and off), a fresh macOS user, Ubuntu and Fedora to a running app | State "not supported until signed builds exist" up front |
+
+---
+
+## 2. Verification
+
+**Definition of done:**
+- Works on Windows 11, Ubuntu 24.04 (GNOME Wayland, plus X11 where relevant) and macOS 26, with CI green on all three.
+- Tool logic returns data or a `ToolError`, and never prints, prompts or connects.
+- Every visible string goes through `t()`.
+- A keyboard-only path works, and axe reports nothing.
+- Logs carry no payloads.
+- Docs and generated bindings are updated.
+
+**Local commands:**
+```sh
+pnpm install --frozen-lockfile
+cargo xtask check                    # crate edges, dependency closures, release config, ACL snapshot, version parity
+cargo xtask bindings --check         # ts-rs output == committed bindings
+cargo xtask tool-gate origin/main    # tool PR touches only what architecture §4 allows
+cargo clippy --workspace --all-targets -- -D warnings
+cargo nextest run --workspace        # includes serial live port tests from M4
+cargo deny check bans licenses sources
+pnpm check && pnpm lint && pnpm test # svelte-check, ESLint+Prettier, Vitest+axe
+pnpm tauri build --debug --features e2e --config src-tauri/e2e.conf.json && pnpm e2e
+```
+
+**Workflows:**
+
+| Workflow | Runs |
+|---|---|
+| `ci.yml` checks (ubuntu-24.04) | fmt, ESLint, svelte-check, cargo-deny on 4 targets, `xtask check`, `bindings --check`, `tool-gate`, the JS licence allowlist, gitleaks over fixtures and snapshots |
+| `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --features e2e` → WebdriverIO. Linux runs under `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. macOS also runs `cargo check --target x86_64-apple-darwin` |
+| `advisories.yml` | Daily `cargo deny check advisories`. Opens an issue but never blocks a PR |
+| `bundle.yml` | Weekly, keyless build of the release matrix: NSIS and zip, universal DMG, deb, rpm and AppImage in `container: ubuntu:22.04` |
+| `spikes.yml` | Manual. macOS spike steps that need no human |
+| `release.yml` + `release-build.yml` | Every push to main runs release-plz, which opens or updates the release PR. Merging that PR runs the build: tauri-action v1, then `verify-release`, attestations, `SHA256SUMS.minisig`, undraft, and bucket and tap updates. `release-build.yml` can also be run by hand on a tag |
+
+**CI hygiene:**
+- Runner labels are pinned, never `-latest`; `ubuntu-latest` moves to 26.04 in Oct-Nov 2026.
+- Actions are pinned by SHA.
+- Swatinem/rust-cache with a per-OS key, saved only on main.
+- Release jobs restore no cache.
+
+**Offline and privacy checks:**
+- **On every PR:**
+  - an egress canary: fetch, image, beacon, WebSocket, `window.open` and RTCPeerConnection, all blocked;
+  - a Linux strace guard: any `connect` or `sendto` outside 127.0.0.1 fails the run;
+  - a canary input at `NAVAJA_LOG=trace`, plus a panicking tool, must not appear in logs or crash files.
+- **In M2a and M6:**
+  - a whole-process-tree NIC capture on each OS (S2.7);
+  - the webview data folder holds no input text;
+  - copied tokens are absent from clipboard history and Klipper.
+
+**Manual QA**, at each milestone end, on Windows 11, Ubuntu GNOME Wayland with AppIndicator, Ubuntu X11, Fedora GNOME (no tray), KDE Plasma 6 Wayland and macOS 26:
+- **Shell:** starts hidden; tray menu; close and quit paths; `--toggle` and `--tool`; keyboard-only use.
+- **M2b and M6:** screen readers (NVDA, Narrator, Orca, VoiceOver); 100-200 % scaling; light and dark themes.
+- **Ports, from M4:** an elevated listener gets a reason and a guarded command; nodemon kill; pm2 respawn.
+- **Docker Desktop, from M5.**
+- **M6:** install, one-click update and uninstall per format, plus the SmartScreen and Gatekeeper wording.
+
+---
+
+## 3. Risks (top) and post-v1
+
+| Risk | Mitigation |
+|---|---|
+| Killing the wrong process: PID reuse, stale PPIDs, dead socket owners | Edges ordered by start time; Windows owner verification; the plan is re-validated from a fresh snapshot; identity re-checked before each signal; denylist; ancestors never by default; spikes S4.3a and S4.3b |
+| WebView2 memory comes in far above expectations (criterion 1) | S2.5 measures the whole process tree and picks the hide policy; a regression above 20 % blocks a milestone; the stack stays |
+| "Fully offline" is undermined by webview telemetry, crash dumps, DNS prefetch or WebRTC | Hardening (architecture §5), egress checks on every PR, S2.7 captures; anything uncontrollable is disclosed in privacy.md and the first-run dialog |
+| Unsigned releases: SmartScreen, Smart App Control, Gatekeeper, Defender false positives | install.md walkthroughs; attestations and a signed `SHA256SUMS`; Defender submission per release; SignPath application right after v1 |
+| Undocumented OS interfaces change: `pcblist_n`, the PEB layout, netsh text, http.sys | One module each, classified fallbacks ("likely", `NotSupported`), and locale and version fixtures |
+| Tauri drift and v3 | Exact CLI pin plus a version-parity check; grouped Renovate PRs merged only after end-to-end tests on all three OSes; v3 after v1 |
+| Linux desktop variance: no tray on vanilla GNOME, Wayland focus, WebKitGTK and NVIDIA | S2.4 decides the close behaviour; NVIDIA variables documented; S6.1 checks the AppImage sandbox |
+| winget rejects the custom `/CHANNEL=winget` switch | Without the marker, the install falls back to Direct and shows the in-app update. This is documented as a known deviation |
+| Solo maintainer, about 21 weeks | Budgets and cut lists per milestone; gating spikes first; the global shortcut is the first cut |
+
+**Post-v1:**
+- runtime extensions (architecture §9);
+- file input and output for text tools, through Rust-side dialogs and `FileRef` tokens;
+- a privileged helper (runas, pkexec, osascript);
+- WSL depth: distro and Linux PID, mirrored mode;
+- the Wayland portal shortcut;
+- the Tauri v3 migration;
+- signing (SignPath, Apple, Store);
+- native arm64 Windows and Linux builds;
+- text-tool extras: a full-URL query table, hash compare, JSONC, JWT verification with a pasted key;
+- pinned tools and opt-in history;
+- more system tools;
+- a CLI front end.

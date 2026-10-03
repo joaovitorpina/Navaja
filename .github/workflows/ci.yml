@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Cancel superseded PR runs only; every commit on main keeps its own result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  hygiene:
+    name: hygiene (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pinned runner labels (never -latest), as decided in docs/adr/0001-stack.md.
+        os: [windows-2025, ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Line endings are LF
+        shell: bash
+        run: bash scripts/check-eol.sh
+
+      - name: Frozen identifiers are consistent
+        shell: bash
+        run: bash scripts/check-identifiers.sh

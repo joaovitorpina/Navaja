@@ -1,0 +1,35 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Node / front end
+node_modules/
+/app/dist/
+/app/.svelte-kit/
+*.tsbuildinfo
+.vite/
+
+# Tauri
+/app/src-tauri/target/
+/app/src-tauri/gen/
+
+# Test and tool output
+/coverage/
+/app/e2e/output/
+*.profraw
+*.snap.new
+*.pending-snap
+
+# Secrets: signing keys must never be committed
+*.key
+.env
+.env.*
+
+# Editors and OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+.DS_Store
+Thumbs.db
