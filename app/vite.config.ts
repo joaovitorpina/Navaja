@@ -38,7 +38,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.test.ts', '../tools/*/ui/**/*.test.ts'],
+    include: ['src/**/*.test.ts', '../tools/*/ui/**/*.test.ts', 'eslint/**/*.test.ts'],
     setupFiles: ['src/test-setup.ts'],
   },
 });
