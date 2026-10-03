@@ -1104,7 +1104,7 @@ control_linux() {
   # shellcheck disable=SC2016
   in_ns bash -c '
     set -e
-    getent ahosts github.com | head -3
+    getent ahosts github.com | sed -n 1,3p
     code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 30 https://github.com)
     echo "curl https://github.com: HTTP $code"
     case $code in 2* | 3*) ;; *) exit 1 ;; esac
