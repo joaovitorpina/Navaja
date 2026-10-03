@@ -418,36 +418,11 @@ mod tests {
         }
     }
 
-    /// An in-memory log for a test subscriber.
-    #[derive(Clone, Default)]
-    struct CapturedLog(Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl std::io::Write for CapturedLog {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     /// At `trace` level, a refused URL reaches neither the log nor the
     /// error the webview gets back.
     #[test]
     fn a_refused_url_is_never_logged_or_echoed() {
-        use std::hash::BuildHasher;
-        let random = std::collections::hash_map::RandomState::new().hash_one(0u8);
-        let canary = format!("CANARY-{random:016x}");
-        let log = CapturedLog::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
-            .with_writer({
-                let log = log.clone();
-                move || log.clone()
-            })
-            .finish();
+        let canary = crate::test_support::canary();
         let urls = [
             canary.clone(),
             format!("https://{canary}.example/"),
@@ -455,13 +430,12 @@ mod tests {
             format!("{}#{canary}", crate::opener::REPOSITORY),
             format!("javascript:{canary}"),
         ];
-        let errors: Vec<String> = tracing::subscriber::with_default(subscriber, || {
+        let (errors, log): (Vec<String>, _) = crate::test_support::capture_log(|| {
             urls.into_iter()
                 .map(|url| open_url(url).unwrap_err())
                 .collect()
         });
 
-        let log = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
         // The refusals were logged, so the capture works.
         assert_eq!(log.matches("refused to open a URL").count(), 5, "{log}");
         let canary = canary.to_ascii_lowercase();
