@@ -32,15 +32,16 @@ Navaja/
 │   └── ports/            mod.rs · icon.svg · ui/View.svelte (+PortTable, WhyPanel, KillDialog) · ui/i18n/en.ts
 ├── app/                  the only pnpm package (Vite root + Tauri project)
 │   ├── src/bindings/     ts-rs output; never hand-edited; CI drift check
-│   ├── src/lib/          ipc · registry · router · i18n · view-kit/ (the only API custom views may import) · components/ui/ (shadcn copies)
-│   ├── src/shell/        Sidebar · CommandPalette · ToolHost · Home · Settings · About · dialogs
-│   ├── src/generic/      GenericToolView · TransformView · GeneratorView · outputs/
+│   ├── src/lib/          ipc · router · i18n · theme · copy · CopyButton · ToolIcon · view-kit/ (the only API custom views may import) · components/ui/ (shadcn copies)
+│   ├── src/shell/        Shell · Sidebar · CommandPalette · ToolHost · Home · SettingsView · AboutView · dialogs
+│   ├── src/generic/      GeneratorView · TransformView · OptionControl · OutputView (one renderer per OutputKind)
 │   ├── src/editor/       CodeMirror 6 {@attach} + size thresholds
 │   ├── e2e/              smoke · single-instance · egress-canary · json · ports
 │   └── src-tauri/        crate navaja · features: default [docker], updater (M6), e2e
 │       ├── tauri.conf.json · tauri.release.conf.json (updater artifacts + pubkey) · e2e.conf.json
 │       ├── capabilities/main.json · acl.lock.json · nsis/hooks.nsh
-│       └── src/          commands · runner · window · guard · tray · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{windows,linux,macos}.rs
+│       ├── src/          commands · state · paths · window · guard · tray · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{windows,linux,macos}.rs
+│       └── tests/        privacy.rs (canary input kept out of logs and crash files)
 ├── xtask/                check · tool-gate · bindings · icons · notices · capture-ports · measure · verify-release · manifests
 ├── assets/brand/         navaja.svg · tray-template.svg · tray-color.svg · GUIDELINES.md
 ├── packaging/            winget / scoop / homebrew templates · dryrun.json (scratch repo only)
@@ -107,9 +108,10 @@ register_tools! {
 ```
 
 - **`Registry::new`** validates ids, spec references, categories and icons. It reports every problem of every tool, not just the first. The id `core` is reserved for host error codes.
+  - A `Generator` action may not be `destructive`: the generator view runs on one click, with no confirmation step.
 - **`Registry::categories()`** returns the categories in use, as `CategoryInfo { id, label, order }`. The labels and positions come from the host's built-in table; unknown ids sort last, by id.
 - **`Registry::run`** wraps `invoke` in `catch_unwind` and returns `core.panicked` when a tool panics.
-  - **Panic hook:** the panic payload is never returned. The app must also replace the default panic hook first thing in `main`: the default hook prints the payload, which may contain input, to stderr.
+  - **Panic hook:** the panic payload is never returned. The app must also replace the default panic hook before anything else can panic (first thing in `navaja_lib::run`, see §8): the default hook prints the payload, which may contain input, to stderr.
   - **Debug checks:** with debug assertions (the default for `cargo test`), each output must round-trip exactly through its payload type. A tool may return only its own `<id>.*` codes plus `core.invalid_input`, `core.cancelled` and `core.panicked`.
   - **Panic strategy:** a `compile_error!` stops the build if anyone switches it to `abort`.
   - **Tests:** tool tests use `navaja_core::run_single`, which runs through the same checks.
@@ -138,12 +140,15 @@ register_tools! {
 
 - **Strings:** text goes through `t(key, fallback)`. Keys derive from the tool id, action, option and error code, and Rust's English text is the fallback, so a text tool needs no `.ts` edit. A custom view adds its own `tools/<id>/ui/i18n/en.ts`.
 - **Custom views:** they import only `./`, `svelte`, `$lib/view-kit` and `$bindings/*`, enforced by an ESLint allowlist. The shell finds them with `import.meta.glob('@tools/*/ui/View.svelte')`.
+  - The ESLint allowlist is not in place yet; see roadmap M2a, item 7.
   - **(S2.2)** If views outside `app/` turn out not to work, the fallback is `app/src/tools/<id>/`. That would be a brief deviation and needs sign-off.
 - **Tool preferences** never become shell `Settings` fields. `Settings.tools`, a TOML table per tool id, is reserved until a tool needs it.
 
 ## 5. App shell (crate `navaja`)
 
-**Commands.** Every command is async, declared in `AppManifest::commands`, granted individually and wrapped in catch-unwind:
+**Commands.** Every command is declared in `AppManifest::commands` and granted individually.
+- **Threads:** commands that touch the OS or the disk (`run_tool`, `copy_text`, `settings_set`) run off the main thread. The rest are cheap (in memory, or a few window calls) and run inline on the main thread.
+- **Panics:** `Registry::run`'s `catch_unwind` contains a tool panic, and `copy_text` wraps its clipboard call in its own.
 
 | Command | Notes |
 |---|---|
@@ -151,11 +156,18 @@ register_tools! {
 | `run_tool(tool, action, runId, input, progress)` | Runs under `spawn_blocking` and returns an `ipc::Response` envelope; progress travels over `ipc::Channel` |
 | `cancel_run`, `copy_text` | |
 | `settings_get`, `settings_set` | |
-| `app_info`, `shell_ready`, `open_logs`, `quit` | |
-| `open_url` | Only `https://github.com/joaovitorpina/Navaja/...` |
+| `app_info`, `shell_ready` | |
+| `open_logs`, `quit` | Not implemented yet (roadmap M2a, item 6) |
+| `open_url` | Only `https://github.com/joaovitorpina/Navaja/...`. Not implemented yet (roadmap M2a, item 6) |
 | `update_check`, `update_install` | Behind the `updater` feature (M6) |
 
-Rust caps input sizes and never runs a destructive action from argv.
+**Input limits.** Rust checks what the webview sends:
+- `run_tool` refuses malformed tool and action ids, and logs only ids the registry knows (`<unknown>` otherwise). It caps `input` at 64 MiB of string data (object keys included) and 1,000,000 JSON nodes, and returns `core.invalid_input` above that, without echoing the input. Tauri has already parsed the IPC body by then, so the cap bounds tool work, not IPC memory.
+- Run ids are 1 to 64 ASCII letters, digits or `-`.
+- `search` reads at most 200 characters of the query.
+- `copy_text` refuses text over 64 MiB.
+
+Rust never runs a destructive action from argv.
 
 **Webview hardening.** This keeps the "fully offline" promise.
 
@@ -170,7 +182,10 @@ Rust caps input sizes and never runs a destructive action from argv.
   - no devtools in release builds.
 - **`navaja-guard` plugin:** adds a navigation allowlist and an all-frames script that removes `RTCPeerConnection` and `RTCDataChannel` and replaces the native context menu.
 - **WebView2 arguments:** any extra arguments must re-include wry's defaults.
-- **Clipboard:** `copy_text` uses arboard with per-OS markers that keep copies out of clipboard history and cloud sync: Windows history and cloud clipboard, KDE's Klipper, and macOS.
+- **Clipboard:** `copy_text` writes through arboard and always sets the OS's exclusion markers; there is no opt-out. A native copy (Ctrl/Cmd+C, the context menu) whose selection touches a region marked `data-output` goes through it too, wherever the selection starts; copies from text fields stay native, since they hold the user's own input. What the markers achieve:
+  - **Windows:** the copy stays out of clipboard history (Win+V), cloud clipboard sync and clipboard monitors.
+  - **Linux** (X11 and Wayland): `x-kde-passwordManagerHint: secret` keeps it out of Klipper and other history managers that honour the hint.
+  - **macOS:** `org.nspasteboard.ConcealedType` keeps it out of history apps that follow nspasteboard.org. It still reaches Universal Clipboard on the user's own nearby devices; opting out with `currentHostOnly` is an M2b item.
 
 **Plugins used:**
 - Tauri core `tray-icon`;
@@ -206,7 +221,7 @@ Tests also load `tauri-plugin-wdio` and `tauri-plugin-wdio-webdriver`, behind th
   - a 30-line hash router;
   - a Ctrl/Cmd+K palette that searches through Rust's `search`.
 - **State:** `$state` holds small UI state. Outputs, port rows and big strings live in `$state.raw`. No web storage is used.
-- **GenericToolView:** debounces input by 150 ms, cancels the previous run and drops stale results. One ConfirmDialog serves every destructive action.
+- **Generic views:** `ToolHost` picks the view from the `UiSpec`. GeneratorView runs on demand, and TransformView (M3) debounces input by 150 ms. Both cancel the previous run and drop stale results. One ConfirmDialog serves every destructive action.
 - **CodeMirror 6**, through a 60-line `{@attach}`:
 
   | Input size | Editor behaviour |
@@ -219,6 +234,7 @@ Tests also load `tauri-plugin-wdio` and `tauri-plugin-wdio-webdriver`, behind th
 - **Components:** Bits UI 2 with shadcn-svelte copies, Tailwind v4 tokens and system fonts.
 - **Accessibility:** landmarks, F6 to cycle panes, Esc, a live region, and real tables with `aria-sort`.
 - **Tests:** Vitest with `mockIPC` and axe, and WebdriverIO end-to-end tests on all three OSes **(S2.6)**.
+  - axe is not wired in yet. It joins Vitest in M3 (roadmap M3, item 3).
 
 ## 7. Port inspector (`navaja-ports`, `navaja-docker`, `tools/ports`)
 
@@ -346,9 +362,10 @@ Installs from a package manager show that manager's upgrade command instead of i
 ### Operations
 
 - **Settings:** a typed TOML file in `APP_DIR`. Writes are atomic, and a corrupt file is set aside. Unix permissions are 0700 for the directory and 0600 for files.
-- **Logs:** written with tracing, rotated daily, 7 kept. They record only the tool id, action, duration and error code, never payloads.
-- **Crash files:** kept locally, and never contain the panic payload.
-- **Panic hook:** the app replaces the panic hook first thing in `main`. The hook records only the location and the thread, and it never reads the payload. It also never chains to the default hook, which would print the payload to stderr (journald on Linux).
+- **`NAVAJA_APP_DIR`:** replaces `APP_DIR` in debug builds only, so tests and the end-to-end harness use a throwaway directory. Release builds ignore it.
+- **Logs:** written with tracing to `APP_DIR/logs`, rotated daily, 7 kept. They record only the tool id, action, duration and error code, never payloads.
+- **Crash files:** `APP_DIR/crash`, 10 kept, local only. They never contain the panic payload.
+- **Panic hook:** the app replaces the panic hook first thing in `navaja_lib::run`, once it knows `APP_DIR`. The hook records the location, the thread and a backtrace (symbols and source paths only), and it never reads the payload. It also never chains to the default hook, which would print the payload to stderr (journald on Linux).
 
 ## 9. Runtime extensions after v1, and why v1 does not block them
 

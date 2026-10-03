@@ -12,7 +12,7 @@ use crate::ctx::{Ctx, RunEnv};
 use crate::error::ToolError;
 use crate::icon::validate_icon;
 use crate::id::{Capability, Category, CategoryInfo, ErrorCode, ToolId, is_ident};
-use crate::meta::{Control, OptionSpec, OutputKind, OutputSpec, ToolMeta, UiSpec};
+use crate::meta::{ActionMeta, Control, OptionSpec, OutputKind, OutputSpec, ToolMeta, UiSpec};
 use crate::payload::{Diagnostic, matches_kind};
 use crate::search::{SearchHit, rank};
 use crate::tool::Tool;
@@ -247,7 +247,7 @@ fn validate_meta(meta: &ToolMeta) -> Vec<String> {
     }
     let mut actions = HashSet::new();
     for action in &meta.actions {
-        if !is_ident(&action.id) || !actions.insert(action.id.as_str()) {
+        if !ActionMeta::is_valid_id(&action.id) || !actions.insert(action.id.as_str()) {
             problem(format!("action `{}` is malformed or repeated", action.id));
         }
         if action.label.trim().is_empty() {
@@ -284,8 +284,13 @@ fn validate_meta(meta: &ToolMeta) -> Vec<String> {
                     spec.action
                 ));
             }
-            if spec.run_on_open && destructive(&spec.action) {
-                problem("a run_on_open generator cannot be destructive".to_owned());
+            // The generic view runs a generator on one click and has no
+            // confirmation step yet, so no generator may be destructive.
+            if destructive(&spec.action) {
+                problem(format!(
+                    "generator action `{}` cannot be destructive",
+                    spec.action
+                ));
             }
             reachable.insert(spec.action.as_str());
             check_options(&spec.options, None, &mut problem);

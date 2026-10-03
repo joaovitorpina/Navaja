@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use crate::util::{cargo, report, root};
 
 /// Crates whose `ts` feature exports bindings.
-const CRATES: &[&str] = &["navaja-core"];
+const CRATES: &[&str] = &["navaja-core", "navaja"];
 
 pub fn run(check: bool) -> Result<()> {
     let root = root();

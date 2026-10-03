@@ -11,7 +11,7 @@ pub const MAIN: &str = "main";
 /// How long to wait for the front end's `shell_ready` before showing anyway.
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub fn create_main<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+pub fn create_main<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWindow<R>> {
     let config = app
         .config()
         .app
@@ -29,10 +29,11 @@ pub fn create_main<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     std::thread::spawn(move || {
         std::thread::sleep(READY_TIMEOUT);
         if !handle.is_visible().unwrap_or(true) {
+            tracing::warn!("front end did not report ready; showing the window anyway");
             let _ = reveal(&handle);
         }
     });
-    Ok(())
+    Ok(window)
 }
 
 pub fn reveal<R: Runtime>(window: &WebviewWindow<R>) -> tauri::Result<()> {

@@ -11,7 +11,23 @@
     "noEmit": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": {
+      "$lib": ["./src/lib"],
+      "$lib/*": ["./src/lib/*"],
+      "$bindings/*": ["./src/bindings/*"],
+      "@tools/*": ["../tools/*"],
+      // Custom-view tests live in tools/<id>/ui, outside app/, where pnpm
+      // installs nothing: resolve their test packages from app/.
+      "vitest": ["./node_modules/vitest"],
+      "@testing-library/svelte": ["./node_modules/@testing-library/svelte"],
+      "@tauri-apps/api/*": ["./node_modules/@tauri-apps/api/*"]
+    }
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.svelte",
+    "../tools/*/ui/**/*.ts",
+    "../tools/*/ui/**/*.svelte"
+  ]
 }

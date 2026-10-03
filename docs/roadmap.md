@@ -54,15 +54,17 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 4. **`tools/`:** `registry_test.rs` and `tools/uuid/`, then **S2.1**.
 5. **xtask:** `check`, `bindings` and `tool-gate`, with tests proving that tokio, hyper or tauri under navaja-tools fails the check.
 6. **App crate:**
-   - the runner and the commands from architecture §5, except updates;
+   - `run_tool` and the other commands from architecture §5, except updates;
    - settings, logging and crash files;
    - `platform/` and `copy_text`.
+   - **Still to do, in a follow-up PR:** `open_logs`, `quit` and `open_url`, declared in `build.rs` and granted in `capabilities/main.json`. About then links the repository through `open_url` instead of showing it as text.
 7. **S2.2**, then the front end:
    - ipc, registry, router, i18n and view-kit;
    - the shell;
-   - GenericToolView with Generator and Text outputs;
+   - the generic views with Generator and Text outputs;
    - theme;
    - accessibility basics.
+   - **Still to do:** ESLint (flat config) with the custom-view import allowlist from architecture §4, scoped to `tools/*/ui/**`, and `pnpm lint` in the CI checks job. `$lib/view-kit` exists and is the one app module the allowlist lets custom views import. This must land before the first custom view (the M4 port inspector).
 8. **Window code:** `window.rs`, `guard.rs`, and `args.rs` with single instance and the elevation banner.
 9. **S2.3**, then a minimal tray (Open, Search, `meta.tray` entries, Quit) and the StatusNotifier host check in `platform/linux.rs`.
 10. **End-to-end tests:** smoke (palette → UUID), single instance and the egress canary. A Linux strace guard is added, then **S2.6** and **S2.7**.
@@ -90,9 +92,11 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 4. **`bundle.yml`:** a weekly, keyless build of the exact release matrix.
 5. **Stretch, the first thing to cut:** the global-shortcut recorder and `docs/wayland-shortcut.md`.
 6. **`CONTRIBUTING.md`** with the QA checklist.
+7. **macOS clipboard:** keep copies off Universal Clipboard. On macOS, `copy_text` writes through `NSPasteboard` (objc2-app-kit) instead of arboard: `prepareForNewContentsWithOptions(CurrentHostOnly)`, then the text and the ConcealedType marker. arboard's own `set` clears the pasteboard, which would drop that option.
 
 **Exit:**
 - Close behaves correctly per OS, and every quit path works while the window is hidden.
+- On macOS, a copy does not appear on a Handoff-paired device.
 - ADR 0002 has numbers per OS.
 - `bundle.yml` is green for every format.
 - Screen readers pass: NVDA, VoiceOver and Orca.
@@ -252,7 +256,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 - Works on Windows 11, Ubuntu 24.04 (GNOME Wayland, plus X11 where relevant) and macOS 26, with CI green on all three.
 - Tool logic returns data or a `ToolError`, and never prints, prompts or connects.
 - Every visible string goes through `t()`.
-- A keyboard-only path works, and axe reports nothing.
+- A keyboard-only path works, and axe reports nothing. axe joins the Vitest suite in M3 (item 3); until then only the keyboard-only part applies.
 - Logs carry no payloads.
 - Docs and generated bindings are updated.
 
@@ -290,7 +294,7 @@ pnpm tauri build --debug --features e2e --config src-tauri/e2e.conf.json && pnpm
 - **On every PR:**
   - an egress canary: fetch, image, beacon, WebSocket, `window.open` and RTCPeerConnection, all blocked;
   - a Linux strace guard: any `connect` or `sendto` outside 127.0.0.1 fails the run;
-  - a canary input at `NAVAJA_LOG=trace`, plus a panicking tool, must not appear in logs, crash files or stderr.
+  - a canary input at `NAVAJA_LOG=trace`, plus a panicking tool, must not appear in logs, crash files or stderr. The integration test `app/src-tauri/tests/privacy.rs`, run by nextest, checks logs and crash files at trace level; it does not capture stderr yet.
 - **In M2a and M6:**
   - a whole-process-tree NIC capture on each OS (S2.7);
   - the webview data folder holds no input text;
@@ -298,7 +302,7 @@ pnpm tauri build --debug --features e2e --config src-tauri/e2e.conf.json && pnpm
 
 **Manual QA**, at each milestone end, on Windows 11, Ubuntu GNOME Wayland with AppIndicator, Ubuntu X11, Fedora GNOME (no tray), KDE Plasma 6 Wayland and macOS 26:
 - **Shell:** starts hidden; tray menu; close and quit paths; `--toggle` and `--tool`; keyboard-only use.
-- **M2b and M6:** screen readers (NVDA, Narrator, Orca, VoiceOver); 100-200 % scaling; light and dark themes.
+- **M2b and M6:** screen readers (NVDA, Narrator, Orca, VoiceOver); 100-200 % scaling; light and dark themes; on macOS, a copy does not reach a Handoff-paired device.
 - **Ports, from M4:** an elevated listener gets a reason and a guarded command; nodemon kill; pm2 respawn.
 - **Docker Desktop, from M5.**
 - **M6:** install, one-click update and uninstall per format, plus the SmartScreen and Gatekeeper wording.

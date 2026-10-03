@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{Capability, Category, ToolId};
+use crate::id::{Capability, Category, ToolId, is_ident};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +46,13 @@ pub struct ActionMeta {
 }
 
 impl ActionMeta {
+    pub const MAX_ID_LEN: usize = 64;
+
+    /// `[a-z][a-z0-9_]*`, at most 64 bytes: the tool-id grammar.
+    pub fn is_valid_id(id: &str) -> bool {
+        id.len() <= Self::MAX_ID_LEN && is_ident(id)
+    }
+
     pub fn new(id: &str, label: &str) -> Self {
         Self {
             id: id.to_owned(),
@@ -199,6 +206,16 @@ pub enum OutputKind {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn action_ids() {
+        for ok in ["generate", "to_base64", &"a".repeat(ActionMeta::MAX_ID_LEN)] {
+            assert!(ActionMeta::is_valid_id(ok), "{ok}");
+        }
+        for bad in ["", "Generate", "a-b", "a\nb", &"a".repeat(65)] {
+            assert!(!ActionMeta::is_valid_id(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn ui_spec_wire_format() {

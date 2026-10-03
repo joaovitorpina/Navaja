@@ -3,5 +3,15 @@
   "identifier": "main",
   "description": "The main window may call Navaja's own commands and nothing else: no core:default, no plugin permissions.",
   "windows": ["main"],
-  "permissions": ["allow-app-info", "allow-shell-ready"]
+  "permissions": [
+    "allow-app-info",
+    "allow-shell-ready",
+    "allow-list-tools",
+    "allow-search",
+    "allow-run-tool",
+    "allow-cancel-run",
+    "allow-copy-text",
+    "allow-settings-get",
+    "allow-settings-set"
+  ]
 }

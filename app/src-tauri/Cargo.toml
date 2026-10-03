@@ -17,13 +17,30 @@ name = "navaja_lib"
 name = "navaja"
 path = "src/main.rs"
 
+[features]
+# Derive TypeScript bindings for the app's own IPC types (cargo xtask bindings).
+ts = ["dep:ts-rs", "navaja-core/ts"]
+
 [build-dependencies]
 tauri-build = { workspace = true }
 
 [dependencies]
+arboard = { version = "3.6.1", default-features = false }
+dirs = "7.0.0"
 navaja-core = { workspace = true }
+navaja-tools = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tauri = { workspace = true }
+toml = "1.1.6"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
+ts-rs = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Clipboard on Wayland through the data-control protocol (X11 works without it).
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 
 [lints]
 workspace = true
