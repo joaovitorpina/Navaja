@@ -273,6 +273,7 @@ These are enforced by lints, cargo-deny, `registry_test.rs` and review:
   - **Already there:** `navaja-core`, `serde`, `serde_json`, `uuid`.
   - **In the root `[workspace.dependencies]`:** write `<crate> = { workspace = true }`. Available: `proptest` (under `[dev-dependencies]`), `roxmltree`, `serde_path_to_error`, `ts-rs`. The `tauri` entries are for the app only.
   - **Anything else:** write its version in `tools/Cargo.toml`, such as `<crate> = "1.2.3"`; cargo-deny rejects `*`. Moving it into the workspace table is a separate `host-change` PR.
+  - **A new crate in a system-tool PR:** `crates/navaja-<x>/` is a workspace member already (`crates/*`). Write `navaja-<x> = { path = "../crates/navaja-<x>" }` in `tools/Cargo.toml`, with no version: `deny.toml` sets `allow-wildcard-paths`. The crate's own dependencies go in its own `Cargo.toml` under the same rule, `workspace = true` or a version. Of Navaja's crates, it may use only `navaja-core` ([architecture](architecture.md) §2).
   - **Allowed:** small, maintained crates with a licence on the `deny.toml` allowlist.
   - **Not allowed:** Tauri, tokio, HTTP clients and socket crates. `cargo xtask check` and cargo-deny reject them.
 
@@ -297,9 +298,9 @@ git fetch origin
 cargo xtask tool-gate origin/main
 ```
 
-- **Commit first.** `tool-gate` compares `<base>...HEAD`, so it sees committed changes only. Before your first commit it prints `tool-gate: no new tool in this diff` and exits 0. Look for `tool-gate: ok (text tool: <id>)`.
+- **Commit first.** `tool-gate` compares `<base>...HEAD`, so it sees committed changes only. Before your first commit it prints `tool-gate: no new tool in this diff` and exits 0. Look for `tool-gate: ok (text tool: <id>)`, or `tool-gate: ok (system tool: <id>)` when the PR also adds a crate or changes the bindings.
 - **The base** is the branch your PR targets, fetched from the main repository; CI passes `origin/<target branch>`. In a fork, add the main repository as a remote, such as `upstream`, fetch it and pass `upstream/main`.
-- **Bindings:** CI also runs `cargo xtask bindings --check`. The bindings come only from `navaja-core` and the app crate ([`bindings.rs`](../xtask/src/bindings.rs)), so a tool PR leaves them unchanged.
+- **Bindings:** CI also runs `cargo xtask bindings --check`. The bindings come only from the crates listed in [`bindings.rs`](../xtask/src/bindings.rs), today `navaja-core` and the app crate, so a text tool leaves them unchanged. A system tool's crate gets bindings once `xtask bindings` exports it, which is a `host-change` PR; after that, the tool PR commits the regenerated `app/src/bindings/**`.
 
 In tests, call your tool through `navaja_core::run_single(TOOL, action, input)`, not `invoke`, as [`tools/uuid/tests.rs`](../tools/uuid/tests.rs) does. It runs the output and error-code checks, returns `Result<Value, ToolError>`, and panics if the metadata is invalid. A `tests.rs` for the tool above:
 
@@ -338,7 +339,7 @@ To try the tool in the app, run `pnpm dev` from the repository root. Quit any ot
 | Change | May touch | Never touches |
 |---|---|---|
 | **Text tool** | `tools/<id>/**`, one line in `tools/lib.rs`, `tools/Cargo.toml`, `Cargo.lock` | anything else |
-| **System tool** | The text-tool set, plus target-specific dependencies, an optional new `crates/navaja-<x>/`, generated `app/src/bindings/**`, and `tools/<id>/ui/**` | `app/src/{shell,generic,lib}`, `app/src-tauri`, `navaja-core`, `xtask` |
+| **System tool** | The text-tool set, plus target-specific dependencies, an optional new `crates/navaja-<x>/`, generated `app/src/bindings/**` (once `xtask bindings` exports the tool's crate, a `host-change` PR), and `tools/<id>/ui/**` | `app/src/{shell,generic,lib}`, `app/src-tauri`, `navaja-core`, `xtask` |
 
 If your tool needs something the host doesn't offer, open a separate `host-change` PR first. Examples are a new `OutputKind`, a new `Capability`, a new host service, or a new entry in the root `[workspace.dependencies]`.
 

@@ -138,10 +138,11 @@ register_tools! {
 | Change | May touch | Never touches |
 |---|---|---|
 | **Text tool** | `tools/<id>/**`, **one line** in `tools/lib.rs`, `tools/Cargo.toml`, `Cargo.lock` | Anything else, including any TypeScript |
-| **System tool** | The text-tool set, plus target-specific dependencies, an optional new `crates/navaja-<x>/`, generated `app/src/bindings/**`, and `tools/<id>/ui/**` (custom view and i18n) | `app/src/{shell,generic,lib}`, `app/src-tauri`, `navaja-core`, `xtask` |
+| **System tool** | The text-tool set, plus target-specific dependencies, an optional new `crates/navaja-<x>/`, generated `app/src/bindings/**` (once `xtask bindings` exports the tool's crate, a `host-change` PR), and `tools/<id>/ui/**` (custom view and i18n) | `app/src/{shell,generic,lib}`, `app/src-tauri`, `navaja-core`, `xtask` |
 | **New capability, output kind or host service** | A separate, reviewed `host-change` PR | none |
 
 - **Dependencies:** a tool PR never changes the root `Cargo.toml`; tool-gate rejects it. In `tools/Cargo.toml`, a crate already in the root `[workspace.dependencies]` takes `workspace = true`, and any other crate carries its version. Adding to the root table is a `host-change` PR.
+  - **A system tool's new crate:** `crates/navaja-<x>/` joins the workspace through `crates/*`. `tools/Cargo.toml` takes it as `navaja-<x> = { path = "../crates/navaja-<x>" }`, with no version (`deny.toml` sets `allow-wildcard-paths`). The crate's own `Cargo.toml` follows the same rule for its dependencies.
 - **Strings:** text goes through `t(key, fallback)`. Keys derive from the tool id, action, option and error code, and Rust's English text is the fallback, so a text tool needs no `.ts` edit. A custom view adds its own `tools/<id>/ui/i18n/en.ts`.
 - **Custom views** live in `tools/<id>/ui/`. The shell finds them with `import.meta.glob('@tools/*/ui/View.svelte')`.
   - **Imports:** the ESLint rule `navaja/view-imports` (`app/eslint/view-imports.js`) applies to every script file under `tools/*/ui/`. A view may import only:
