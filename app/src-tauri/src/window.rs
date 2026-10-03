@@ -23,12 +23,27 @@ const READY_TIMEOUT: Duration = Duration::from_secs(5);
 /// taskbar before the click arrives. KeePassXC allows the same 500 ms.
 const TRAY_BLUR_GRACE: Duration = Duration::from_millis(500);
 
-/// Where the webview's web traffic goes on Linux: a closed, privileged
-/// loopback port (the discard service's). WebKitGTK looks a link's host up
-/// while it waits for the navigation decision, even one the guard then
-/// denies; through this proxy nothing is resolved and nothing leaves the
-/// machine. The app's own scheme and IPC never use the network.
-#[cfg(target_os = "linux")]
+/// Where the webview's web traffic goes, on every OS: a closed, privileged
+/// loopback port (the discard service's). The engine hands a proxied
+/// request's host name to the proxy instead of resolving it, so through this
+/// one nothing is resolved and nothing leaves the machine
+/// (docs/architecture.md §5, spike S2.7). Without it:
+/// - WebKitGTK and macOS's WebKit look a link's host up while they wait for
+///   the navigation decision, even one the guard then denies;
+/// - WebView2's network service fetches its own configuration and component
+///   update checks, and probes `wpad` for proxy auto-detection.
+///
+/// How each engine gets it:
+/// - Windows: wry adds `--proxy-server=http://127.0.0.1:9` to WebView2's
+///   browser arguments, after its defaults.
+/// - macOS: Tauri's `macos-proxy` feature sets it on the webview's
+///   `WKWebsiteDataStore` (`proxyConfigurations`). That API needs macOS 14,
+///   which is why tauri.conf.json's `bundle.macOS.minimumSystemVersion` and
+///   `.cargo/config.toml`'s `MACOSX_DEPLOYMENT_TARGET` are 14.0.
+///
+/// The app's own pages and IPC never reach it: they are custom schemes on
+/// Linux and macOS, and on Windows `http://tauri.localhost` and
+/// `http://ipc.localhost`, which wry serves from the app itself.
 const DEAD_PROXY: &str = "http://127.0.0.1:9";
 
 /// What a second launch or the tray asks the window to open, besides
@@ -138,7 +153,6 @@ pub fn create_main<R: Runtime>(
         builder = builder.initialization_script(route_script(id));
     }
     // Not in dev, where the front end comes from the Vite server.
-    #[cfg(target_os = "linux")]
     if !tauri::is_dev()
         && let Ok(proxy) = tauri::Url::parse(DEAD_PROXY)
     {
@@ -387,6 +401,16 @@ mod tests {
         assert!(!should_hide(false, false, true, Some(JUST_NOW)));
         assert!(!should_hide(true, true, false, Some(JUST_NOW)));
         assert!(!should_hide(true, true, true, None));
+    }
+
+    #[test]
+    fn the_dead_proxy_is_a_closed_loopback_port() {
+        // create_main skips a proxy that does not parse, and wry needs an
+        // explicit port (Url::port is None for http's default, 80).
+        let proxy = tauri::Url::parse(DEAD_PROXY).expect("DEAD_PROXY parses");
+        assert_eq!(proxy.scheme(), "http");
+        assert_eq!(proxy.host_str(), Some("127.0.0.1"));
+        assert_eq!(proxy.port(), Some(9));
     }
 
     #[test]
