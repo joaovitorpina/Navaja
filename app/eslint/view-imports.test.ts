@@ -138,6 +138,14 @@ tester.run('view-imports', rule, {
     notAllowed("import x = require('../x');"),
     notAllowed("type T = typeof import('../x');"),
     notAllowed("const w = new URL('../worker.ts', import.meta.url);"),
+    // Vite resolves any other literal here through its aliases and resolver.
+    notAllowed(
+      "const w = new Worker(new URL('$lib/ipc.ts', import.meta.url), { type: 'module' });",
+    ),
+    notAllowed("const w = new URL('sub/../../x', import.meta.url);"),
+    notAllowed("const w = new URL('@tools/other/ui/View.svelte', import.meta.url);"),
+    notAllowed("const w = new URL('/src/lib/ipc.ts', import.meta.url);"),
+    notAllowed("const w = new URL('data:text/javascript,0', import.meta.url);"),
     {
       code: 'const name = "x"; const lazy = import(name);',
       filename: TS,

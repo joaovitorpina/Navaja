@@ -162,15 +162,15 @@ const rule = {
           check(node.arguments[0] ?? node);
         }
       },
-      // Vite bundles the file behind `new URL('./x', import.meta.url)`, as
-      // an asset or a worker, so its path must stay inside the view too.
+      // Vite bundles the file behind `new URL(x, import.meta.url)`, as an
+      // asset or a worker. It resolves a bare x through the aliases too
+      // ($lib/ipc.ts, @tools/…), so x faces the same check as an import.
+      // An absolute URL ignores the base and needs no import.meta.url.
       NewExpression(node) {
         const [target, base] = node.arguments;
         if (node.callee.type !== 'Identifier' || node.callee.name !== 'URL') return;
         if (base?.type !== 'MemberExpression' || !isImportMeta(base.object)) return;
-        if (propertyName(base) !== 'url') return;
-        const source = literal(target);
-        if (source === undefined || isRelative(source)) check(target);
+        if (propertyName(base) === 'url') check(target);
       },
       MemberExpression(node) {
         const name = propertyName(node);

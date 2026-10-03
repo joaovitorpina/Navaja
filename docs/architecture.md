@@ -149,7 +149,7 @@ register_tools! {
     - `$lib/view-kit`, exactly;
     - `$bindings/<name>` and `$bindings/<dir>/<name>`, with no `.` or `..` segments.
   - **Tests:** a view's `*.test.ts` and `*.spec.ts` files may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`, and nothing else.
-  - **Forms checked:** static, type-only and side-effect imports, `export … from`, `import()` and `require()`, TypeScript's `import x = require()` and `typeof import()`, and `new URL('./x', import.meta.url)`. A computed specifier is an error, and `import.meta.glob` is not allowed.
+  - **Forms checked:** static, type-only and side-effect imports, `export … from`, `import()` and `require()`, TypeScript's `import x = require()` and `typeof import()`, and the first argument of `new URL(x, import.meta.url)`. Vite bundles that file as an asset or a worker and resolves a bare `x` through its aliases, so `x` must be allowed like an import, and an absolute URL is refused too. A computed specifier is an error, and `import.meta.glob` is not allowed.
   - **No opt-out:** a view can't switch rules off with a comment (`noInlineConfig`, plus markup `<!-- eslint-disable -->`). `pnpm lint` runs ESLint from the repository root with `--config`, so a config file placed under `tools/` is never used. CI runs `pnpm lint` in the checks job.
   - **(S2.2)** If views outside `app/` turn out not to work, the fallback is `app/src/tools/<id>/`. That would be a brief deviation and needs sign-off.
 - **Tool preferences** never become shell `Settings` fields. `Settings.tools`, a TOML table per tool id, is reserved until a tool needs it.
