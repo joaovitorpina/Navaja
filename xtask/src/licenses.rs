@@ -1075,16 +1075,31 @@ mod tests {
 
     #[test]
     fn direct_dependencies_must_be_listed() {
+        // Keys in each section are sorted, so the order holds whether or not
+        // serde_json keeps insertion order.
         let manifest = json!({
-            "dependencies": { "bits-ui": "^2.19.4", "local": "workspace:*" },
-            "devDependencies": { "svelte": "^5.57.1", "vite": "~8.3.2" },
+            "dependencies": {
+                "bits-ui": "^2.19.4",
+                "dep-file": "file:../vendor/dep-file",
+                "dep-link": "link:../dep-link",
+                "local": "workspace:*",
+                "zod": "^4.1.0"
+            },
+            "devDependencies": {
+                "dev-file": "file:dev-file.tgz",
+                "dev-link": "link:../dev-link",
+                "svelte": "^5.57.1",
+                "tool": "workspace:^",
+                "vite": "~8.3.2"
+            },
             "optionalDependencies": { "fsevents": "^2" }
         });
         let packages = [package("bits-ui", "MIT"), package("svelte", "MIT")];
         assert_eq!(
             missing_dependencies("app/package.json", &manifest, &packages),
             [
-                "app/package.json: devDependencies.vite is not in `pnpm licenses list`; is it installed?"
+                "app/package.json: dependencies.zod is not in `pnpm licenses list`; is it installed?",
+                "app/package.json: devDependencies.vite is not in `pnpm licenses list`; is it installed?",
             ]
         );
     }
