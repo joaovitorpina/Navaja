@@ -490,7 +490,7 @@ finding_rows() {
 # The DNS questions in DNS packets in tcpdump's long form (on stdin), with
 # a count each.
 questions() {
-  grep -oE '[A-Z0-9]+\? [^ ]+' | sort | uniq -c | sort -rn || true
+  grep -oE '[A-Za-z0-9]+\? [^ ]+' | sort | uniq -c | sort -rn || true
 }
 
 # check <phase>: lists what the phase's capture holds from the process tree,
@@ -545,10 +545,10 @@ check_linux() {
   {
     echo "#### $phase: $(os_label)"
     echo
-    echo "| Capture | Packets | Kernel link-layer noise | Sent by the namespace (findings) | Host side, not noise |"
+    echo "| Capture | Packets | Kernel link-layer noise | Findings | Host side, not noise |"
     echo "|---|---|---|---|---|"
-    echo "| Host end of the veth (\`$HOST_IF\`) | $total | $noise | $sent | $hostside |"
-    echo "| Namespace loopback, DNS (port 53) | $(lines "$OUT/$phase-lo.txt") in all | - | $lodns | - |"
+    echo "| Host end of the veth (\`$HOST_IF\`) | $total | $noise | $sent sent by the namespace | $hostside |"
+    echo "| Namespace loopback | $(lines "$OUT/$phase-lo.txt") | - | $lodns DNS (port 53) | - |"
     echo
     echo "Connection attempts on the namespace's loopback, which never leave it: $(loopback_summary "$OUT/$phase-lo-syn.txt")."
     echo
@@ -672,6 +672,13 @@ mac_select() {
   ' "$listing"
 }
 
+# "navaja (123), out 30; navaja (123), in 25", or "none".
+lo0_summary() {
+  local out
+  out=$(awk -F '\t' '{ c[$1]++ } END { for (k in c) { printf "%s%s %d", sep, k, c[k]; sep = "; " } }' "$1")
+  echo "${out:-none}"
+}
+
 # check_macos <phase> <process regex> <pid or empty>
 check_macos() {
   local phase=$1 want=$2 pid=$3 pcap=$OUT/$1.pcapng listing=$OUT/$1-packets.txt
@@ -705,7 +712,7 @@ check_macos() {
     echo "|---|---|---|---|---|---|"
     echo "| pktap, every interface | $total | $outside | $tree | $lo0 | $canary |"
     echo
-    echo "The tree's packets on lo0, which never leave the machine: $(awk -F '\t' '{ c[$1]++ } END { for (k in c) printf "%s%s %d", sep, k, c[k]; sep = ", " }' "$OUT/$phase-tree-lo0.txt" | sed 's/^$/none/')."
+    echo "The tree's packets on lo0, which never leave the machine: $(lo0_summary "$OUT/$phase-tree-lo0.txt")."
     echo
     if [ "$findings" -eq 0 ]; then
       echo "No packet from the process tree."
