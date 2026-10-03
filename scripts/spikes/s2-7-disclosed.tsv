@@ -1,0 +1,21 @@
+# Spike S2.7's disclosed list (docs/adr/0003-webview-network.md): traffic the
+# app sets off that nothing it controls can stop. The check reports what an
+# entry covers as "disclosed", in a summary row of its own, instead of
+# failing on it; docs/privacy.md must disclose each entry verbatim (roadmap
+# M6, item 6). Anything an entry does not cover still fails, and so does an
+# entry's traffic in an OS or phase it does not name. No entry may cover the
+# app's own process tree (navaja, WebKit's processes, msedgewebview2.exe).
+#
+# One entry a line, five tab-separated fields:
+#   os       macos or windows
+#   phases   idle, in-use, or both, separated by a space
+#   service  the system service that sent it. macOS: the process the packet
+#            was for, as pktap names it (its eproc, else its proc).
+#            Windows: the service's identity, as the review list names it
+#            ("svchost.exe [wlidsvc]").
+#   hosts    the DNS names it reached, comma-separated: the name a DNS packet
+#            asks for, or a name the capture's DNS answers give for the
+#            remote address (through CNAMEs too)
+#   purpose  what it is for, as privacy.md says it
+macos	idle in-use	webprivacyd	wps.apple.com	WebKit's privacy lists (tracking-prevention and link-filtering data), which macOS's webprivacyd service downloads from Apple when its copy is out of date
+macos	idle in-use	webprivacyd	ocsp2.apple.com, ocsp2.g.aaplimg.com	the certificate check (OCSP) that macOS's trustd makes for webprivacyd's connection to wps.apple.com

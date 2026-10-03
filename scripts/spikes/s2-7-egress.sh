@@ -40,10 +40,15 @@
 #   WebContent, GPU), or one of the daemons WebKit hands work to: webprivacyd
 #   (its privacy lists), the Safe Browsing service, adattributiond (Private
 #   Click Measurement) or webpushd (Web Push). WebKit starts them for the
-#   app, outside its process tree. A daemon that was already running before
-#   the app first ran is not counted: the VM starts some by itself.
+#   app, outside its process tree. A daemon counts only if it started within
+#   15 s after a start of the app: the VM starts some by itself.
 # On both, a DNS question for one of the egress canary's hosts is a finding
 # too, whichever process asks.
+#
+# Traffic from those daemons that an entry of s2-7-disclosed.tsv covers
+# (service, host, phase) is reported as disclosed and fails nothing
+# (docs/adr/0003-webview-network.md). Nothing from the tree's own processes
+# can be disclosed.
 #
 # The baseline phase captures the same way for 5 min before the app ever
 # runs. Nothing in it may count as the app's: otherwise the attribution
@@ -87,6 +92,9 @@ PORT=4445
 IDLE_SECONDS=${S2_7_IDLE_SECONDS:-300}
 # Part of every host the egress canary asks for (app/e2e/specs/egress.e2e.ts).
 CANARY=navaja-canary
+# What the check reports as disclosed instead of failing on: traffic the app
+# sets off that nothing it controls can stop (docs/adr/0003-webview-network.md).
+DISCLOSED=$REPO/scripts/spikes/s2-7-disclosed.tsv
 
 # Linux: the namespace, the veth pair that links it to the host, their
 # addresses, and the namespace's resolver.
@@ -118,20 +126,23 @@ UPLINK_DNS_SNAP=512
 # it, as pktap names them. It cuts a name to 16 characters (15 for the
 # process acted for), so com.apple.WebKit.Networking may read
 # com.apple.WebKit, and com.apple.Safari.SafeBrowsing.Service reads
-# com.apple.Safari or com.apple.Safar. A daemon counts only if it was not
-# running before the app first ran in this job (<phase>-daemons-before.txt):
-# the VM may start one by itself, as it did the Safe Browsing service before
-# a job began. The baseline checks that no daemon started without the app
-# talks.
+# com.apple.Safari or com.apple.Safar. A daemon counts as the app's only if
+# it started within DAEMON_WINDOW seconds after a start of the app, by ps's
+# start times in the job's process snapshots (<phase>-daemons.tsv); one the
+# snapshots never saw counts too. Starting after the app is not enough: the
+# VM starts the Safe Browsing service by itself, before a job and, in run
+# 37160662987, 8 s into the baseline, which never runs the app.
 TREE_PROCS='^(navaja|com\.apple\.WebKit.*)$'
 WEBKIT_DAEMONS='^(webprivacyd|com\.apple\.Safar.*|adattributiond|webpushd)$'
 # The same daemons as ps names them.
 DAEMON_COMMANDS='webprivacyd|SafeBrowsing\.Service|adattributiond|webpushd'
+# webprivacyd started within 1 s of the app in every run so far, and the
+# Safe Browsing service 4 s after it in run 37151706483.
+DAEMON_WINDOW=15
 # Set by check() for the tree's checks only: the daemons' pktap names, and
-# the PIDs (" 1 2 ") of the instances that ran before the app.
+# the PIDs (" 1 2 ") of those not counted as the app's.
 MAC_DAEMONS=''
 MAC_EXCLUDED=' '
-MAC_BEFORE=''
 
 fail() {
   echo "::error::S2.7 $*"
@@ -317,7 +328,8 @@ app_processes() {
   local list
   case $OS in
     linux) list=$(ps -eo pid=,ppid=,lstart=,args=) ;;
-    macos) list=$(ps -axo pid=,ppid=,lstart=,command=) ;;
+    # In UTC, as mac_starts reads the start times.
+    macos) list=$(TZ=UTC ps -axo pid=,ppid=,lstart=,command=) ;;
   esac
   printf '%s\n' "$list" |
     grep -E 'navaja|com\.apple\.WebKit|WebKit(Network|Web|GPU)Process|webprivacyd|SafeBrowsing|adattributiond|webpushd' || true
@@ -571,23 +583,78 @@ check() {
     linux) check_linux "$phase" ;;
     macos)
       MAC_DAEMONS=$WEBKIT_DAEMONS
-      MAC_BEFORE=$(daemons_before_file "$phase")
-      MAC_EXCLUDED=" $(tr '\n' ' ' < "$MAC_BEFORE") "
+      mac_daemons "$phase"
       check_macos "$phase" "$TREE_PROCS" ''
       ;;
   esac
 }
 
-# macOS: "3216 (`/System/.../com.apple.Safari.SafeBrowsing.Service`)." for
-# the daemons in MAC_EXCLUDED, from the ps lines recorded with them.
-daemon_names() {
-  local pid cmd out='' file=${MAC_BEFORE%.txt}-ps.txt
-  for pid in $MAC_EXCLUDED; do
-    # ps printed the PID, the start time in 5 fields, then the command.
-    cmd=$(awk -v pid="$pid" '$1 == pid { for (i = 1; i <= 6; i++) $i = ""; sub(/^ +/, ""); print; exit }' "$file" 2> /dev/null || true)
-    out="$out${out:+, }$pid (\`${cmd:-?}\`)"
+# macOS: "<pid>\t<epoch>\t<command>" for each process in the job's process
+# snapshots (and in record_daemons's lists) whose command contains <text>
+# (mode -F) or matches <regex> (mode -E), with its start time as ps gives
+# it, to the second. The epoch is empty if date can't read it.
+mac_starts() {
+  local mode=$1 pattern=$2 file pid when command
+  for file in "$OUT"/*-processes.txt "$OUT"/*-daemons-before-ps.txt; do
+    [ ! -f "$file" ] || cat "$file"
+  done | MODE=$mode PATTERN=$pattern awk '
+    # "<pid> [<ppid>] <weekday> <month> <day> <time> <year> <command>"
+    $1 !~ /^[0-9]+$/ || ($1 in seen) { next }
+    ENVIRON["MODE"] == "-F" && !index($0, ENVIRON["PATTERN"]) { next }
+    ENVIRON["MODE"] == "-E" && $0 !~ ENVIRON["PATTERN"] { next }
+    {
+      seen[$1] = 1
+      i = ($2 ~ /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$/) ? 2 : 3
+      command = ""
+      for (k = i + 5; k <= NF; k++) command = command (command == "" ? "" : " ") $k
+      print $1 "\t" $i " " $(i + 1) " " $(i + 2) " " $(i + 3) " " $(i + 4) "\t" command
+    }
+  ' | while IFS=$'\t' read -r pid when command; do
+    printf '%s\t%s\t%s\n' "$pid" "$(TZ=UTC date -j -f '%a %b %d %T %Y' "$when" +%s 2> /dev/null || true)" "$command"
   done
-  echo "$out."
+}
+
+# macOS: decides which WebKit daemons count as the app's (see DAEMON_WINDOW),
+# into <phase>-daemons.tsv: "<pid>\t<start>\t<counted or left out>\t<why>\t
+# <command>". Sets MAC_EXCLUDED to those left out. Later phases' snapshots
+# count too, if they exist: a daemon may outlive the phase that woke it.
+mac_daemons() {
+  local phase=$1
+  mac_starts -F "$BINARY" > "$OUT/app-starts.tsv"
+  mac_starts -E "$DAEMON_COMMANDS" > "$OUT/daemon-starts.tsv"
+  if [ "$phase" != baseline ] && ! awk -F '\t' '$2 != "" { found = 1 } END { exit !found }' "$OUT/app-starts.tsv"; then
+    fail "check $phase: the process snapshots hold no start of $BINARY, so no WebKit daemon could be tied to the app"
+  fi
+  awk -F '\t' -v window="$DAEMON_WINDOW" '
+    NR == FNR { if ($2 != "") { app[++n] = $2; pid[n] = $1 } next }
+    {
+      verdict = "left out"
+      why = "not within " window " s after a start of the app"
+      if ($2 == "") { verdict = "counted"; why = "start time unknown" }
+      for (i = 1; i <= n && verdict == "left out"; i++) {
+        if ($2 >= app[i] && $2 <= app[i] + window) {
+          verdict = "counted"
+          why = sprintf("%d s after a start of the app (PID %s)", $2 - app[i], pid[i])
+        }
+      }
+      print $1 "\t" $2 "\t" verdict "\t" why "\t" $3
+    }
+  ' "$OUT/app-starts.tsv" "$OUT/daemon-starts.tsv" > "$OUT/$phase-daemons.tsv"
+  MAC_EXCLUDED=" $(awk -F '\t' '$3 == "left out" { printf "%s ", $1 }' "$OUT/$phase-daemons.tsv")"
+}
+
+# macOS: the daemons that <phase>-daemons.tsv marks <verdict> ("counted" or
+# "left out"), as "3216 (`/System/.../com.apple.Safari.SafeBrowsing.Service`,
+# started 23:08:44 UTC, not within 15 s after a start of the app)", or "none".
+daemon_names() {
+  local out
+  out=$(awk -F '\t' -v verdict="$2" '$3 == verdict { print $1 "\t" $2 "\t" $4 "\t" $5 }' "$OUT/$1-daemons.tsv" |
+    while IFS=$'\t' read -r pid when why command; do
+      [ -z "$when" ] || when="started $(TZ=UTC date -r "$when" +%T) UTC, "
+      printf '%s (`%s`, %s%s); ' "$pid" "$command" "$when" "$why"
+    done)
+  out=${out%; }
+  echo "${out:-none}"
 }
 
 # macOS: the PIDs of the WebKit daemons running now, one a line, and their
@@ -597,32 +664,13 @@ daemon_pids() {
   pids=$(pgrep -f "$DAEMON_COMMANDS" || true)
   if [ -n "$pids" ]; then
     # shellcheck disable=SC2086
-    ps -o pid=,lstart=,command= -p "$(echo $pids | tr ' ' ,)" >&2 || true
+    TZ=UTC ps -o pid=,lstart=,command= -p "$(echo $pids | tr ' ' ,)" >&2 || true
     printf '%s\n' $pids
   fi
 }
 
-# macOS: the file of daemon PIDs that ran before the app first ran: for the
-# baseline, those at its own start; else those at the idle phase's start,
-# the app's first run (or at the in-use phase's, if idle never ran).
-daemons_before_file() {
-  local file candidates
-  if [ "$1" = baseline ]; then
-    candidates=("$OUT/baseline-daemons-before.txt")
-  else
-    candidates=("$OUT/idle-daemons-before.txt" "$OUT/in-use-daemons-before.txt")
-  fi
-  for file in "${candidates[@]}"; do
-    if [ -f "$file" ]; then
-      echo "$file"
-      return 0
-    fi
-  done
-  fail "check $1: no record of the WebKit daemons that ran before the app; run the $1 mode first"
-}
-
-# macOS: before a phase, the WebKit daemons already running, which the
-# phase's check does not count as the app's.
+# macOS: before a phase, the WebKit daemons already running, with their
+# start times, for the record; mac_starts reads them too.
 record_daemons() {
   local phase=$1
   [ "$OS" = macos ] || return 0
@@ -667,6 +715,9 @@ check_linux() {
   hostside=$(lines "$OUT/$phase-veth-host.txt")
   lodns=$(lines "$OUT/$phase-lo-dns.txt")
   findings=$((sent + lodns))
+  # The disclosed list has no entry for Linux: everything the namespace
+  # sends is a finding.
+  echo 0 > "$OUT/$phase-disclosed.count"
 
   {
     awk '{ print "namespace, veth\t" $0 }' "$OUT/$phase-veth-sent.txt"
@@ -812,12 +863,16 @@ os_label() {
 # Prints the phase's table, the first findings in full, and fails on any.
 # The list of what the baseline lacks only gets a warning.
 report() {
-  local phase=$1 md=$2 findings=$3 suspects=0
+  local phase=$1 md=$2 findings=$3 suspects=0 disclosed=0
   shift 3
   cat "$md"
   [ ! -f "$OUT/$phase-suspects.count" ] || suspects=$(cat "$OUT/$phase-suspects.count")
   if [ "$suspects" -gt 0 ]; then
     echo "::warning::S2.7 $phase: $suspects item(s) of traffic outside the process tree that the baseline lacks, listed above for review (not findings)"
+  fi
+  [ ! -f "$OUT/$phase-disclosed.count" ] || disclosed=$(cat "$OUT/$phase-disclosed.count")
+  if [ "${disclosed:-0}" -gt 0 ]; then
+    echo "::notice::S2.7 $phase: $disclosed packet(s) covered by the disclosed list (scripts/spikes/s2-7-disclosed.tsv), reported above, not findings"
   fi
   if [ "$findings" -gt 0 ]; then
     echo "The first findings in full:"
@@ -833,7 +888,13 @@ report() {
   case $phase in
     control) ;;
     baseline) echo "baseline: nothing counted as the app's while it was not running." ;;
-    *) echo "$phase: no packet from the process tree." ;;
+    *)
+      if [ "$disclosed" -gt 0 ]; then
+        echo "$phase: no packet from the process tree but the $disclosed the disclosed list covers."
+      else
+        echo "$phase: no packet from the process tree."
+      fi
+      ;;
   esac
 }
 
@@ -998,10 +1059,158 @@ suspects_macos() {
   } >> "$file"
 }
 
+# The disclosed list's entries for an OS and a phase, as "<service>\t<hosts>
+# \t<purpose>" lines.
+disclosed_entries() {
+  # Errors go to stderr: the caller writes stdout to a file.
+  [ -f "$DISCLOSED" ] || fail "no disclosed list at $DISCLOSED" >&2
+  awk -F '\t' -v os="$1" -v phase="$2" '
+    /^#/ || NF == 0 { next }
+    NF != 5 { print "s2-7-disclosed.tsv line " NR ": " NF " fields, not 5" > "/dev/stderr"; bad = 1; next }
+    $1 == os && index(" " $2 " ", " " phase " ") { print $3 "\t" $4 "\t" $5 }
+    END { exit bad }
+  ' "$DISCLOSED" || fail "the disclosed list is malformed" >&2
+}
+
+# macOS: "<address>\t<name>" for every address the job's captures saw a DNS
+# answer give, with every name that leads to it: the record's own name and
+# the names whose CNAMEs lead there. Every phase so far counts, since
+# mDNSResponder may answer a name from its cache, CNAME included.
+mac_addr_names() {
+  local file
+  for file in "$OUT"/*-dns-long.txt; do
+    [ ! -f "$file" ] || cat "$file"
+  done | awk '
+    # An answer, one a line: "... <id> <an>/<ns>/<ar> <name>. <TYPE> <data>, ... (<length>)"
+    match($0, / [0-9]+\/[0-9]+\/[0-9]+ /) {
+      rest = substr($0, RSTART + RLENGTH)
+      sub(/ \([0-9]+\)$/, "", rest)
+      n = split(rest, record, ", ")
+      for (i = 1; i <= n; i++) {
+        split(record[i], f, " ")
+        owner = f[1]
+        data = f[3]
+        sub(/\.$/, "", owner)
+        sub(/\.$/, "", data)
+        if (f[2] == "CNAME") parents[data] = parents[data] " " owner
+        else if (f[2] == "A" || f[2] == "AAAA") owners[data] = owners[data] " " owner
+      }
+    }
+    function walk(name, depth, list, k, m) {
+      if (depth > 10 || (name in seen)) return
+      seen[name] = 1
+      print address "\t" name
+      m = split(parents[name], list, " ")
+      for (k = 1; k <= m; k++) walk(list[k], depth + 1)
+    }
+    END {
+      for (address in owners) {
+        for (name in seen) delete seen[name]
+        n = split(owners[address], names, " ")
+        for (i = 1; i <= n; i++) walk(names[i], 0)
+      }
+    }
+  ' | sort -u > "$OUT/addr-names.tsv"
+}
+
+# macOS: splits the tree's packets (<phase>-tree.txt) into those an entry of
+# the disclosed list covers, "<entry>\t<label>\t<line>" in
+# <phase>-disclosed.txt, and the rest, "<label>\t<line>" in
+# <phase>-undisclosed.txt. A packet is covered when the process it was for
+# (pktap's eproc, else its proc) is the entry's service, and one of the
+# entry's hosts is the name its DNS packet asks for (a DNS answer is matched
+# to its question by port and ID) or a name the captures' DNS answers give
+# for its remote address.
+mac_disclose() {
+  local phase=$1
+  mac_addr_names
+  disclosed_entries macos "$phase" > "$OUT/$phase-disclosed-entries.tsv"
+  : > "$OUT/$phase-disclosed.txt"
+  : > "$OUT/$phase-undisclosed.txt"
+  awk -F '\t' -v entries="$OUT/$phase-disclosed-entries.tsv" -v names="$OUT/addr-names.tsv" \
+    -v covered="$OUT/$phase-disclosed.txt" -v rest="$OUT/$phase-undisclosed.txt" '
+    function port(end, n, p) { n = split(end, p, "."); return p[n] }
+    function host(end) { sub(/\.[^.]*$/, "", end); return end }
+    BEGIN {
+      while ((getline line < entries) > 0) {
+        split(line, e, "\t")
+        entry[++count] = e[1] " -> " e[2]
+        service[count] = substr(e[1], 1, 15)
+        hosts[count] = e[2]
+      }
+      while ((getline line < names) > 0) {
+        split(line, a, "\t")
+        known[a[1]] = known[a[1]] " " a[2] " "
+      }
+    }
+    # The phase'"'"'s DNS packets in long form: "<epoch> (<pktap>) IP (<ip>)
+    # <source> > <destination>: <id>[flags] <question or answers>".
+    FILENAME == ARGV[1] {
+      n = split($0, w, " ")
+      for (i = 2; i < n; i++) if (w[i] == ">") break
+      if (i >= n) next
+      source = w[i - 1]
+      target = w[i + 1]
+      sub(/:$/, "", target)
+      id = w[i + 2]
+      sub(/[^0-9].*$/, "", id)
+      if (port(target) == "53") {
+        question = ""
+        for (k = i + 3; k < n; k++) if (w[k] ~ /\?$/) { question = w[k + 1]; break }
+        sub(/\.$/, "", question)
+        asked[port(source) "/" id] = question
+        dns[w[1] " " port(source)] = question
+      } else if (port(source) == "53") {
+        answer[w[1] " " port(target)] = port(target) "/" id
+      }
+      next
+    }
+    # The tree'"'"'s packets, short form, remote end last: "<label>\t<epoch> IP
+    # <local> > <remote>: ...".
+    {
+      label = $1
+      split($2, f, " ")
+      local = f[3]
+      remote = f[5]
+      sub(/:$/, "", remote)
+      who = label
+      if (who ~ / for /) sub(/.* for /, "", who)
+      sub(/ \(.*/, "", who)
+      if (port(remote) == "53") {
+        key = f[1] " " port(local)
+        name = (key in dns) ? dns[key] : asked[answer[key]]
+        seen_as = " " name " "
+      } else {
+        seen_as = known[host(remote)]
+      }
+      match_entry = 0
+      for (i = 1; i <= count && !match_entry; i++) {
+        if (substr(who, 1, 15) != service[i]) continue
+        m = split(hosts[i], h, ",")
+        for (j = 1; j <= m; j++) {
+          gsub(/^ +| +$/, "", h[j])
+          if (h[j] != "" && index(seen_as, " " h[j] " ")) match_entry = i
+        }
+      }
+      if (match_entry) print entry[match_entry] "\t" $0 > covered
+      else print $0 > rest
+    }
+  ' "$OUT/$phase-dns-long.txt" "$OUT/$phase-tree.txt"
+}
+
+# Markdown rows for the disclosed packets: entry, packets, first seen.
+disclosed_rows() {
+  local start=$1 file=$2
+  awk -F '\t' -v start="$start" '
+    { if (!($1 in count)) { order[++k] = $1; first[$1] = $3 + 0 } count[$1]++ }
+    END { for (i = 1; i <= k; i++) printf "| %s | %d | +%.1f s |\n", order[i], count[order[i]], first[order[i]] - start }
+  ' "$file"
+}
+
 # check_macos <phase> <process regex> <pid or empty>
 check_macos() {
   local phase=$1 want=$2 pid=$3 pcap=$OUT/$1.pcapng listing=$OUT/$1-packets.txt
-  local start total outside tree lo0 canary findings md=$OUT/$1-findings.md tsv=$OUT/$1-findings.tsv
+  local start total outside tree lo0 canary findings disclosed md=$OUT/$1-findings.md tsv=$OUT/$1-findings.tsv
   [ -f "$pcap" ] || fail "check $phase: no capture; run the $phase mode first"
   start=$(cat "$OUT/$phase-start")
   mac_listing "$pcap" "$listing"
@@ -1026,30 +1235,48 @@ check_macos() {
   cut -f 2 "$OUT/$phase-tree.txt" | awk '{ print $1 }' > "$OUT/$phase-tree-times.txt"
   awk 'NR == FNR { seen[$1] = 1; next } !($1 in seen)' \
     "$OUT/$phase-tree-times.txt" "$OUT/$phase-canary.txt" > "$OUT/$phase-canary-other.txt"
-  findings=$((tree + $(lines "$OUT/$phase-canary-other.txt")))
-  group "$OUT/$phase-tree.txt" > "$tsv"
+  # What the disclosed list covers is reported apart and fails nothing. The
+  # control's request and the canary's names never are.
+  if [ "$phase" = control ]; then
+    cp "$OUT/$phase-tree.txt" "$OUT/$phase-undisclosed.txt"
+    : > "$OUT/$phase-disclosed.txt"
+  else
+    mac_disclose "$phase"
+  fi
+  disclosed=$(lines "$OUT/$phase-disclosed.txt")
+  echo "$disclosed" > "$OUT/$phase-disclosed.count"
+  findings=$(($(lines "$OUT/$phase-undisclosed.txt") + $(lines "$OUT/$phase-canary-other.txt")))
+  group "$OUT/$phase-undisclosed.txt" > "$tsv"
   # The tree's DNS packets in long form, which shows their questions.
   mac_select "$OUT/$phase-dns-long.txt" "$want" "$pid" | cut -f 2 > "$OUT/$phase-tree-dns.txt"
 
   {
     echo "#### $phase: $(os_label)"
     echo
-    echo "| Capture | Packets, all processes | Outside lo0 | From the process tree, outside lo0 | From the tree on lo0 | DNS for the canary's hosts, any process | Findings (packets, each once) |"
-    echo "|---|---|---|---|---|---|---|"
-    echo "| pktap, every interface | $total | $outside | $tree | $lo0 | $canary | $findings |"
+    echo "| Capture | Packets, all processes | Outside lo0 | From the process tree, outside lo0 | From the tree on lo0 | DNS for the canary's hosts, any process | Disclosed | Findings (packets, each once) |"
+    echo "|---|---|---|---|---|---|---|---|"
+    echo "| pktap, every interface | $total | $outside | $tree | $lo0 | $canary | $disclosed | $findings |"
     echo
     echo "The tree's packets on lo0, which never leave the machine: $(lo0_summary "$OUT/$phase-tree-lo0.txt")."
     echo
     if [ "$phase" != control ]; then
-      mac_select "$listing" "$want" "$pid" excluded > "$OUT/$phase-daemons-before-packets.txt"
-      if [ -n "${MAC_EXCLUDED// /}" ]; then
-        echo "WebKit daemons that were running before the app first ran, so not counted as the app's: $(daemon_names) Their packets outside lo0 in this phase: $(lines "$OUT/$phase-daemons-before-packets.txt")."
-      else
-        echo "No WebKit daemon was running before the app first ran."
-      fi
+      mac_select "$listing" "$want" "$pid" excluded > "$OUT/$phase-daemons-left-out-packets.txt"
+      echo "WebKit daemons in the job's process snapshots that count as the app's, having started within $DAEMON_WINDOW s after it: $(daemon_names "$phase" counted)."
+      echo
+      echo "Left out, not the app's: $(daemon_names "$phase" 'left out'). Their packets outside lo0 in this phase: $(lines "$OUT/$phase-daemons-left-out-packets.txt")."
       echo
     fi
-    if [ "$findings" -eq 0 ]; then
+    if [ "$disclosed" -gt 0 ]; then
+      echo "Disclosed, not findings: packets that an entry of \`scripts/spikes/s2-7-disclosed.tsv\` covers in this phase (docs/adr/0003-webview-network.md)."
+      echo
+      echo "| Entry (service -> hosts) | Packets | First, from the phase's start |"
+      echo "|---|---|---|"
+      disclosed_rows "$start" "$OUT/$phase-disclosed.txt"
+      echo
+    fi
+    if [ "$findings" -eq 0 ] && [ "$disclosed" -gt 0 ]; then
+      echo "No other packet from the process tree."
+    elif [ "$findings" -eq 0 ]; then
       echo "No packet from the process tree."
     else
       echo "| Process | Remote end | Port | Protocol | Packets | First, from the phase's start |"
@@ -1083,7 +1310,7 @@ check_macos() {
       cat "$OUT/$phase-suspects.md" >> "$md"
       ;;
   esac
-  report "$phase" "$md" "$findings" "$OUT/$phase-tree.txt" "$OUT/$phase-canary.txt"
+  report "$phase" "$md" "$findings" "$OUT/$phase-undisclosed.txt" "$OUT/$phase-canary-other.txt"
 }
 
 # --- Control ------------------------------------------------------------------

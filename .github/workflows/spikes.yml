@@ -403,6 +403,23 @@ jobs:
               echo "$count to review"
             fi
           }
+          # What a phase's check reported as disclosed: traffic outside the
+          # tree that an entry of scripts/spikes/s2-7-disclosed.tsv covers
+          # (docs/adr/0003-webview-network.md). Never a FAIL; anything the
+          # list does not cover fails the phase's check instead.
+          disclosed() {
+            local file="$OUT/$1-disclosed.count" count
+            if [ ! -f "$file" ]; then
+              echo 'no list'
+              return
+            fi
+            count=$(tr -dc 0-9 < "$file")
+            if [ "${count:-0}" -eq 0 ]; then
+              echo 'none'
+            else
+              echo "$count disclosed, see the phase's table"
+            fi
+          }
           {
             echo "### S2.7 egress capture: $OS"
             echo
@@ -415,9 +432,11 @@ jobs:
             echo "| Baseline: nothing counts as the app's | $(result "$BASELINE_CHECK") |"
             echo "| Idle: the app runs 5 min with its window shown | $(result "$IDLE") |"
             echo "| Idle: no packet from the process tree | $(result "$IDLE_CHECK") |"
+            echo "| Idle: delegated traffic on the disclosed list | $(disclosed idle) |"
             echo "| Idle: traffic outside the tree, listed for review | $(review idle) |"
             echo "| In use: \`pnpm e2e\` passes, egress canary included | $(result "$IN_USE") |"
             echo "| In use: no packet from the process tree | $(result "$IN_USE_CHECK") |"
+            echo "| In use: delegated traffic on the disclosed list | $(disclosed in-use) |"
             echo "| In use: traffic outside the tree, listed for review | $(review in-use) |"
             echo
             for phase in control baseline idle in-use; do

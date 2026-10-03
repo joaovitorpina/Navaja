@@ -21,9 +21,12 @@
 # and so are a DNS query from it and a BITS job it created. So is a DNS query
 # for one of the egress canary's hosts, whichever process asks.
 #
-# Other services can act for the tree without any log naming it: WAM's
-# account broker and its sign-in service, for one. So a baseline, 5 min
-# without the app, gives each process outside the tree an identity (its
+# Two services seem to act for the tree without any log naming it: WAM's
+# account broker and its sign-in service ($WokenServices). Their connections
+# in the 15 s after a start of navaja.exe count as the app's; those an entry
+# of s2-7-disclosed.tsv covers are reported as disclosed and fail nothing
+# (docs/adr/0003-webview-network.md). Others may do the same, so a baseline,
+# 5 min without the app, gives each process outside the tree an identity (its
 # image, plus the services it hosts or the COM server it is), and each later
 # phase lists the connections from identities that made none in the
 # baseline, and those in the 15 s after each start of navaja.exe from any
@@ -67,8 +70,18 @@ $Canary = 'navaja-canary'
 $TreeImages = @('navaja.exe', 'msedgewebview2.exe')
 $RootImages = @('navaja.exe')
 # How long after each start of navaja.exe the review list also takes
-# connections from identities the baseline has (see Get-Report).
+# connections from identities the baseline has, and connections from the
+# services in $WokenServices count as the app's (see Get-Report).
 $StartupSeconds = 15
+# Services that the webview wakes outside its tree, by identity (see
+# Format-Identity): WAM's Microsoft-account provider and the sign-in service,
+# which reached login.live.com 1 to 3 s after every start of the app in
+# spike S2.7, though no log names them as acting for it. Their connections
+# in the $StartupSeconds after a start of navaja.exe count as the app's.
+$WokenServices = @('svchost.exe [wlidsvc]', 'backgroundtaskhost.exe [BackgroundTaskHost.WebAccountProvider]')
+# What the check reports as disclosed instead of failing on: traffic the app
+# sets off that nothing it controls can stop (docs/adr/0003-webview-network.md).
+$DisclosedList = Join-Path $Repo 'scripts/spikes/s2-7-disclosed.tsv'
 # Audit subcategories, by GUID so that a localized Windows reads them too.
 $AuditConnection = '{0CCE9226-69AE-11D9-BED3-505054503030}' # Filtering Platform Connection
 $AuditProcess = '{0CCE922B-69AE-11D9-BED3-505054503030}'    # Process Creation
@@ -484,6 +497,37 @@ function Get-BitsJobs($Bits, $Tree, [string[]]$KnownJobs) {
   return @($jobs.Values | Where-Object { $_.Creator -ne 'the tree, in an earlier phase' -or $_.Events -gt 0 })
 }
 
+# The disclosed list's entries for Windows and the phase: service, hosts and
+# purpose, from scripts/spikes/s2-7-disclosed.tsv (its header says how).
+function Get-DisclosedEntries([string]$Phase) {
+  if (-not (Test-Path $DisclosedList)) { Fail "no disclosed list at $DisclosedList" }
+  $number = 0
+  return @(foreach ($line in (Get-Content -Path $DisclosedList -Encoding utf8)) {
+      $number++
+      if ($line -match '^\s*(#|$)') { continue }
+      $fields = $line -split "`t"
+      if ($fields.Count -ne 5) { Fail "s2-7-disclosed.tsv line ${number}: $($fields.Count) fields, not 5" }
+      if ($fields[0] -ne 'windows' -or @($fields[1] -split ' ') -notcontains $Phase) { continue }
+      [pscustomobject]@{
+        Service = $fields[2]
+        Hosts = @($fields[3] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        Label = "$($fields[2]) -> $($fields[3])"
+      }
+    })
+}
+
+# The entry that covers a connection: its service is the connection's
+# identity, and one of its hosts is a name the capture's DNS packets give for
+# the connection's address.
+function Find-DisclosedEntry($Entries, $Connection) {
+  $names = @($Connection.Names -split ', ' | Where-Object { $_ })
+  foreach ($entry in $Entries) {
+    if ($entry.Service -ne $Connection.Identity) { continue }
+    if (@($entry.Hosts | Where-Object { $names -contains $_ }).Count -gt 0) { return $entry }
+  }
+  return $null
+}
+
 function Get-Protocol([string]$Number) {
   switch ($Number) {
     '6' { return 'TCP' }
@@ -603,22 +647,41 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
     $connection.Names = @($names | Sort-Object -Unique) -join ', '
   }
 
+  # The services the webview wakes ($WokenServices): their connections in
+  # the $StartupSeconds after a navaja.exe started count as the app's, unless
+  # an entry of the disclosed list covers them.
+  $appStarts = @($created | Where-Object { [IO.Path]::GetFileName($_.Image).ToLowerInvariant() -eq 'navaja.exe' } |
+      ForEach-Object { (ConvertTo-Time $_.Time).ToUniversalTime() })
+  $nearStart = {
+    param($Connection)
+    $at = (ConvertTo-Time $Connection.Time).ToUniversalTime()
+    return @($appStarts | Where-Object { ($at - $_).TotalSeconds -ge 0 -and ($at - $_).TotalSeconds -le $StartupSeconds }).Count -gt 0
+  }
+  $woken = @($others | Where-Object { $WokenServices -contains $_.Identity -and (& $nearStart $_) })
+  $entries = @(Get-DisclosedEntries $Name)
+  $disclosed = @()
+  $delegated = @()
+  foreach ($connection in $woken) {
+    $entry = Find-DisclosedEntry $entries $connection
+    if ($null -ne $entry) {
+      $disclosed += $connection | Select-Object *, @{ n = 'Entry'; e = { $entry.Label } }
+    } else {
+      $delegated += $connection
+    }
+  }
+
   # Outside the tree, for review: connections from identities the baseline
   # lacks, and connections in the $StartupSeconds after a navaja.exe started
   # from identities that do not poll all the time in the baseline (such as
-  # the VM agents). WAM's sign-in service reached login.live.com in the
-  # baseline too, but also 3 s after the app started. Then what started on
-  # demand in the phase.
+  # the VM agents), but those of the services the webview wakes, counted
+  # above. Then what started on demand in the phase.
   $suspects = @()
   if ($null -ne $BaselineIdentities) {
-    $appStarts = @($created | Where-Object { [IO.Path]::GetFileName($_.Image).ToLowerInvariant() -eq 'navaja.exe' } |
-        ForEach-Object { (ConvertTo-Time $_.Time).ToUniversalTime() })
     foreach ($connection in $others) {
+      if ($woken -contains $connection) { continue }
       $reasons = @()
       if ($BaselineIdentities -notcontains $connection.Identity) { $reasons += 'not in the baseline' }
-      $at = (ConvertTo-Time $connection.Time).ToUniversalTime()
-      $near = @($appStarts | Where-Object { ($at - $_).TotalSeconds -ge 0 -and ($at - $_).TotalSeconds -le $StartupSeconds })
-      if ($near.Count -gt 0 -and $Steady -notcontains $connection.Identity) { $reasons += "within $StartupSeconds s of an app start" }
+      if ((& $nearStart $connection) -and $Steady -notcontains $connection.Identity) { $reasons += "within $StartupSeconds s of an app start" }
       if ($reasons.Count -eq 0) { continue }
       $suspects += $connection | Select-Object *, @{ n = 'Label'; e = { "$($_.Identity) ($($reasons -join '; '))" } }
     }
@@ -650,7 +713,10 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
     Baseline = ($null -ne $BaselineIdentities)
     Suspects = $suspects
     OnDemand = $onDemand
-    Findings = $outside.Count + $queries.Count + $jobs.Count
+    Woken = $woken
+    Delegated = $delegated
+    Disclosed = $disclosed
+    Findings = $outside.Count + $queries.Count + $jobs.Count + $delegated.Count
   }
 }
 
@@ -685,6 +751,7 @@ function Write-Report($Report) {
   $lines.Add("| WFP connections (5156 allowed, 5157 blocked) | $($Report.ConnectionEvents) | $($Report.Connections.Count) | $($Report.Loopback.Count) | $($Report.Outside.Count) |")
   $lines.Add("| DNS client (the tree's queries, and the canary's names from any process) | $($Report.DnsEvents) | $($Report.Queries.Count) | - | $($Report.Queries.Count) |")
   $lines.Add("| BITS client (download jobs the tree created) | $($Report.BitsEvents) | $($Report.Jobs.Count) | - | $($Report.Jobs.Count) |")
+  $lines.Add("| WFP connections of the services the webview wakes ($($WokenServices -join ', ')), in the $StartupSeconds s after a start of navaja.exe | - | $($Report.Woken.Count) | - | $($Report.Delegated.Count) ($($Report.Disclosed.Count) disclosed) |")
   $lines.Add('')
   $kinds = @($Report.Tree.Values | ForEach-Object {
       $image = Split-Path -Leaf $_.Image
@@ -704,11 +771,21 @@ function Write-Report($Report) {
     $lines.Add("Binds by the tree outside loopback (5158; a bind sends nothing by itself): $($binds -join ', ').")
   }
   $lines.Add('')
+  if ($Report.Disclosed.Count -gt 0) {
+    $lines.Add('Disclosed, not findings: connections that an entry of `scripts/spikes/s2-7-disclosed.tsv` covers in this phase (docs/adr/0003-webview-network.md).')
+    $lines.Add('')
+    Add-ConnectionRows $lines $Report.Disclosed 'Entry' $start
+  }
   if ($Report.Findings -eq 0) {
-    $lines.Add('No connection, DNS query or BITS job from the process tree.')
+    if ($Report.Disclosed.Count -gt 0) {
+      $lines.Add('No other connection, DNS query or BITS job from the process tree or the services it wakes.')
+    } else {
+      $lines.Add('No connection, DNS query or BITS job from the process tree or the services it wakes.')
+    }
     $lines.Add('')
   } else {
     if ($Report.Outside.Count -gt 0) { Add-ConnectionRows $lines $Report.Outside 'Process' $start }
+    if ($Report.Delegated.Count -gt 0) { Add-ConnectionRows $lines $Report.Delegated 'Identity' $start }
     if ($Report.Queries.Count -gt 0) {
       $lines.Add('| Process | DNS client event | Name | Type | Events | First, from the phase''s start |')
       $lines.Add('|---|---|---|---|---|---|')
@@ -735,7 +812,7 @@ function Write-Report($Report) {
   if ($Report.Name -eq 'idle' -or $Report.Name -eq 'in-use') {
     $lines.Add('##### Outside the process tree, for review (not findings)')
     $lines.Add('')
-    $lines.Add("Connections outside loopback from processes outside the tree: from identities (image, plus the services it hosts or the COM server it is) that made none in the 5 min baseline, and from any identity but the baseline's steady pollers in the $StartupSeconds s after a start of navaja.exe. A service that works for the tree without a log naming it, such as WAM's account broker, would show here; so do the runner's own scheduled tasks.")
+    $lines.Add("Connections outside loopback from processes outside the tree: from identities (image, plus the services it hosts or the COM server it is) that made none in the 5 min baseline, and from any identity but the baseline's steady pollers in the $StartupSeconds s after a start of navaja.exe, except the services the webview wakes, counted above. Another service that works for the tree without a log naming it would show here; so do the runner's own scheduled tasks.")
     $lines.Add('')
     if (-not $Report.Baseline) {
       $lines.Add('No baseline was captured, so there is no such list.')
@@ -1054,10 +1131,19 @@ function Invoke-Check([string]$Name) {
   if ($suspects -gt 0) {
     Write-Host "::warning::S2.7 ${Name}: $suspects connection(s) outside the process tree listed above for review (not findings)"
   }
-  if ($report.Findings -gt 0) {
-    Fail "${Name}: $($report.Findings) connection, DNS or BITS event(s) from the process tree; see the tables above"
+  $disclosed = $report.Disclosed.Count
+  Set-Content -Path "$Out\$Name-disclosed.count" -Value $disclosed -Encoding ascii
+  if ($disclosed -gt 0) {
+    Write-Host "::notice::S2.7 ${Name}: $disclosed connection(s) covered by the disclosed list (scripts/spikes/s2-7-disclosed.tsv), reported above, not findings"
   }
-  Write-Host "${Name}: no connection, DNS query or BITS job from the process tree."
+  if ($report.Findings -gt 0) {
+    Fail "${Name}: $($report.Findings) connection, DNS or BITS event(s) from the process tree or the services it wakes; see the tables above"
+  }
+  if ($disclosed -gt 0) {
+    Write-Host "${Name}: no connection, DNS query or BITS job from the process tree or the services it wakes but the $disclosed the disclosed list covers."
+  } else {
+    Write-Host "${Name}: no connection, DNS query or BITS job from the process tree or the services it wakes."
+  }
 }
 
 switch ($Mode) {
