@@ -55,10 +55,16 @@ deny = [
   { crate = "tauri-plugin-fs", reason = "the webview gets no filesystem access" },
   { crate = "reqwest", wrappers = ["tauri-plugin-updater"], reason = "only the opt-in updater makes HTTP requests" },
   { crate = "bollard", wrappers = ["navaja-docker"], reason = "only navaja-docker talks to the container engine" },
-  { crate = "hyper", wrappers = ["reqwest", "hyper-util", "hyper-rustls", "bollard", "hyperlocal", "hyper-named-pipe"], reason = "HTTP only via the updater or the local engine socket" },
-  { crate = "hyper-util", wrappers = ["reqwest", "hyper-rustls", "bollard", "hyperlocal", "hyper-named-pipe"], reason = "HTTP only via the updater or the local engine socket" },
+  { crate = "hyper", wrappers = ["reqwest", "hyper-util", "hyper-rustls", "bollard", "hyperlocal", "hyper-named-pipe", "axum"], reason = "HTTP only via the updater, the local engine socket or the test-only WebDriver server" },
+  { crate = "hyper-util", wrappers = ["reqwest", "hyper-rustls", "bollard", "hyperlocal", "hyper-named-pipe", "axum"], reason = "HTTP only via the updater, the local engine socket or the test-only WebDriver server" },
+  # The embedded WebDriver server for end-to-end tests (app feature `e2e`,
+  # never in release builds; `cargo xtask check` asserts that).
+  { crate = "axum", wrappers = ["tauri-plugin-wdio-webdriver"], reason = "only the test-only WebDriver server" },
 ]
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# Test-only: the embedded WebDriver plugin, pinned to an upstream fix until it
+# is released (app/src-tauri/Cargo.toml, feature `e2e`).
+allow-git = ["https://github.com/webdriverio/desktop-mobile"]

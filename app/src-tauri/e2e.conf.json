@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "io.github.joaovitorpina.Navaja.e2e",
+  "app": {
+    "security": {
+      "capabilities": [
+        "main",
+        {
+          "identifier": "e2e",
+          "description": "End-to-end test builds only (--features e2e): lets WebdriverIO drive the app.",
+          "windows": ["main"],
+          "permissions": ["wdio:default"]
+        }
+      ]
+    }
+  }
+}

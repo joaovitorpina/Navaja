@@ -73,3 +73,23 @@ Copy this for each spike and fill it in.
 - **Result:** pending. Nothing is recorded as passed.
 - **Numbers and evidence:** none yet.
 - **Decision:** none yet. The tray shipped before this spike, against the rule that a gating spike runs first, so the spike could run on a working tray. Its icons are placeholders, picked by one `include_bytes!` constant in `tray.rs`: `icons/tray/template.png` on macOS and `icons/tray/color-32.png` elsewhere. Final art is roadmap M2b, item 3.
+
+## S2.6 WebdriverIO
+
+- **Milestone / gates:** M2a, whether the end-to-end tests gate CI on all three OSes
+- **Time box:** none set in the roadmap
+- **Question:** does WebdriverIO drive the real app reliably and quickly enough on Windows, Linux and macOS for the end-to-end tests to be a required check?
+- **Method:** the `os` job in `ci.yml` on GitHub-hosted windows-2025, ubuntu-24.04 and macos-26. A debug build with `--no-bundle --features e2e --config src-tauri/e2e.conf.json` (Tauri 2.12.1), driven by WebdriverIO 9.32.0 and `@wdio/tauri-service` 1.4.0 in embedded mode: the app's own `tauri-plugin-wdio-webdriver` 1.4.0 (git rev `fb4a544`, see `app/src-tauri/Cargo.toml`) serves WebDriver, with no external driver. Linux runs the suite through `app/e2e/strace-guard.sh`, inside `dbus-run-session -- xvfb-run`.
+- **PASS if:** 10 of 10 runs per OS, under 10 min
+- **FAIL then:** macOS end-to-end tests become non-gating, plus a manual smoke test
+- **Result:** not finished (2026-10-03). The first run passed on all three OSes; the 10-of-10 criterion is not measured yet.
+- **Numbers and evidence:** PR #7's first CI run, [37090426812](https://github.com/joaovitorpina/Navaja/actions/runs/37090426812), on commit `78f4ce0` (2026-10-03):
+
+  | Runner | Result | e2e build | e2e suite | Whole `os` job |
+  |---|---|---|---|---|
+  | windows-2025 | pass | 1 min 53 s | 25 s | 7 min 41 s |
+  | ubuntu-24.04 (strace guard) | pass | 53 s | 15 s | 6 min 0 s |
+  | macos-26 | pass | 2 min 1 s | 18 s | 5 min 55 s |
+
+  That run tested the suite as first submitted, before the PR #7 review fixes: the smoke spec's route reset, the stronger egress canary, the first-launch `--tool` spec, and the strace guard's signal handling and per-address check. It also still loaded WebdriverIO's front-end bridge (`VITE_NAVAJA_E2E=1`) and used the wider e2e overlay (`withGlobalTauri`, `core:default`), without the later harness changes (the window pin in `before()`, the msedgedriver patch, the env-gated WebDriver server). The Method above describes the setup from the next recorded run on. It is one run per OS, not ten.
+- **Decision:** none yet. S2.6 stays open until 10 runs per OS are recorded here.

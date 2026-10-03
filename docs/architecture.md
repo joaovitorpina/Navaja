@@ -36,11 +36,11 @@ Navaja/
 │   ├── src/shell/        Shell · Sidebar · CommandPalette · ToolHost · Home · SettingsView · AboutView · dialogs
 │   ├── src/generic/      GeneratorView · TransformView · OptionControl · OutputView (one renderer per OutputKind)
 │   ├── src/editor/       CodeMirror 6 {@attach} + size thresholds
-│   ├── e2e/              smoke · single-instance · egress-canary · json · ports
+│   ├── e2e/              wdio.conf.ts · strace-guard.sh (Linux) · support/ · specs/{launch,smoke,single-instance,egress,json,ports}.e2e.ts
 │   └── src-tauri/        crate navaja · features: default [docker], updater (M6), e2e
 │       ├── tauri.conf.json · tauri.release.conf.json (updater artifacts + pubkey) · e2e.conf.json
 │       ├── capabilities/main.json · acl.lock.json · nsis/hooks.nsh
-│       ├── src/          commands · state · paths · window · guard · tray · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{mod,unix,linux,windows}.rs
+│       ├── src/          commands · state · paths · window · guard · tray · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{mod,unix,linux,macos,windows}.rs
 │       └── tests/        privacy.rs (canary input kept out of logs and crash files)
 ├── xtask/                check · tool-gate · bindings · icons · notices · capture-ports · measure · verify-release · manifests
 ├── assets/brand/         navaja.svg · tray-template.svg · tray-color.svg · GUIDELINES.md
@@ -62,6 +62,7 @@ navaja (app) ─► navaja-tools ─► navaja-ports ─► navaja-core
 - Nothing depends on `tools/` or on the app.
 - **No networking outside `navaja-docker` and the app.** Only their dependency trees may contain Tauri, tokio, mio, socket2, an HTTP client or bollard. `cargo xtask check` asserts this, and cargo-deny `wrappers` back it up.
 - **Two network dependencies, each with one owner.** Only `navaja-docker` pulls in bollard and hyper, and only `tauri-plugin-updater` pulls in reqwest.
+  - **Test builds only:** hyper also comes in through axum, the WebDriver server inside `tauri-plugin-wdio-webdriver`. That plugin is part of the app's test-only `e2e` feature (§5), never of a release build, and cargo-deny allows axum under it alone.
 - **Lints** ban printing, `exit`, `unsafe` outside FFI modules, socket and resolver calls, and `Command::new`.
   - **One exception:** the bind-only reserved-range probe in navaja-ports' Windows module (M5). It never calls `listen()` or `connect()`, and it is allowlisted in its FFI module.
   - **Process start:** processes start only through `navaja_core::sys::spawn_system`, which takes an absolute OS program path, sets `CREATE_NO_WINDOW` and applies a timeout.
@@ -190,8 +191,9 @@ Rust never runs a destructive action from argv.
   - **One layer, not a guarantee.** The script is a layer under the CSP, and a frame it never runs in keeps the constructors.
     - WebView2 runs it in every frame, empty and `srcdoc` iframes included.
     - WebKitGTK ships with WebRTC disabled (`enable-webrtc` defaults to false, and wry leaves it).
-    - On macOS, WebKit skips user scripts in an iframe's initial empty document, and `frame-src 'none'` keeps the iframe there. Script already running in the app origin may get the constructor back from such an iframe. The end-to-end egress canary checks this on macOS (roadmap M2a, item 10). If it fails, the follow-up turns peer connections off in the engine, through `WKPreferences`.
+    - On macOS, WebKit does not inject the script into `srcdoc` iframes, which the egress canary showed on its first macOS run. So macOS also turns peer connections off in the engine: `platform/macos.rs` calls `WKPreferences`' private `_setPeerConnectionEnabled:` (checked with `respondsToSelector:` first) right after the window is built, which covers every frame created afterwards. The end-to-end egress canary checks the page and four kinds of iframe on every OS.
   - **macOS text fields:** the native menu there also offers OS services: Look Up, Translate, Search With Google, Share and Services. They send the selected text only when the user picks one. `privacy.md` discloses them (roadmap M6, item 6).
+- **Dead proxy (Linux):** outside dev mode, the webview's web traffic goes to `http://127.0.0.1:9`, a closed privileged loopback port. WebKitGTK looks a link's host up while it waits for the navigation decision, even when the guard then denies the navigation; the strace guard caught those lookups on the first Linux run of the navigation canary. Through the proxy nothing is resolved and nothing leaves the machine. The strace guard reports connections that stop there instead of failing on them. Windows and macOS have no proxy yet; S2.7's capture checks them.
 - **WebView2 arguments:** any extra arguments must re-include wry's defaults.
 - **Clipboard:** `copy_text` writes through arboard and always sets the OS's exclusion markers; there is no opt-out. A native copy (Ctrl/Cmd+C, the context menu) whose selection touches a region marked `data-output` goes through it too, wherever the selection starts; copies from text fields stay native, since they hold the user's own input. What the markers achieve:
   - **Windows:** the copy stays out of clipboard history (Win+V), cloud clipboard sync and clipboard monitors.
@@ -206,7 +208,11 @@ Rust never runs a destructive action from argv.
 - `updater` (M6);
 - `global-shortcut` (a stretch goal).
 
-Tests also load `tauri-plugin-wdio` and `tauri-plugin-wdio-webdriver`, behind the `e2e` feature and `e2e.conf.json`.
+**End-to-end builds** (`--features e2e --config src-tauri/e2e.conf.json`) also load `tauri-plugin-wdio` and `tauri-plugin-wdio-webdriver`. They never reach a release. `cargo xtask check` fails if the default features reach `e2e` or either plugin, directly or through other features, if a feature other than `e2e` names a plugin, or if a plugin stops being optional. It also fails if `e2e.conf.json` overrides anything other than the identifier and the capabilities, so the tests run the shipped CSP and keep `withGlobalTauri` off. Each run is kept apart from a Navaja the developer already uses:
+- **Own identifier:** `io.github.joaovitorpina.Navaja.e2e`. An installed copy or a `pnpm tauri dev` instance holds a different single-instance lock and webview profile, so it cannot take over the test launch.
+- **Capability:** the overlay adds `wdio:default` and nothing else. There is still no `core:default`, so the app's own commands run under the same grants as in production.
+- **WebDriver server:** it listens on 127.0.0.1:4445 (or `TAURI_WEBDRIVER_PORT`) with no authentication, so the app starts it only when a test harness launched it: `@wdio/tauri-service` sets `WDIO_EMBEDDED_SERVER`, and any other harness sets `NAVAJA_E2E_WEBDRIVER`. An e2e binary started by hand (it shares `target/debug/navaja` with ordinary debug builds) opens no port. The harness fails fast when the port already accepts connections, instead of driving whatever holds it, such as an app left over from an aborted run.
+- **App directory:** the harness always points `NAVAJA_APP_DIR` at a fresh temporary directory, even when the developer has exported one, so a run never reads or writes real settings and logs.
 
 **Lifecycle**, implemented through `ShellPlatform`:
 - **Startup:** the window stays hidden until `shell_ready`, and shows an error view after 5 s. A second launch or a tray action that comes earlier waits for it: the requested tool is kept and opened once the shell is ready, so no blank window is shown.
@@ -251,6 +257,7 @@ Tests also load `tauri-plugin-wdio` and `tauri-plugin-wdio-webdriver`, behind th
 - **Components:** Bits UI 2 with shadcn-svelte copies, Tailwind v4 tokens and system fonts.
 - **Accessibility:** landmarks, F6 to cycle panes, Esc, a live region, and real tables with `aria-sort`.
 - **Tests:** Vitest with `mockIPC` and axe, and WebdriverIO end-to-end tests on all three OSes **(S2.6)**.
+  - The end-to-end tests drive the real debug app through its embedded WebDriver server (§5). On Linux they run under the strace network guard (roadmap §2).
   - axe is not wired in yet. It joins Vitest in M3 (roadmap M3, item 3).
 
 ## 7. Port inspector (`navaja-ports`, `navaja-docker`, `tools/ports`)
@@ -379,7 +386,7 @@ Installs from a package manager show that manager's upgrade command instead of i
 ### Operations
 
 - **Settings:** a typed TOML file in `APP_DIR`. Writes are atomic, and a corrupt file is set aside. Unix permissions are 0700 for the directory and 0600 for files.
-- **`NAVAJA_APP_DIR`:** replaces `APP_DIR` in debug builds only, so tests and the end-to-end harness use a throwaway directory. Release builds ignore it.
+- **`NAVAJA_APP_DIR`:** replaces `APP_DIR` in debug builds only, so tests use a throwaway directory; the end-to-end harness always sets it to a fresh temporary one (§5). Release builds ignore it.
 - **Logs:** written with tracing to `APP_DIR/logs`, rotated daily, 7 kept. They record only the tool id, action, duration and error code, never payloads.
 - **Crash files:** `APP_DIR/crash`, 10 kept, local only. They never contain the panic payload.
 - **Panic hook:** the app replaces the panic hook first thing in `navaja_lib::run`, once it knows `APP_DIR`. The hook records the location, the thread and a backtrace (symbols and source paths only), and it never reads the payload. It also never chains to the default hook, which would print the payload to stderr (journald on Linux).

@@ -1,2 +1,20 @@
 packages:
   - app
+
+# Dependency install scripts are denied unless reviewed (pnpm 11 strictDepBuilds).
+allowBuilds:
+  # WebdriverIO's browser-driver downloaders: the Tauri embedded WebDriver
+  # needs neither, and installs must not fetch extra binaries.
+  edgedriver: false
+  geckodriver: false
+  # The platform binary comes from esbuild's optional dependency; the
+  # postinstall only re-validates it.
+  esbuild: false
+
+patchedDependencies:
+  # 1.4.0 checks for msedgedriver on Windows even with the embedded WebDriver,
+  # which never uses it, and downloads one into %TEMP% when none matches. The
+  # patch skips that check when embedded, as upstream launcher.ts already does
+  # (webdriverio/desktop-mobile fb4a544). Drop it once a release newer than
+  # 1.4.0 includes that change.
+  '@wdio/tauri-service@1.4.0': patches/@wdio__tauri-service@1.4.0.patch

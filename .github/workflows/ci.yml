@@ -52,7 +52,9 @@ jobs:
       - name: Linux system packages for Tauri
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             build-essential file libwebkit2gtk-4.1-dev libayatana-appindicator3-dev             librsvg2-dev libxdo-dev libssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            build-essential file libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -111,6 +113,9 @@ jobs:
         # Pinned runner labels (never -latest), as decided in docs/adr/0001-stack.md.
         os: [windows-2025, ubuntu-24.04, macos-26]
     runs-on: ${{ matrix.os }}
+    # A hung end-to-end run (a second instance that never exits, an app that
+    # never answers) fails here instead of holding the runner for 6 h.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -124,13 +129,13 @@ jobs:
         shell: bash
         run: bash scripts/check-identifiers.sh
 
-      - name: Linux system packages for Tauri
+      - name: Linux system packages for Tauri and the end-to-end run
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential file libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev libxdo-dev libssl-dev
+            librsvg2-dev libxdo-dev libssl-dev xvfb dbus strace
 
       - name: Install Rust toolchain (rust-toolchain.toml)
         shell: bash
@@ -165,3 +170,20 @@ jobs:
 
       - name: Build the app (front end embedded, no bundle)
         run: pnpm tauri build --debug --no-bundle
+
+      # The same app plus WebdriverIO's test-only plugins (feature `e2e`).
+      - name: Build the app for end-to-end tests
+        shell: bash
+        run: pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
+
+      - name: End-to-end tests
+        if: runner.os != 'Linux'
+        run: pnpm e2e
+
+      # Virtual display and session bus (single instance uses D-Bus); the app
+      # runs under strace and any non-loopback connection fails the job.
+      - name: End-to-end tests under the network guard (Linux)
+        if: runner.os == 'Linux'
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+        run: dbus-run-session -- xvfb-run -a bash app/e2e/strace-guard.sh
