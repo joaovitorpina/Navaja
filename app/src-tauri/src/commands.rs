@@ -20,6 +20,8 @@ pub struct AppInfo {
     pub name: String,
     pub version: String,
     pub spec_version: u16,
+    /// Running as administrator or root, which Navaja never needs.
+    pub elevated: bool,
 }
 
 pub fn app_info_value() -> AppInfo {
@@ -27,6 +29,7 @@ pub fn app_info_value() -> AppInfo {
         name: "Navaja".to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         spec_version: navaja_core::SPEC_VERSION,
+        elevated: crate::platform::is_elevated(),
     }
 }
 

@@ -3,4 +3,8 @@
 /**
  * Basic facts about this build, shown in About.
  */
-export type AppInfo = { name: string, version: string, specVersion: number, };
+export type AppInfo = { name: string, version: string, specVersion: number, 
+/**
+ * Running as administrator or root, which Navaja never needs.
+ */
+elevated: boolean, };

@@ -84,6 +84,7 @@ export interface Recorded {
 
 /** Mocks the app's commands; `run_tool` answers with `runResult`. */
 export function mockApp(options: {
+  elevated?: boolean;
   runResult?: RunEnvelope;
   search?: (query: string) => SearchHit[];
 }): Recorded[] {
@@ -95,6 +96,8 @@ export function mockApp(options: {
         return catalog;
       case 'settings_get':
         return { version: 1, theme: 'system' };
+      case 'app_info':
+        return { name: 'Navaja', version: '0.0.0', specVersion: 1, elevated: options.elevated ?? false };
       case 'search': {
         const query = String((args as { query?: string }).query ?? '');
         return options.search ? options.search(query) : [];

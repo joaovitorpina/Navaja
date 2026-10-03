@@ -10,9 +10,16 @@
   import ToolHost from './ToolHost.svelte';
   import { isPaletteShortcut } from './keys';
 
-  let { catalog }: { catalog: Catalog } = $props();
+  let { catalog, elevated = false }: { catalog: Catalog; elevated?: boolean } = $props();
 
   let paletteOpen = $state(false);
+
+  // The tray's "Search tools…" opens the palette through this event.
+  $effect(() => {
+    const open = () => (paletteOpen = true);
+    window.addEventListener('navaja:palette', open);
+    return () => window.removeEventListener('navaja:palette', open);
+  });
 
   const route = $derived(router.route);
   const tool = $derived(
@@ -29,7 +36,16 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="flex h-full">
+{#if elevated}
+  <div role="status" class="border-b border-line bg-subtle px-4 py-2 text-sm">
+    {t(
+      'shell.elevated',
+      'Navaja is running as administrator. It doesn’t need to: every tool works the same without it.',
+    )}
+  </div>
+{/if}
+
+<div class="flex min-h-0 flex-1">
   <Sidebar {catalog} onOpenPalette={() => (paletteOpen = true)} />
   <main class="flex-1 overflow-auto bg-canvas">
     {#if route.kind === 'tool'}

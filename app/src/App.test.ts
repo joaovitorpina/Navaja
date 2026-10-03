@@ -14,6 +14,8 @@ describe('shell', () => {
     expect(within(nav).getByRole('heading', { name: 'Generators' })).toBeTruthy();
     expect(within(nav).getByRole('link', { name: 'UUID generator' })).toBeTruthy();
     await vi.waitFor(() => expect(calls.map((c) => c.cmd)).toContain('shell_ready'));
+    // Not elevated: no banner.
+    expect(screen.queryByRole('status')).toBeNull();
   });
 
   it('runs a generator on open and shows its output', async () => {
@@ -66,6 +68,23 @@ describe('shell', () => {
       'UUID generator',
     ]);
     expect(calls.some((c) => c.cmd === 'search' && c.args.query === 'uid')).toBe(true);
+  });
+
+  it('warns when running elevated', async () => {
+    mockApp({ elevated: true });
+    render(App);
+    expect(await screen.findByRole('status')).toHaveProperty(
+      'textContent',
+      expect.stringContaining('running as administrator'),
+    );
+  });
+
+  it('opens the palette when the tray asks', async () => {
+    mockApp({});
+    render(App);
+    await screen.findByRole('navigation', { name: 'Tools' });
+    window.dispatchEvent(new Event('navaja:palette'));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
   });
 
   it('shows an unknown tool as not found', async () => {
