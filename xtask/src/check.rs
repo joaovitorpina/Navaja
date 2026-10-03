@@ -46,8 +46,12 @@ pub fn run() -> Result<()> {
     problems.extend(closure_problems(&metadata));
     problems.extend(parity_problems(&metadata, &root)?);
     problems.extend(config_problems(&root)?);
-    // Last: it builds the app crate's build script (cargo check).
-    problems.extend(crate::acl::problems(&root)?);
+    // Last: it builds the app crate's build script (cargo check). A failure
+    // is one more problem, so the ones found above are still reported.
+    match crate::acl::problems(&root) {
+        Ok(found) => problems.extend(found),
+        Err(error) => problems.push(format!("ACL snapshot could not be resolved: {error:#}")),
+    }
     report("xtask check", &problems)
 }
 
