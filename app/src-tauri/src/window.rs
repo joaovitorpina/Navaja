@@ -34,8 +34,10 @@ const TRAY_BLUR_GRACE: Duration = Duration::from_millis(500);
 ///   update checks, and probes `wpad` for proxy auto-detection.
 ///
 /// How each engine gets it:
-/// - Windows: as `--proxy-server`, among WebView2's browser arguments
-///   (`webview2_args`).
+/// - Windows: wry adds `--proxy-server=http://127.0.0.1:9` to WebView2's
+///   browser arguments, after its defaults. Navaja passes no arguments of
+///   its own: they would replace both, so they would have to repeat them
+///   (docs/architecture.md §5).
 /// - Linux: wry sets it on the web context's `WebsiteDataManager`.
 /// - macOS: Tauri's `macos-proxy` feature sets it on the webview's
 ///   `WKWebsiteDataStore` (`proxyConfigurations`). That API needs macOS 14,
@@ -46,34 +48,6 @@ const TRAY_BLUR_GRACE: Duration = Duration::from_millis(500);
 /// Linux and macOS, and on Windows `http://tauri.localhost` and
 /// `http://ipc.localhost`, which wry serves from the app itself.
 const DEAD_PROXY: &str = "http://127.0.0.1:9";
-
-/// WebView2's browser arguments, the one place Navaja sets them
-/// (docs/architecture.md §5). Arguments from the app replace wry's own, so
-/// this repeats what wry 0.57.0 passes by default (`create_environment` in
-/// its `src/webview2/mod.rs`): `--disable-features` with the mini menus and
-/// SmartScreen, and the dead proxy, which wry adds only when the app passes
-/// no arguments. WebView2 uses only the last of a repeated switch, but merges
-/// the features of `--disable-features` with its own (Microsoft's reference
-/// for `AdditionalBrowserArguments`), so each switch appears once here.
-///
-/// The other features turned off are WebView2's single sign-on with the
-/// Windows account, from Microsoft's list of WebView2 browser flags: spike
-/// S2.7 saw Windows' account service reach `login.live.com` within seconds
-/// of each start of the app.
-#[cfg(windows)]
-fn webview2_args() -> String {
-    /// wry's defaults.
-    const WRY_FEATURES: &str = "msWebOOUI,msPdfOOUI,msSmartScreenProtection";
-    const SINGLE_SIGN_ON: [&str; 3] = [
-        "msSingleSignOnOSForPrimaryAccountIsShared",
-        "msSingleSignOnForInPrivateWebView2",
-        "msAllowAmbientAuthInPrivateWebView2",
-    ];
-    format!(
-        "--disable-features={WRY_FEATURES},{} --proxy-server={DEAD_PROXY}",
-        SINGLE_SIGN_ON.join(",")
-    )
-}
 
 /// What a second launch or the tray asks the window to open, besides
 /// showing it.
@@ -182,16 +156,10 @@ pub fn create_main<R: Runtime>(
         builder = builder.initialization_script(route_script(id));
     }
     // Not in dev, where the front end comes from the Vite server.
-    if !tauri::is_dev() {
-        // wry ignores proxy_url on Windows once the app passes arguments.
-        #[cfg(windows)]
-        {
-            builder = builder.additional_browser_args(&webview2_args());
-        }
-        #[cfg(not(windows))]
-        if let Ok(proxy) = tauri::Url::parse(DEAD_PROXY) {
-            builder = builder.proxy_url(proxy);
-        }
+    if !tauri::is_dev()
+        && let Ok(proxy) = tauri::Url::parse(DEAD_PROXY)
+    {
+        builder = builder.proxy_url(proxy);
     }
     let window = builder.build()?;
 
@@ -451,21 +419,6 @@ mod tests {
         assert_eq!(proxy.scheme(), "http");
         assert_eq!(proxy.host_str(), Some("127.0.0.1"));
         assert_eq!(proxy.port(), Some(9));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn webview2_args_keep_wry_defaults_and_the_proxy() {
-        let args = webview2_args();
-        assert!(
-            args.starts_with("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,")
-        );
-        assert!(args.ends_with(" --proxy-server=http://127.0.0.1:9"));
-        // One instance of each switch: WebView2 keeps only the last.
-        assert_eq!(args.matches("--disable-features=").count(), 1);
-        assert_eq!(args.matches("--proxy-server=").count(), 1);
-        // Two switches, one space apart.
-        assert_eq!(args.split(' ').count(), 2);
     }
 
     #[test]
