@@ -23,6 +23,14 @@ const READY_TIMEOUT: Duration = Duration::from_secs(5);
 /// taskbar before the click arrives. KeePassXC allows the same 500 ms.
 const TRAY_BLUR_GRACE: Duration = Duration::from_millis(500);
 
+/// Where the webview's web traffic goes on Linux: a closed, privileged
+/// loopback port (the discard service's). WebKitGTK looks a link's host up
+/// while it waits for the navigation decision, even one the guard then
+/// denies; through this proxy nothing is resolved and nothing leaves the
+/// machine. The app's own scheme and IPC never use the network.
+#[cfg(target_os = "linux")]
+const DEAD_PROXY: &str = "http://127.0.0.1:9";
+
 /// What a second launch or the tray asks the window to open, besides
 /// showing it.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -128,6 +136,13 @@ pub fn create_main<R: Runtime>(
         .on_new_window(|_url, _features| NewWindowResponse::Deny);
     if let Some(id) = initial_tool {
         builder = builder.initialization_script(route_script(id));
+    }
+    // Not in dev, where the front end comes from the Vite server.
+    #[cfg(target_os = "linux")]
+    if !tauri::is_dev()
+        && let Ok(proxy) = tauri::Url::parse(DEAD_PROXY)
+    {
+        builder = builder.proxy_url(proxy);
     }
     let window = builder.build()?;
 

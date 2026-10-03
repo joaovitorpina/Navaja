@@ -8,6 +8,11 @@
 # 127.0.0.53 DNS stub (the app must not even look a name up), and so does an
 # inet call whose address can't be read.
 #
+# The app sends the webview's web traffic to a closed local port (the dead
+# proxy, 127.0.0.1:9, see app/src-tauri/src/window.rs), so a request WebKit
+# makes in spite of the CSP and the guard ends there, with no lookup. Those
+# connections are counted and reported, not failed: nothing leaves the machine.
+#
 # Usage (from the repo root, after the e2e build):
 #   dbus-run-session -- xvfb-run -a bash app/e2e/strace-guard.sh
 set -euo pipefail
@@ -53,7 +58,7 @@ fi
 # with strace, so nothing keeps running untraced.
 cat > "$wrapper" <<EOF
 #!/usr/bin/env bash
-exec strace -f -qq -I1 --kill-on-exit -e trace=connect,sendto,sendmsg,sendmmsg -o "$traces/trace.\$\$" "$binary" "\$@"
+exec strace -f -qq -s 256 -I1 --kill-on-exit -e trace=connect,sendto,sendmsg,sendmmsg -o "$traces/trace.\$\$" "$binary" "\$@"
 EOF
 chmod +x "$wrapper"
 
@@ -94,7 +99,14 @@ found=$(offending "${files[@]}")
 if [ -n "$found" ]; then
   echo "::error::network guard: the app tried to reach the network"
   printf '%s\n' "$found" | head -50 || true
+  # What the offending processes sent next, so a DNS query shows its name.
+  pids=$(printf '%s\n' "$found" | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) { print $i; break } }' | sort -u)
+  for pid in $pids; do
+    echo "--- process $pid"
+    awk -v pid="$pid" '$1 == pid' "${files[@]}" | head -20 || true
+  done
   exit 1
 fi
-echo "Network guard: $(cat "${files[@]}" | wc -l) traced calls across ${#files[@]} launch(es); no connection left the machine."
+proxied=$(cat "${files[@]}" | grep -c 'sin_port=htons(9), sin_addr=inet_addr("127.0.0.1")' || true)
+echo "Network guard: $(cat "${files[@]}" | wc -l) traced calls across ${#files[@]} launch(es); no connection left the machine (${proxied} stopped at the dead proxy)."
 exit "$status"
