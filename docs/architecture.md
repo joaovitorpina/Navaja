@@ -18,7 +18,7 @@ This describes the v1 design accepted in [ADR 0001](adr/0001-stack.md): Tauri 2 
 ```
 Navaja/
 ├── Cargo.toml            virtual workspace: crates/*, tools, app/src-tauri, xtask · [workspace.lints]
-├── rust-toolchain.toml · clippy.toml · deny.toml · release-plz.toml · renovate.json · .gitattributes (eol=lf)
+├── rust-toolchain.toml · clippy.toml · deny.toml · js-licenses.toml · release-plz.toml · renovate.json · .gitattributes (eol=lf)
 ├── package.json · pnpm-workspace.yaml   (pnpm 11 pinned via packageManager; workspace root lets Vite serve ../tools)
 ├── .github/workflows/    ci · advisories · bundle · spikes · release · release-build
 ├── crates/
@@ -42,10 +42,10 @@ Navaja/
 │       ├── capabilities/main.json · acl.lock.json · nsis/hooks.nsh
 │       ├── src/          commands · state · paths · window · guard · tray · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{mod,unix,linux,macos,windows}.rs
 │       └── tests/        privacy.rs (canary input kept out of logs and crash files)
-├── xtask/                check · tool-gate · bindings · icons · notices · capture-ports · measure · verify-release · manifests
+├── xtask/                check · tool-gate · bindings · licenses · icons · notices · capture-ports · measure · verify-release · manifests
 ├── assets/brand/         navaja.svg · tray-template.svg · tray-color.svg · GUIDELINES.md
 ├── packaging/            winget / scoop / homebrew templates · dryrun.json (scratch repo only)
-├── scripts/              check-eol.sh · check-identifiers.sh (CI)
+├── scripts/              check-eol.sh · check-identifiers.sh · check-fixture-secrets.sh (CI)
 └── docs/                 adr/ · architecture.md · roadmap.md · spikes.md · adding-a-tool.md · install.md · privacy.md · wayland-shortcut.md · release.md
 ```
 
