@@ -1072,9 +1072,11 @@ disclosed_entries() {
   ' "$DISCLOSED" || fail "the disclosed list is malformed" >&2
 }
 
-# macOS: "<address>\t<name>" for every address the job's captures saw a DNS
-# answer give, with every name that leads to it: the record's own name and
-# the names whose CNAMEs lead there. Every phase so far counts, since
+# macOS: "<key>\t<name>" for every address the job's captures saw a DNS
+# answer give, and for every name in those answers, with every name that
+# leads to it: the record's own name and the names whose CNAMEs lead there.
+# A lookup of a CNAME's target (a1845.dscg2.akamai.net) is then tied to the
+# name first asked for (ocsp2.apple.com). Every phase so far counts, since
 # mDNSResponder may answer a name from its cache, CNAME included.
 mac_addr_names() {
   local file
@@ -1092,22 +1094,32 @@ mac_addr_names() {
         data = f[3]
         sub(/\.$/, "", owner)
         sub(/\.$/, "", data)
-        if (f[2] == "CNAME") parents[data] = parents[data] " " owner
-        else if (f[2] == "A" || f[2] == "AAAA") owners[data] = owners[data] " " owner
+        if (f[2] == "CNAME") {
+          parents[data] = parents[data] " " owner
+          named[data] = 1
+          named[owner] = 1
+        } else if (f[2] == "A" || f[2] == "AAAA") {
+          owners[data] = owners[data] " " owner
+          named[owner] = 1
+        }
       }
     }
     function walk(name, depth, list, k, m) {
       if (depth > 10 || (name in seen)) return
       seen[name] = 1
-      print address "\t" name
+      print key "\t" name
       m = split(parents[name], list, " ")
       for (k = 1; k <= m; k++) walk(list[k], depth + 1)
     }
     END {
-      for (address in owners) {
+      for (key in owners) {
         for (name in seen) delete seen[name]
-        n = split(owners[address], names, " ")
+        n = split(owners[key], names, " ")
         for (i = 1; i <= n; i++) walk(names[i], 0)
+      }
+      for (key in named) {
+        for (name in seen) delete seen[name]
+        walk(key, 0)
       }
     }
   ' | sort -u > "$OUT/addr-names.tsv"
@@ -1120,7 +1132,7 @@ mac_addr_names() {
 # (pktap's eproc, else its proc) is the entry's service, and one of the
 # entry's hosts is the name its DNS packet asks for (a DNS answer is matched
 # to its question by port and ID) or a name the captures' DNS answers give
-# for its remote address.
+# for its remote address, through CNAMEs too (mac_addr_names).
 mac_disclose() {
   local phase=$1
   mac_addr_names
@@ -1179,7 +1191,7 @@ mac_disclose() {
       if (port(remote) == "53") {
         key = f[1] " " port(local)
         name = (key in dns) ? dns[key] : asked[answer[key]]
-        seen_as = " " name " "
+        seen_as = " " name " " known[name]
       } else {
         seen_as = known[host(remote)]
       }

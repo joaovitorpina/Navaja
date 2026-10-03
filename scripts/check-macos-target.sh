@@ -23,7 +23,8 @@
 # prebuilt from rustup, outside target/, and is not checked.
 #
 # Fails if any file declares another version, or if no Mach-O file was found:
-# a path that holds nothing proves nothing.
+# a path that holds nothing proves nothing. Fails too if tauri.conf.json's
+# minimum is below 14.0, which the dead proxy needs.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -42,6 +43,18 @@ want=$(node -p "require('./app/src-tauri/tauri.conf.json').bundle?.macOS?.minimu
   echo "::error::tauri.conf.json sets no bundle.macOS.minimumSystemVersion"
   exit 1
 }
+# The dead proxy's API (WKWebsiteDataStore.proxyConfigurations, through
+# Tauri's macos-proxy feature) needs macOS 14: a lower minimum would ship an
+# app that cannot start there (docs/adr/0003-webview-network.md).
+floor=14.0
+if ! awk -v want="$want" -v floor="$floor" 'BEGIN {
+  split(want, w, ".")
+  split(floor, f, ".")
+  exit !(w[1] + 0 > f[1] + 0 || (w[1] + 0 == f[1] + 0 && w[2] + 0 >= f[2] + 0))
+}'; then
+  echo "::error::tauri.conf.json's bundle.macOS.minimumSystemVersion is $want; the dead proxy needs $floor or later"
+  exit 1
+fi
 
 list=$(mktemp)
 report=$(mktemp)

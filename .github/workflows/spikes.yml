@@ -232,14 +232,17 @@ jobs:
   # (scripts/spikes/s2-7-egress.sh): Linux runs the app in a network
   # namespace with NAT and captures its veth; macOS captures on pktap, which
   # names each packet's process, and counts the daemons WebKit starts for
-  # the app (not those already running) as the app's; Windows audits WFP
-  # connections, process creation, DNS-client queries and BITS jobs. A
-  # control request first proves that the capture sees and attributes
-  # traffic, and each phase must show the
-  # app's own WebDriver traffic on loopback. A 5 min baseline without the
-  # app comes first: nothing in it may count as the app's, and each later
-  # phase lists, for review, the traffic outside the tree that the baseline
-  # lacks (on Windows also what came right after an app start). Nothing
+  # the app (those that start within 15 s after it) as the app's; Windows
+  # audits WFP connections, process creation, DNS-client queries and BITS
+  # jobs, and counts WAM's services in the 15 s after an app start as the
+  # app's. A control request first proves that the capture sees and
+  # attributes traffic, and each phase must show the app's own WebDriver
+  # traffic on loopback. A 5 min baseline without the app comes first:
+  # nothing in it may count as the app's, and each later phase lists, for
+  # review, the traffic outside the tree that the baseline lacks (on Windows
+  # also what came right after an app start). Traffic of those daemons and
+  # services that scripts/spikes/s2-7-disclosed.tsv covers is reported as
+  # disclosed and fails nothing (docs/adr/0003-webview-network.md). Nothing
   # opens a URL or the logs folder (architecture §5). The captures go up as
   # an artifact; nothing else leaves the runner.
   s2-7:

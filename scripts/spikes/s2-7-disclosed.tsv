@@ -19,3 +19,4 @@
 #   purpose  what it is for, as privacy.md says it
 macos	idle in-use	webprivacyd	wps.apple.com	WebKit's privacy lists (tracking-prevention and link-filtering data), which macOS's webprivacyd service downloads from Apple when its copy is out of date
 macos	idle in-use	webprivacyd	ocsp2.apple.com, ocsp2.g.aaplimg.com	the certificate check (OCSP) that macOS's trustd makes for webprivacyd's connection to wps.apple.com
+windows	idle	svchost.exe [wlidsvc]	login.live.com	Windows' Microsoft-account sign-in service, which contacts Microsoft's sign-in server within seconds of the app's start, though no log names the app or WebView2 as asking for it
