@@ -27,9 +27,10 @@ env:
 jobs:
   # S2.2: can a custom view live in tools/<id>/ui/, outside app/? A throwaway
   # tool with a custom view (scripts/spikes/s2-2-probe.sh) goes through every
-  # check the roadmap's PASS names, each in its own step. A failed check
-  # doesn't stop the ones after it, and the last step writes a PASS/FAIL
-  # table to the run's summary.
+  # check the roadmap's PASS names, each in its own step. svelte-check, ESLint
+  # and Prettier each also get a negative control: files in the view folder
+  # they must refuse. A failed check doesn't stop the ones after it, and the
+  # last step writes a PASS/FAIL table to the run's summary.
   s2-2:
     name: S2.2 views outside app/ (${{ matrix.os }})
     strategy:
@@ -85,10 +86,17 @@ jobs:
         if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
         run: bash scripts/spikes/s2-2-check.sh registry
 
-      - name: c. svelte-check type-checks the view (pnpm check)
+      - name: c. svelte-check passes the view (pnpm check)
         id: check
         if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
         run: pnpm check
+
+      # The negative controls: each adds files to the probe that must fail
+      # the check above it, and removes them again.
+      - name: c. svelte-check refuses type errors in the view (.ts and .svelte)
+        id: check_refuses
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
+        run: bash scripts/spikes/s2-2-check.sh typecheck-refuses
 
       - name: d. ESLint and Prettier pass the view (pnpm lint)
         id: lint
@@ -99,6 +107,11 @@ jobs:
         id: lint_refuses
         if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
         run: bash scripts/spikes/s2-2-check.sh lint-refuses
+
+      - name: d. Prettier refuses a misformatted file in the view
+        id: prettier_refuses
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
+        run: bash scripts/spikes/s2-2-check.sh prettier-refuses
 
       - name: e. Vitest runs the view's test (pnpm test)
         id: vitest
@@ -148,8 +161,10 @@ jobs:
           PROBE: ${{ steps.probe.outcome }}
           REGISTRY: ${{ steps.registry.outcome }}
           CHECK: ${{ steps.check.outcome }}
+          CHECK_REFUSES: ${{ steps.check_refuses.outcome }}
           LINT: ${{ steps.lint.outcome }}
           LINT_REFUSES: ${{ steps.lint_refuses.outcome }}
+          PRETTIER_REFUSES: ${{ steps.prettier_refuses.outcome }}
           VITEST: ${{ steps.vitest.outcome }}
           BUILD: ${{ steps.build.outcome }}
           PACKAGED_BUILD: ${{ steps.packaged_build.outcome }}
@@ -172,9 +187,11 @@ jobs:
             echo '|---|---|'
             echo "| a. Probe created (\`s2-2-probe.sh create\`) | $(result "$PROBE") |"
             echo "| b. Registry accepts it (\`cargo test -p navaja-tools\`) | $(result "$REGISTRY") |"
-            echo "| c. svelte-check (\`pnpm check\`) | $(result "$CHECK") |"
+            echo "| c. svelte-check passes the view (\`pnpm check\`) | $(result "$CHECK") |"
+            echo "| c. svelte-check refuses type errors (.ts and .svelte) | $(result "$CHECK_REFUSES") |"
             echo "| d. ESLint and Prettier pass the view (\`pnpm lint\`) | $(result "$LINT") |"
-            echo "| d. ESLint refuses forbidden imports | $(result "$LINT_REFUSES") |"
+            echo "| d. ESLint refuses forbidden imports (.ts and .svelte) | $(result "$LINT_REFUSES") |"
+            echo "| d. Prettier refuses a misformatted file | $(result "$PRETTIER_REFUSES") |"
             echo "| e. Vitest runs the view's test (\`pnpm test\`) | $(result "$VITEST") |"
             echo "| f. Build: own chunk, Tailwind class in the CSS (\`pnpm build\`) | $(result "$BUILD") |"
             echo "| g. Packaged app builds (\`tauri build --features e2e\`) | $(result "$PACKAGED_BUILD") |"

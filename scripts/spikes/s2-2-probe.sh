@@ -5,10 +5,14 @@
 # hot-reloaded and packaged like code in app/src. It never commits anything.
 #
 # Usage, from anywhere in the repository:
-#   bash scripts/spikes/s2-2-probe.sh create    # the probe, its line in tools/lib.rs, its end-to-end spec
-#   bash scripts/spikes/s2-2-probe.sh forbid    # adds a file with an import the allowlist refuses
-#   bash scripts/spikes/s2-2-probe.sh unforbid  # removes that file again
-#   bash scripts/spikes/s2-2-probe.sh remove    # removes everything the modes above wrote
+#   bash scripts/spikes/s2-2-probe.sh create       # the probe, its line in tools/lib.rs, its end-to-end spec
+#   bash scripts/spikes/s2-2-probe.sh forbid       # adds a .ts and a .svelte file with an import the allowlist refuses
+#   bash scripts/spikes/s2-2-probe.sh unforbid     # removes them again
+#   bash scripts/spikes/s2-2-probe.sh typecheck    # adds a .ts and a .svelte file with a type error each
+#   bash scripts/spikes/s2-2-probe.sh untypecheck  # removes them again
+#   bash scripts/spikes/s2-2-probe.sh misformat    # adds a .ts file ESLint accepts and Prettier refuses
+#   bash scripts/spikes/s2-2-probe.sh unmisformat  # removes it again
+#   bash scripts/spikes/s2-2-probe.sh remove       # removes everything the modes above wrote
 #
 # The probe is a system tool with a custom view, laid out as
 # docs/adding-a-tool.md describes:
@@ -35,6 +39,9 @@ SPEC_DIR=app/e2e/spikes
 SPEC="$SPEC_DIR/s2-2-probe.e2e.ts"
 FORBIDDEN="$PROBE/ui/forbidden.ts"
 FORBIDDEN_VIEW="$PROBE/ui/Forbidden.svelte"
+TYPED="$PROBE/ui/typed.ts"
+TYPED_VIEW="$PROBE/ui/Typed.svelte"
+MISFORMATTED="$PROBE/ui/misformatted.ts"
 
 fail() {
   echo "::error::s2-2-probe: $*"
@@ -46,7 +53,9 @@ fail() {
 register() {
   grep -qxF "$LINE" "$LIB" && return 0
   local start end
-  start=$(grep -n '^register_tools! {$' "$LIB" | cut -d: -f1)
+  # `|| true`: under pipefail a grep that finds nothing would end the script
+  # here, silently, instead of in fail() below.
+  start=$(grep -n '^register_tools! {$' "$LIB" | cut -d: -f1 || true)
   [ -n "$start" ] || fail "no 'register_tools! {' line in $LIB"
   end=$(awk -v start="$start" 'NR > start && $0 == "}" { print NR; exit }' "$LIB")
   [ -n "$end" ] || fail "register_tools! in $LIB has no closing brace"
@@ -301,6 +310,49 @@ unforbid() {
   echo "Forbidden imports removed."
 }
 
+typecheck() {
+  [ -d "$PROBE/ui" ] || fail "no probe; run '$0 create' first"
+  cat > "$TYPED" <<'EOF'
+// Spike S2.2's negative type check (scripts/spikes/s2-2-probe.sh typecheck).
+// svelte-check must report this error and name this file; a clean
+// `pnpm check` means something only if it reads the view folder.
+export const n: number = 'x';
+EOF
+  # The same error in a component, so the check covers .svelte too.
+  cat > "$TYPED_VIEW" <<'EOF'
+<script lang="ts">
+  const n: number = 'x';
+</script>
+
+<p>{n}</p>
+EOF
+  echo "Type errors written: $TYPED and $TYPED_VIEW."
+}
+
+untypecheck() {
+  rm -f "$TYPED" "$TYPED_VIEW"
+  echo "Type errors removed."
+}
+
+misformat() {
+  [ -d "$PROBE/ui" ] || fail "no probe; run '$0 create' first"
+  # Double quotes and extra spaces: no ESLint rule in the config objects to
+  # them (eslint-config-prettier turns the style rules off), but Prettier's
+  # check does.
+  cat > "$MISFORMATTED" <<'EOF'
+// Spike S2.2's negative Prettier check (scripts/spikes/s2-2-probe.sh
+// misformat). ESLint accepts this file; `pnpm lint` must still fail in its
+// Prettier half and name it.
+export const misformatted   =   "double quotes";
+EOF
+  echo "Misformatted file written: $MISFORMATTED."
+}
+
+unmisformat() {
+  rm -f "$MISFORMATTED"
+  echo "Misformatted file removed."
+}
+
 remove() {
   rm -rf "$PROBE" "$SPEC"
   # The folder only if the probe's spec was all it held.
@@ -313,9 +365,13 @@ case "${1:-}" in
   create) create ;;
   forbid) forbid ;;
   unforbid) unforbid ;;
+  typecheck) typecheck ;;
+  untypecheck) untypecheck ;;
+  misformat) misformat ;;
+  unmisformat) unmisformat ;;
   remove) remove ;;
   *)
-    echo "usage: $0 create|forbid|unforbid|remove" >&2
+    echo "usage: $0 create|forbid|unforbid|typecheck|untypecheck|misformat|unmisformat|remove" >&2
     exit 2
     ;;
 esac
