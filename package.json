@@ -9,6 +9,8 @@
     "dev": "pnpm --dir app tauri dev",
     "build": "pnpm --dir app build",
     "check": "pnpm --dir app check",
+    "lint": "pnpm --dir app lint",
+    "format": "pnpm --dir app format",
     "test": "pnpm --dir app test",
     "tauri": "pnpm --dir app tauri",
     "e2e": "pnpm --dir app e2e"

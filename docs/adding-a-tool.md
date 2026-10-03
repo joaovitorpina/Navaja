@@ -203,6 +203,18 @@ Each `OptionSpec` becomes one key of the input object:
 - **Integer type:** deserialize into any integer type that holds `min..=max` (uuid uses `u32`). A number that doesn't fit the type fails `typed()` with `core.invalid_input`.
 - **Defaults:** each default lives twice, in the `Control` (what the view sends) and in the serde default (used when the key is missing: options outside the current mode, and tests that send `{}`). Nothing checks that the two agree, so use one const for both, like `DEFAULT_WIDTH` above.
 
+### Writing a custom view
+
+The shell loads `tools/<id>/ui/View.svelte` and passes it `ViewProps` from `$lib/view-kit`. A view may import only (architecture §4):
+- its own files, through relative paths that stay inside `tools/<id>/ui/`;
+- `svelte` and its browser subpaths, but not `svelte/internal`, `svelte/compiler` or `svelte/server`;
+- `$lib/view-kit`, the shell's API for views: `t`, `runTool`, `copyText`, `CopyButton`, `ToolIcon` and their types;
+- generated types from `$bindings/<name>`.
+
+Its tests (`*.test.ts` and `*.spec.ts` files in `ui/`, which Vitest runs) may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`.
+
+`pnpm lint` must pass. It checks these imports and the Prettier formatting of the code in `ui/` (`pnpm format` fixes the formatting). A comment can't turn the check off, and `import.meta.glob` or a computed `import()` is an error. If a view needs something else from the shell, add it to `$lib/view-kit` in a `host-change` PR first.
+
 ### Outputs
 
 Each output in the spec has a `key` and a format. `invoke` returns one JSON object containing every declared key, with no extra keys. Use `null` when there is nothing to show. With debug assertions (the default for `cargo test`), the registry rejects any other shape with `core.invalid_output`; each value must round-trip exactly through its payload type.
@@ -248,6 +260,7 @@ cargo test -p navaja-tools            # your tests + the registry checks
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask check                     # dependency rules
 cargo deny --all-features check bans licenses sources   # if you added a dependency
+pnpm lint && pnpm test                # custom views only: the import allowlist, Prettier, Vitest
 ```
 
 Then commit, and check what your PR touches:

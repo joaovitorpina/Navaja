@@ -16,7 +16,6 @@ export function isPaletteShortcut(event: KeyboardEvent): boolean {
   // layouts report their own letter (Cyrillic "л"), so fall back to the key
   // in the K position.
   return (
-    event.key.toLowerCase() === 'k' ||
-    (!PRINTABLE_ASCII.test(event.key) && event.code === 'KeyK')
+    event.key.toLowerCase() === 'k' || (!PRINTABLE_ASCII.test(event.key) && event.code === 'KeyK')
   );
 }

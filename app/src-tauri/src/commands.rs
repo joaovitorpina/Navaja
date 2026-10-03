@@ -4,7 +4,8 @@
 //! What the host checks before any work: run ids, the shape of tool and
 //! action ids, and the overall size of a run's input (string bytes and JSON
 //! nodes). The search query is truncated and copied text is size-capped.
-//! Each tool validates its own options (docs/architecture.md §3).
+//! `open_url` opens only pages of Navaja's repository. Each tool validates
+//! its own options (docs/architecture.md §3).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -15,7 +16,7 @@ use navaja_core::{
 };
 use serde::Serialize;
 use tauri::ipc::{Channel, Response};
-use tauri::{Runtime, State, WebviewWindow};
+use tauri::{AppHandle, Runtime, State, WebviewWindow};
 
 use crate::settings::{Settings, Theme};
 use crate::state::AppState;
@@ -293,6 +294,41 @@ pub fn settings_set<R: Runtime>(
         .set(settings, |saved| apply_theme(&window, saved.theme))
 }
 
+/// Shows the log folder in the OS file manager, creating it if it is
+/// missing. Off the main thread: it touches the disk and starts a program.
+#[tauri::command(async)]
+pub fn open_logs(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let Some(app_dir) = state.app_dir.as_deref() else {
+        return Err("Navaja has no folder for its files on this system.".to_owned());
+    };
+    let logs = crate::paths::logs_dir(app_dir);
+    crate::paths::ensure_private_dir(&logs).map_err(|error| {
+        tracing::warn!(%error, "could not create the log folder");
+        "Could not create the log folder.".to_owned()
+    })?;
+    crate::opener::open_folder(&logs)
+}
+
+/// Opens a page of Navaja's repository in the default browser; any other
+/// URL is refused before anything starts. Off the main thread: it starts a
+/// program.
+#[tauri::command(async)]
+pub fn open_url(url: String) -> Result<(), String> {
+    if !crate::opener::is_repository_url(&url) {
+        // Not even the scheme: all of it comes from the webview.
+        tracing::warn!("refused to open a URL outside the repository");
+        return Err("Only pages of Navaja's repository can be opened.".to_owned());
+    }
+    crate::opener::open_url(&url)
+}
+
+/// Quits through the same path as the tray's Quit, so the same clean-up
+/// runs.
+#[tauri::command]
+pub fn quit<R: Runtime>(app: AppHandle<R>) {
+    crate::quit(&app, crate::QuitFrom::Command);
+}
+
 pub fn apply_theme<R: Runtime>(window: &WebviewWindow<R>, theme: Theme) {
     let native = match theme {
         Theme::System => None,
@@ -425,6 +461,7 @@ mod tests {
         Arc::new(AppState::new(
             registry,
             crate::settings::SettingsStore::load(None),
+            None,
         ))
     }
 

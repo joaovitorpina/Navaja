@@ -1,7 +1,8 @@
 //! Shared app state: the tool registry, in-flight runs, settings, the
-//! clipboard and the main window's state.
+//! clipboard, the main window's state and the app directory.
 
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -21,6 +22,9 @@ pub struct AppState {
     pub settings: SettingsStore,
     pub clipboard: Clipboard,
     pub window: WindowState,
+    /// The directory `run` resolved once at start, which settings, logs and
+    /// crash files use too. `None` if the OS gives Navaja none.
+    pub app_dir: Option<PathBuf>,
     runs: Mutex<Runs>,
 }
 
@@ -55,13 +59,14 @@ impl Drop for RunGuard<'_> {
 }
 
 impl AppState {
-    pub fn new(registry: Registry, settings: SettingsStore) -> Self {
+    pub fn new(registry: Registry, settings: SettingsStore, app_dir: Option<PathBuf>) -> Self {
         Self {
             registry,
             services: Services::new(),
             settings,
             clipboard: Clipboard::default(),
             window: WindowState::default(),
+            app_dir,
             runs: Mutex::new(Runs::default()),
         }
     }
@@ -114,7 +119,7 @@ mod tests {
 
     fn state() -> AppState {
         let registry = Registry::new(Vec::new()).unwrap();
-        AppState::new(registry, SettingsStore::load(None))
+        AppState::new(registry, SettingsStore::load(None), None)
     }
 
     fn is_cancelled(run: &RunGuard<'_>) -> bool {

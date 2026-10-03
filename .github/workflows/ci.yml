@@ -35,6 +35,28 @@ jobs:
       - name: Frozen identifiers are consistent
         run: bash scripts/check-identifiers.sh
 
+      # A pinned release, checked against its published SHA-256. Bump the
+      # version and the checksum together; the checksum is in
+      # gitleaks_<version>_checksums.txt on the release.
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          dir="$RUNNER_TEMP/gitleaks"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 --proto '=https' \
+            --output "$dir/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  $dir/$archive" | sha256sum --check --strict
+          tar -xzf "$dir/$archive" -C "$dir"
+          "$dir/gitleaks" version
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: gitleaks over fixtures and snapshots
+        run: bash scripts/check-fixture-secrets.sh
+
       - name: Install Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
 
@@ -48,7 +70,8 @@ jobs:
       - name: cargo-deny (bans, licenses, sources)
         run: cargo deny --all-features check bans licenses sources
 
-      # `xtask bindings` builds the app crate (its IPC types), which links Tauri.
+      # `xtask check` (the ACL snapshot) and `xtask bindings` build the app crate,
+      # which links Tauri.
       - name: Linux system packages for Tauri
         run: |
           sudo apt-get update
@@ -61,7 +84,7 @@ jobs:
           shared-key: checks
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: xtask check (crate edges, dependency closures, Tauri parity and config)
+      - name: xtask check (crate edges, dependency closures, Tauri parity and config, ACL snapshot)
         run: cargo xtask check
 
       - name: TypeScript bindings are up to date
@@ -82,8 +105,16 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Dev dependencies included; the list is deny.toml's, plus the
+      # per-package exceptions in js-licenses.toml.
+      - name: JS licence allowlist
+        run: cargo xtask licenses
+
       - name: svelte-check and tsc
         run: pnpm check
+
+      - name: ESLint (with the custom-view import allowlist) and Prettier
+        run: pnpm lint
 
   web:
     name: web
@@ -167,6 +198,17 @@ jobs:
 
       - name: doctests
         run: cargo test --doc --workspace
+
+      # The macOS release is a universal DMG, and this runner is arm64, so
+      # nothing else compiles the Intel slice. Tests are checked too, so
+      # code behind cfg(target_arch) is covered on both sides. The target's
+      # check output lands in target/x86_64-apple-darwin, which rust-cache
+      # keeps with the rest.
+      - name: Intel macOS compiles (x86_64-apple-darwin)
+        if: matrix.os == 'macos-26'
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo check --workspace --all-targets --target x86_64-apple-darwin
 
       - name: Build the app (front end embedded, no bundle)
         run: pnpm tauri build --debug --no-bundle

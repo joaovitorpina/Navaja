@@ -8,6 +8,7 @@ import type { SearchHit } from '$bindings/SearchHit';
 import type { Settings } from '$bindings/Settings';
 import type { ToolError } from '$bindings/ToolError';
 import type { JsonValue } from '$bindings/serde_json/JsonValue';
+import { REPOSITORY_URL } from './links';
 
 export type ToolInput = Record<string, JsonValue>;
 /** What generic views get: one value per declared output. */
@@ -44,6 +45,18 @@ export const getSettings = (): Promise<Settings> => invoke<Settings>('settings_g
 
 export const saveSettings = (settings: Settings): Promise<void> =>
   invoke<void>('settings_set', { settings });
+
+/** Shows Navaja's log folder in the OS file manager. */
+export const openLogs = (): Promise<void> => invoke<void>('open_logs');
+
+/** Quits Navaja the way the tray's Quit does. The promise may never settle. */
+export const quitApp = (): Promise<void> => invoke<void>('quit');
+
+/** Opens a page of Navaja's repository in the default browser. Rust refuses any other URL. */
+export const openUrl = (url: string): Promise<void> => invoke<void>('open_url', { url });
+
+/** Opens the repository's home page in the default browser. */
+export const openRepository = (): Promise<void> => openUrl(REPOSITORY_URL);
 
 /** Runs a tool action. Results of superseded runs should be ignored by the caller. */
 export function runTool(

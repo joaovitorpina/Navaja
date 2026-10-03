@@ -1,0 +1,85 @@
+# Per-package exceptions to the JS licence allowlist, checked by
+# `cargo xtask licenses` (docs/roadmap.md §2, "Workflows").
+#
+# The allowed licences are deny.toml's [licenses].allow, read from there so
+# the Rust and JS lists cannot drift. A package whose licence falls outside
+# that list, or that declares none, needs an entry here:
+# - `package`: the npm package name;
+# - `license`: the licence exactly as `pnpm licenses list` reports it. If the
+#   package changes licence, the entry stops matching and the check fails
+#   until someone reviews it again;
+# - `reason`: one line on why it is acceptable.
+#
+# Prefer an entry here over widening deny.toml. Everything below is test
+# tooling (jsdom for Vitest, WebdriverIO for the end-to-end tests); none of
+# it is bundled into the app.
+
+[[exception]]
+package = "@csstools/color-helpers"
+license = "MIT-0"
+reason = "Test-only (jsdom); MIT without the attribution clause"
+
+[[exception]]
+package = "@csstools/css-syntax-patches-for-csstree"
+license = "MIT-0"
+reason = "Test-only (jsdom); MIT without the attribution clause"
+
+[[exception]]
+package = "lru-cache"
+license = "BlueOak-1.0.0"
+reason = "Test-only (jsdom); permissive, OSI-approved"
+
+[[exception]]
+package = "@promptbook/utils"
+license = "CC-BY-4.0"
+reason = "Test-only (WebdriverIO, through locate-app); attribution-only"
+
+[[exception]]
+package = "argparse"
+license = "Python-2.0"
+reason = "Test-only (js-yaml under mocha, WebdriverIO's runner); permissive PSF licence"
+
+[[exception]]
+package = "css-value"
+license = "Unknown"
+reason = "Test-only (WebdriverIO); package.json has no licence field, its Readme grants MIT"
+
+[[exception]]
+package = "isexe"
+license = "BlueOak-1.0.0"
+reason = "Test-only (which, under WebdriverIO's edgedriver); permissive, OSI-approved"
+
+[[exception]]
+package = "jackspeak"
+license = "BlueOak-1.0.0"
+reason = "Test-only (glob, under @wdio/config); permissive, OSI-approved"
+
+[[exception]]
+package = "minimatch"
+license = "BlueOak-1.0.0"
+reason = "Test-only (readdir-glob under archiver, under WebdriverIO); permissive, OSI-approved"
+
+[[exception]]
+package = "minipass"
+license = "BlueOak-1.0.0"
+reason = "Test-only (glob, under @wdio/config); permissive, OSI-approved"
+
+[[exception]]
+package = "package-json-from-dist"
+license = "BlueOak-1.0.0"
+reason = "Test-only (glob, under @wdio/config); permissive, OSI-approved"
+
+[[exception]]
+package = "path-scurry"
+license = "BlueOak-1.0.0"
+reason = "Test-only (glob, under @wdio/config); permissive, OSI-approved"
+
+[[exception]]
+package = "spdx-exceptions"
+license = "CC-BY-3.0"
+reason = "Test-only (normalize-package-data, under @wdio/cli); a data list, attribution-only"
+
+[[exception]]
+package = "stream-buffers"
+license = "Unlicense"
+reason = "Test-only (@wdio/local-runner); public-domain dedication"

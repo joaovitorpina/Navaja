@@ -1,6 +1,7 @@
-//! Local logs only: a daily file in `<app dir>/logs`, seven kept, never
-//! uploaded. Tools don't log; the app logs tool id, action, duration and
-//! error code, never inputs or outputs.
+//! Local logs only: a daily file in `<app dir>/logs` (`paths::logs_dir`,
+//! the folder `open_logs` shows), seven kept, never uploaded. Tools don't
+//! log; the app logs tool id, action, duration and error code, never inputs
+//! or outputs.
 
 use std::path::Path;
 
@@ -30,7 +31,7 @@ pub fn init_with_directives(app_dir: Option<&Path>, directives: &str) -> LogGuar
 
 fn init_with(app_dir: Option<&Path>, filter: EnvFilter) -> LogGuard {
     let file = app_dir.and_then(|dir| {
-        let logs = dir.join("logs");
+        let logs = crate::paths::logs_dir(dir);
         crate::paths::ensure_private_dir(&logs).ok()?;
         RollingFileAppender::builder()
             .rotation(Rotation::DAILY)

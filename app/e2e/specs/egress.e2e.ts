@@ -72,9 +72,11 @@ describe('offline guarantee', () => {
           if (!realm) return 'no window';
           try {
             const scope = realm as unknown as Record<string, unknown>;
-            const present = ['RTCPeerConnection', 'RTCDataChannel', 'webkitRTCPeerConnection'].filter(
-              (name) => typeof scope[name] !== 'undefined',
-            );
+            const present = [
+              'RTCPeerConnection',
+              'RTCDataChannel',
+              'webkitRTCPeerConnection',
+            ].filter((name) => typeof scope[name] !== 'undefined');
             return present.length === 0 ? 'removed' : `present: ${present.join(', ')}`;
           } catch (error) {
             return `unreadable: ${String(error)}`;

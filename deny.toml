@@ -18,6 +18,8 @@ yanked = "deny"
 confidence-threshold = 0.93
 # The list covers crates that arrive in later milestones (updater, Docker).
 unused-allowed-license = "allow"
+# `cargo xtask licenses` reads this list for npm packages too; npm-only
+# exceptions go in js-licenses.toml, not here.
 allow = [
   "MIT",
   "Apache-2.0",
