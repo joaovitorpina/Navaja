@@ -1,5 +1,6 @@
-// Prettier for the code ESLint lints (the "lint" and "format" scripts). It keeps
-// the style the code was written in.
+// Prettier for every file it can parse under app/ and tools/*/ui/ (the "lint"
+// and "format" scripts): not only the code ESLint lints, but JSON, CSS and HTML
+// too. It keeps the style the code was written in.
 import { fileURLToPath } from 'node:url';
 
 /** @type {import('prettier').Config} */
