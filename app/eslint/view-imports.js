@@ -55,13 +55,13 @@ const SEE = 'See docs/architecture.md §4.';
 /**
  * `filename` with forward slashes, so that path.posix works on it on every
  * OS, and normalized as path.posix.join normalizes the paths it is compared
- * with: a UNC name (\\host\share\…) would otherwise keep a leading `//` that
- * the joined paths lose. A \\?\ prefix goes too. A name with no folder
- * (`<input>`) gets one, so `..` still leaves it.
+ * with: a UNC (\\host\share\…) or \\?\ name would otherwise keep a leading
+ * `//` that the joined paths lose. A name with no folder (`<input>`) gets
+ * one, so `..` still leaves it.
  * @param {string} filename
  */
 function posix(filename) {
-  const file = path.posix.normalize(filename.replaceAll('\\', '/').replace(/^\/\/\?\//, ''));
+  const file = path.posix.normalize(filename.replaceAll('\\', '/'));
   return file.startsWith('/') || /^[A-Za-z]:\//.test(file) ? file : `/unnamed/${file}`;
 }
 
