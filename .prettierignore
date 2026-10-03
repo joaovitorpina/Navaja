@@ -1,0 +1,8 @@
+# Prettier formats only the code ESLint lints (the "lint" and "format" scripts
+# in app/package.json). These keep the form their tools give them.
+
+# ts-rs output; `cargo xtask bindings --check` compares it byte for byte.
+app/src/bindings/
+pnpm-lock.yaml
+app/src-tauri/
+*.md
