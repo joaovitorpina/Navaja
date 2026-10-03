@@ -210,11 +210,16 @@ jobs:
       # nothing else compiles the Intel slice. Clippy runs on it with the
       # same bans (clippy.toml, the workspace lints) and -D warnings as the
       # clippy step above, tests included, so code behind cfg(target_arch)
-      # is covered on both sides. Its output lands in
+      # is covered on both sides. The step keys on runner.os, so a new macOS
+      # label keeps it. It fails on a runner that is not arm64, since then
+      # nothing would lint the arm64 slice. Its output lands in
       # target/x86_64-apple-darwin, which rust-cache keeps with the rest.
       - name: Intel macOS passes clippy (x86_64-apple-darwin)
-        if: matrix.os == 'macos-26'
+        if: runner.os == 'macOS'
+        env:
+          HOST_ARCH: ${{ runner.arch }}
         run: |
+          [ "$HOST_ARCH" = ARM64 ] || { echo "::error::expected an arm64 runner, got $HOST_ARCH"; exit 1; }
           rustup target add x86_64-apple-darwin
           cargo clippy --workspace --all-targets --target x86_64-apple-darwin -- -D warnings
 
