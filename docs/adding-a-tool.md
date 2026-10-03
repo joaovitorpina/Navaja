@@ -95,7 +95,7 @@ The shell loads `tools/<id>/ui/View.svelte` and passes it `ViewProps` from `$lib
 
 Put `OUTPUT_ATTRIBUTE` (`data-output`) on every element that shows tool output, so the shell sends a native copy (Ctrl/Cmd+C or the context menu) whose selection touches it through Rust, like `copyText`, with the markers that keep it out of clipboard history (architecture §5, Clipboard). A copy from a text field stays native, so don't show output in one.
 
-Its tests (`*.test.ts` and `*.spec.ts` files in `ui/`, which Vitest runs) may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`.
+Its tests (`*.test.ts` and `*.spec.ts` files in `ui/`, which Vitest runs) may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`. They import `vi` by that name (`import { vi } from 'vitest'`), use it only as `vi.<name>`, and call `vi.mock`, `vi.importActual` and Vitest's other calls that take a module directly, so the check can read the module each one takes.
 
 `ui/` holds only scripts ESLint lints (`.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.svelte`) and the assets `.css`, `.svg`, `.json`, `.png` and `.webp`, with lower-case extensions. It has no `node_modules` folder, and nothing in the tool folder is a symbolic link, a submodule, a `package.json` or a `tsconfig.json`. ESLint would never see any other file, but Vite would still bundle it, and Vite reads those two to resolve imports.
 

@@ -51,6 +51,13 @@ const notAllowed = (code: string, filename = TS) => ({
   errors: [{ messageId: 'notAllowed' }],
 });
 
+/** A case in a view's test that reports `messageIds`, in order. */
+const inTest = (code: string, ...messageIds: string[]) => ({
+  code,
+  filename: TEST,
+  errors: messageIds.map((messageId) => ({ messageId })),
+});
+
 tester.run('view-imports', rule, {
   valid: [
     // Relative paths that stay inside tools/demo/ui/.
@@ -116,7 +123,29 @@ tester.run('view-imports', rule, {
     { code: "vitest.doMock('$lib/view-kit');", filename: TEST },
     { code: "const actual = await vi.importActual('./label');", filename: SPEC },
     { code: "vi.mock(import('./label'));", filename: TEST },
+    { code: "vi?.mock('./label');", filename: TEST },
     { code: "vi.spyOn(console, 'log');", filename: TEST },
+    // vi and vitest under their own names, read by member, and mock functions.
+    {
+      code:
+        "import { expect, vi, vitest } from 'vitest';\n" +
+        "vi.fn();\nvitest.spyOn(console, 'log');\nvi['useFakeTimers']();\n",
+      filename: TEST,
+    },
+    {
+      code:
+        "import { expect, vi } from 'vitest';\nconst fn = vi.fn();\n" +
+        'expect(fn.mock.calls).toEqual([]);\nexpect(vi.mocked(fn).mock.results).toEqual([]);\n',
+      filename: TEST,
+    },
+    {
+      code:
+        "import { vi } from 'vitest';\nlet spy: ReturnType<typeof vi.fn>;\n" +
+        "type Vi = typeof vi;\nimport type * as Vitest from 'vitest';\n",
+      filename: SPEC,
+    },
+    // Outside tests, these names mean nothing.
+    { code: 'const vi = { mock: 1 };\nexport const { mock } = vi;\n', filename: TS },
   ],
   invalid: [
     // Relative paths that leave tools/demo/ui/.
@@ -284,6 +313,44 @@ tester.run('view-imports', rule, {
       filename: TEST,
       errors: [{ messageId: 'nonLiteral' }],
     },
+    // Any object's call counts: vi.resetModules() and the like return vi.
+    notAllowed("vi.resetModules().importActual('$lib/ipc');", TEST),
+    // vi under another name, where those calls would go unseen.
+    inTest("import { vi as v } from 'vitest';", 'vitestImport'),
+    inTest("import { vitest as v } from 'vitest';", 'vitestImport'),
+    inTest("import { vi as vitest } from 'vitest';", 'vitestImport'),
+    inTest("import * as vt from 'vitest';", 'vitestImport'),
+    inTest("export { vi } from 'vitest';", 'vitestImport'),
+    inTest("export * from 'vitest';", 'vitestImport'),
+    inTest("const vt = await import('vitest');", 'vitestImport'),
+    inTest("import vt = require('vitest');", 'vitestImport'),
+    inTest("const vt = await vi.importActual('vitest');", 'vitestImport'),
+    inTest(
+      "import { expect, it, vi as v } from 'vitest';\nawait v.importActual('$lib/ipc');",
+      'vitestImport',
+      'notAllowed',
+    ),
+    inTest(
+      "import * as vt from 'vitest';\nawait vt.vi.importActual('$lib/ipc');",
+      'vitestImport',
+      'notAllowed',
+    ),
+    inTest("import { vi } from 'vitest';\nconst v = vi;", 'vitestUse'),
+    inTest("import { vi } from 'vitest';\nexport { vi };", 'vitestUse'),
+    inTest('wrap(vi);', 'vitestUse'),
+    inTest("const name = 'importActual';\nvi[name]('$lib/ipc');", 'vitestUse'),
+    // Those calls taken apart.
+    inTest(
+      "import { vi } from 'vitest';\nconst { importActual } = vi;\n" +
+        "await importActual('$lib/router.svelte');",
+      'vitestUse',
+      'vitestUse',
+    ),
+    inTest('const { mock: m } = vi.resetModules();', 'vitestUse'),
+    inTest('const f = vi.importActual;', 'vitestUse'),
+    inTest("(0, vi.mock)('$lib/ipc');", 'vitestUse'),
+    inTest("vi.mock.apply(vi, ['$lib/ipc']);", 'vitestUse', 'vitestUse'),
+    inTest("vi.resetModules().doMock.call(null, '$lib/ipc');", 'vitestUse'),
     // The message names the allowed set and the contract.
     {
       code: "import { t } from '$lib/i18n';",
