@@ -626,7 +626,7 @@ mac_daemons() {
     fail "check $phase: the process snapshots hold no start of $BINARY, so no WebKit daemon could be tied to the app"
   fi
   awk -F '\t' -v window="$DAEMON_WINDOW" '
-    NR == FNR { if ($2 != "") { app[++n] = $2; pid[n] = $1 } next }
+    FILENAME == ARGV[1] { if ($2 != "") { app[++n] = $2; pid[n] = $1 } next }
     {
       verdict = "left out"
       why = "not within " window " s after a start of the app"
@@ -801,9 +801,9 @@ suspects_linux() {
     echo "No baseline was captured, so there is no such list." >> "$file"
     return 0
   fi
-  awk -F '\t' 'NR == FNR { seen[$3 FS $4 FS $5] = 1; next } !(($3 FS $4 FS $5) in seen)' \
+  awk -F '\t' 'FILENAME == ARGV[1] { seen[$3 FS $4 FS $5] = 1; next } !(($3 FS $4 FS $5) in seen)' \
     "$OUT/baseline-uplink.tsv" "$OUT/$phase-uplink.tsv" > "$OUT/$phase-suspects.tsv"
-  awk 'NR == FNR { seen[$2 " " $3] = 1; next } !(($2 " " $3) in seen)' \
+  awk 'FILENAME == ARGV[1] { seen[$2 " " $3] = 1; next } !(($2 " " $3) in seen)' \
     "$OUT/baseline-uplink-names.txt" "$OUT/$phase-uplink-names.txt" > "$OUT/$phase-suspect-names.txt"
   ends=$(lines "$OUT/$phase-suspects.tsv")
   names=$(lines "$OUT/$phase-suspect-names.txt")
@@ -1011,7 +1011,7 @@ suspects_macos() {
     echo "No baseline was captured, so there is no such list." >> "$file"
     return 0
   fi
-  awk -F '\t' 'NR == FNR { seen[$1] = 1; next } $2 == 0 && !($1 in seen)' \
+  awk -F '\t' 'FILENAME == ARGV[1] { seen[$1] = 1; next } $2 == 0 && !($1 in seen)' \
     "$OUT/baseline-identities.txt" "$OUT/$phase-outside.txt" > "$OUT/$phase-suspects.txt"
   cut -f 3,4 "$OUT/$phase-suspects.txt" | group > "$OUT/$phase-suspects.tsv"
   count=$(cut -f 1 "$OUT/$phase-suspects.txt" | sort -u | awk 'END { print NR }')
@@ -1233,7 +1233,7 @@ check_macos() {
   # stamp. (Time stamps alone can't be counted: pktap gives a burst of
   # packets one time stamp.)
   cut -f 2 "$OUT/$phase-tree.txt" | awk '{ print $1 }' > "$OUT/$phase-tree-times.txt"
-  awk 'NR == FNR { seen[$1] = 1; next } !($1 in seen)' \
+  awk 'FILENAME == ARGV[1] { seen[$1] = 1; next } !($1 in seen)' \
     "$OUT/$phase-tree-times.txt" "$OUT/$phase-canary.txt" > "$OUT/$phase-canary-other.txt"
   # What the disclosed list covers is reported apart and fails nothing. The
   # control's request and the canary's names never are.
