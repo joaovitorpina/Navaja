@@ -2,8 +2,9 @@
 // sees only the files ESLint lints, but Vite bundles any file a view imports.
 // So a view folder holds only files ESLint lints and a few assets. Nothing
 // under tools/ is a link, which ESLint and Prettier don't follow and Vite does,
-// or a submodule, whose files git does not list here. `pnpm lint` runs this
-// before ESLint, over the files git tracks: what a PR can add.
+// a submodule, whose files git does not list here, or a file Vite reads to
+// resolve imports. `pnpm lint` runs this before ESLint, over the files git
+// tracks: what a PR can add.
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
@@ -27,12 +28,22 @@ export const VIEW_EXTENSIONS = ['js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', '
  */
 export const VIEW_ASSETS = ['css', 'svg', 'json', 'png', 'webp'];
 
+/**
+ * Files Vite reads to resolve a view's imports, taking the nearest one above
+ * each file, so one anywhere under tools/ can send an allowed import
+ * elsewhere: package.json (its browser field maps one file to another) and
+ * tsconfig.json (its jsxImportSource makes each .jsx and .tsx file import
+ * `<source>/jsx-runtime`). Compared in lower case, as a build on Windows or
+ * macOS finds them.
+ */
+export const RESOLVER_FILES = ['package.json', 'tsconfig.json'];
+
 /** What the problems break, printed after them. */
 export const RULE =
   `A view folder (tools/<id>/ui/) holds only scripts ESLint lints (.${VIEW_EXTENSIONS.join(', .')}) ` +
   `and assets (.${VIEW_ASSETS.join(', .')}), with lower-case extensions and no node_modules ` +
-  'folder, and nothing under tools/ is a symbolic link or a submodule. ' +
-  'See docs/architecture.md §4.';
+  'folder, and nothing under tools/ is a symbolic link, a submodule, ' +
+  `${RESOLVER_FILES.map((name) => `a ${name}`).join(' or ')}. See docs/architecture.md §4.`;
 
 /**
  * Mode and path of each entry `git ls-files -s -z` prints.
@@ -69,6 +80,10 @@ export function viewFileProblems(entries) {
       problems.push(`${file}: a submodule, whose files this check can't see`);
       continue;
     }
+    if (RESOLVER_FILES.includes(path.posix.basename(file).toLowerCase())) {
+      problems.push(`${file}: Vite reads it to resolve imports, which it can send anywhere`);
+      continue;
+    }
     const inView = /^tools\/[^/]+\/ui\/(.+)$/s.exec(file)?.[1];
     if (inView === undefined) continue;
     if (inView.split('/').includes('node_modules')) {
@@ -96,7 +111,7 @@ function main() {
     console.error(`Files that may not sit under tools/:\n${problems.join('\n')}\n${RULE}`);
     process.exitCode = 1;
   } else {
-    console.log('Files under tools/: no links, and every view file is linted or an asset.');
+    console.log('Every file under tools/ may stay there.');
   }
 }
 

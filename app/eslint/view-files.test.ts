@@ -56,6 +56,26 @@ describe('the files under tools/', () => {
     ]);
   });
 
+  it('are never a package.json or tsconfig.json, which Vite reads to resolve imports', () => {
+    const names = [
+      'tools/package.json',
+      'tools/tsconfig.json',
+      'tools/demo/package.json',
+      'tools/demo/Package.JSON',
+      'tools/demo/tsconfig.json',
+      'tools/demo/ui/package.json',
+      'tools/demo/ui/sub/tsconfig.json',
+    ];
+    expect(refused(...names.map(file))).toEqual(names);
+    expect(
+      refused(
+        file('tools/demo/ui/data.json'),
+        file('tools/demo/ui/my-package.json'),
+        file('tools/demo/tsconfig.base.json'),
+      ),
+    ).toEqual([]);
+  });
+
   it('in a view folder are never under node_modules, where ESLint does not look', () => {
     expect(
       refused(
@@ -88,12 +108,14 @@ describe('the files under tools/', () => {
       viewFileProblems([
         { mode: '120000', path: 'tools/demo/ui' },
         { mode: '160000', path: 'tools/demo/ui/vendor' },
+        file('tools/demo/package.json'),
         file('tools/demo/ui/node_modules/x.ts'),
         file('tools/demo/ui/x.es6'),
       ]),
     ).toEqual([
       "tools/demo/ui: a symbolic link, which ESLint and Prettier don't follow and Vite does",
       "tools/demo/ui/vendor: a submodule, whose files this check can't see",
+      'tools/demo/package.json: Vite reads it to resolve imports, which it can send anywhere',
       'tools/demo/ui/node_modules/x.ts: in a node_modules folder, which ESLint skips',
       'tools/demo/ui/x.es6: not a script ESLint lints, nor an allowed asset',
     ]);
@@ -104,8 +126,8 @@ describe('the files under tools/', () => {
       'A view folder (tools/<id>/ui/) holds only scripts ESLint lints ' +
         '(.js, .mjs, .cjs, .jsx, .ts, .mts, .cts, .tsx, .svelte) and assets ' +
         '(.css, .svg, .json, .png, .webp), with lower-case extensions and no node_modules ' +
-        'folder, and nothing under tools/ is a symbolic link or a submodule. ' +
-        'See docs/architecture.md §4.',
+        'folder, and nothing under tools/ is a symbolic link, a submodule, ' +
+        'a package.json or a tsconfig.json. See docs/architecture.md §4.',
     );
   });
 });
