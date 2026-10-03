@@ -183,6 +183,7 @@ register_tools! {
 - **macOS:** `/usr/bin/open` runs briefly as Navaja's child and asks LaunchServices, so launchd, not Navaja, starts the browser or Finder.
 - **Linux:** `xdg-open` (or gio, gnome-open, kde-open) starts after a double fork and `setsid`. It leaves Navaja's process tree by parentage, but a tracer that follows forks, such as `strace -f`, still follows it and the browser.
 - So the offline checks (the strace guard, the S2.7 capture) must never click these links, and no end-to-end test opens a URL or the logs folder.
+- **A failed hand-off** logs the error's kind and the OS error code (an HRESULT in hex), never the error's text, which can quote the URL or the path.
 
 **Input limits.** Rust checks what the webview sends:
 - `run_tool` refuses malformed tool and action ids, and logs only ids the registry knows (`<unknown>` otherwise). It caps `input` at 64 MiB of string data (object keys included) and 1,000,000 JSON nodes, and returns `core.invalid_input` above that, without echoing the input. Tauri has already parsed the IPC body by then, so the cap bounds tool work, not IPC memory.

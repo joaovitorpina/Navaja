@@ -62,16 +62,31 @@ fn hand_off(
     match joined {
         Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => {
-            // The error's text can quote the URL or the path, so only its kind.
-            let kind = match &error {
-                tauri_plugin_opener::Error::Io(io) => io.kind().to_string(),
-                _ => "other".to_owned(),
+            // The error's text can quote the URL or the path, so only its
+            // kind and the OS's error code, never its Display text.
+            let (kind, code) = match &error {
+                tauri_plugin_opener::Error::Io(io) => {
+                    (io.kind().to_string(), io.raw_os_error().map(os_code))
+                }
+                _ => ("other".to_owned(), None),
             };
-            tracing::warn!(%kind, "could not open {what}");
+            let code = code.as_deref().unwrap_or("none");
+            tracing::warn!(%kind, %code, "could not open {what}");
             Err(failed())
         }
         // The panic hook has logged where, without the payload.
         Err(_) => Err(failed()),
+    }
+}
+
+/// An OS error code as logged: a plain number, which never holds the URL or
+/// the path. A negative one is an HRESULT, written in hex as Windows
+/// documents it (`0x80070002`).
+fn os_code(code: i32) -> String {
+    if code < 0 {
+        format!("{:#x}", code.cast_unsigned())
+    } else {
+        code.to_string()
     }
 }
 
@@ -81,6 +96,17 @@ mod tests {
 
     fn under(rest: &str) -> String {
         format!("{REPOSITORY}{rest}")
+    }
+
+    #[test]
+    fn os_codes_are_numbers() {
+        assert_eq!(os_code(0), "0");
+        assert_eq!(os_code(2), "2");
+        assert_eq!(os_code(1155), "1155");
+        // HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND).
+        assert_eq!(os_code(-2_147_024_894), "0x80070002");
+        assert_eq!(os_code(i32::MIN), "0x80000000");
+        assert_eq!(os_code(-1), "0xffffffff");
     }
 
     #[test]
