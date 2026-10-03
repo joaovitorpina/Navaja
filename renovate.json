@@ -11,9 +11,9 @@
       "minimumReleaseAge": "3 days"
     },
     {
-      "description": "Tauri crates and npm packages move together (xtask check enforces parity)",
+      "description": "Tauri crates and npm packages move together (xtask check enforces parity; xtask pins tauri-utils to tauri's)",
       "groupName": "tauri",
-      "matchPackageNames": ["tauri", "tauri-build", "tauri-plugin-*", "@tauri-apps/*"]
+      "matchPackageNames": ["tauri", "tauri-build", "tauri-utils", "tauri-plugin-*", "@tauri-apps/*"]
     },
     {
       "description": "WebDriver test stack moves together",

@@ -116,7 +116,7 @@ fn canary_input_never_reaches_logs_or_crash_files() {
     let mut tools = navaja_tools::all();
     tools.push(Arc::new(Canary));
     let registry = Registry::new(tools).expect("valid tools");
-    let app = Arc::new(AppState::new(registry, SettingsStore::load(None)));
+    let app = Arc::new(AppState::new(registry, SettingsStore::load(None), None));
 
     let text = json!({ "input": CANARY });
     let cases = [

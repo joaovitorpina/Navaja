@@ -4,7 +4,7 @@
 //! not derived from the app identifier, so an identifier change never moves
 //! user data.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Overrides the directory in debug builds only (tests, end-to-end runs).
 #[cfg(any(debug_assertions, test))]
@@ -23,8 +23,13 @@ pub fn app_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|base| base.join(name))
 }
 
+/// Where the log files go: the logger writes there and `open_logs` shows it.
+pub fn logs_dir(app_dir: &Path) -> PathBuf {
+    app_dir.join("logs")
+}
+
 /// Creates `dir` (and parents) readable only by the user on Unix.
-pub fn ensure_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {

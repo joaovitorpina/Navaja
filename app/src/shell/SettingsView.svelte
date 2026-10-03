@@ -5,6 +5,7 @@
   import { t } from '$lib/i18n';
   import { getSettings, saveSettings } from '$lib/ipc';
   import { applyTheme } from '$lib/theme';
+  import OpenLogsButton from './OpenLogsButton.svelte';
 
   let settings = $state<Settings | null>(null);
   let error = $state<string | null>(null);
@@ -48,4 +49,15 @@
     </label>
   {/if}
   {#if error}<p role="alert" class="text-sm text-danger">{error}</p>{/if}
+
+  <section class="flex flex-col gap-2" aria-labelledby="settings-logs">
+    <h2 id="settings-logs" class="text-sm font-medium">{t('shell.settings.logs', 'Logs')}</h2>
+    <p class="text-sm text-muted">
+      {t(
+        'shell.settings.logs.about',
+        'Navaja keeps up to seven daily log files on this computer and never sends them anywhere.',
+      )}
+    </p>
+    <OpenLogsButton />
+  </section>
 </div>

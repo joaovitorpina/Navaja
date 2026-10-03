@@ -19,10 +19,13 @@ mod commands;
 mod crash;
 mod guard;
 mod logging;
+mod opener;
 mod paths;
 mod platform;
 mod settings;
 mod state;
+#[cfg(test)]
+mod test_support;
 mod tray;
 mod window;
 
@@ -87,7 +90,7 @@ pub fn run() -> Result<i32, StartError> {
         std::io::Error::other("invalid tool registry")
     })?;
     let settings = settings::SettingsStore::load(app_dir.as_deref());
-    let state = Arc::new(state::AppState::new(registry, settings));
+    let state = Arc::new(state::AppState::new(registry, settings, app_dir));
 
     let initial_tool = args.tool.filter(|id| state.registry.meta(id).is_some());
     let tray_tools: Vec<(String, String)> = state
@@ -134,6 +137,9 @@ pub fn run() -> Result<i32, StartError> {
             commands::copy_text,
             commands::settings_get,
             commands::settings_set,
+            commands::open_logs,
+            commands::open_url,
+            commands::quit,
         ])
         .setup({
             let state = Arc::clone(&state);
@@ -180,6 +186,31 @@ pub fn run() -> Result<i32, StartError> {
         }
     });
     Ok(code)
+}
+
+/// What asked Navaja to quit, for the one log line a quit writes. Fixed
+/// values, so nothing from the webview reaches the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuitFrom {
+    Tray,
+    Command,
+}
+
+impl QuitFrom {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Tray => "tray",
+            Self::Command => "command",
+        }
+    }
+}
+
+/// Quits the app. The tray's Quit and the `quit` command both come here, so
+/// both end the event loop the same way: `exit` emits `RunEvent::Exit`,
+/// where `run` releases the clipboard and flushes the log.
+fn quit<R: Runtime>(app: &AppHandle<R>, from: QuitFrom) {
+    tracing::info!(from = from.as_str(), "quit");
+    app.exit(0);
 }
 
 /// Whether the end-to-end harness started this process: `@wdio/tauri-service`

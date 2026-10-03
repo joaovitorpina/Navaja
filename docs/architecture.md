@@ -33,8 +33,8 @@ Navaja/
 │   └── ports/            mod.rs · icon.svg · ui/View.svelte (+PortTable, WhyPanel, KillDialog) · ui/i18n/en.ts
 ├── app/                  the only pnpm package (Vite root + Tauri project)
 │   ├── src/bindings/     ts-rs output; never hand-edited; CI drift check
-│   ├── src/lib/          ipc · router · i18n · theme · copy · CopyButton · ToolIcon · view-kit/ (the only API custom views may import) · components/ui/ (shadcn copies)
-│   ├── src/shell/        Shell · Sidebar · CommandPalette · ToolHost · Home · SettingsView · AboutView · dialogs
+│   ├── src/lib/          ipc · links · router · i18n · theme · copy · CopyButton · ToolIcon · view-kit/ (the only API custom views may import) · components/ui/ (shadcn copies)
+│   ├── src/shell/        Shell · Sidebar · CommandPalette · ToolHost · Home · SettingsView · AboutView · OpenLogsButton · dialogs
 │   ├── src/generic/      GeneratorView · TransformView · OptionControl · OutputView (one renderer per OutputKind)
 │   ├── src/editor/       CodeMirror 6 {@attach} + size thresholds
 │   ├── e2e/              wdio.conf.ts · strace-guard.sh (Linux) · support/ · specs/{launch,smoke,single-instance,egress,json,ports}.e2e.ts
@@ -42,9 +42,9 @@ Navaja/
 │   └── src-tauri/        crate navaja · features: default [docker], updater (M6), e2e
 │       ├── tauri.conf.json · tauri.release.conf.json (updater artifacts + pubkey) · e2e.conf.json
 │       ├── capabilities/main.json · acl.lock.json · nsis/hooks.nsh
-│       ├── src/          commands · state · paths · window · guard · tray · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{mod,unix,linux,macos,windows}.rs
+│       ├── src/          commands · state · paths · window · guard · tray · opener · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{mod,unix,linux,macos,windows}.rs
 │       └── tests/        privacy.rs (canary input kept out of logs and crash files)
-├── xtask/                check · tool-gate · bindings · icons · notices · capture-ports · measure · verify-release · manifests
+├── xtask/                check · acl · tool-gate · bindings · icons · notices · capture-ports · measure · verify-release · manifests
 ├── assets/brand/         navaja.svg · tray-template.svg · tray-color.svg · GUIDELINES.md
 ├── packaging/            winget / scoop / homebrew templates · dryrun.json (scratch repo only)
 ├── scripts/              check-eol.sh · check-identifiers.sh (CI)
@@ -67,7 +67,7 @@ navaja (app) ─► navaja-tools ─► navaja-ports ─► navaja-core
   - **Test builds only:** hyper also comes in through axum, the WebDriver server inside `tauri-plugin-wdio-webdriver`. That plugin is part of the app's test-only `e2e` feature (§5), never of a release build, and cargo-deny allows axum under it alone.
 - **Lints** ban printing, `exit`, `unsafe` outside FFI modules, socket and resolver calls, and `Command::new`.
   - **One exception:** the bind-only reserved-range probe in navaja-ports' Windows module (M5). It never calls `listen()` or `connect()`, and it is allowlisted in its FFI module.
-  - **Process start:** processes start only through `navaja_core::sys::spawn_system`, which takes an absolute OS program path, sets `CREATE_NO_WINDOW` and applies a timeout.
+  - **Process start:** processes start only through `navaja_core::sys::spawn_system`, which takes an absolute OS program path, sets `CREATE_NO_WINDOW` and applies a timeout. The one exception is tauri-plugin-opener, which hands a page to the browser or a folder to the file manager for `open_url` and `open_logs` (§5). `clippy.toml` bans its functions (`open_url`, `open_path`, `reveal_item_in_dir`, `reveal_items_in_dir` and `OpenerExt::opener`) everywhere but the app's `opener.rs`.
 
 ## 3. Core interfaces (`navaja-core`) and the registry
 
@@ -168,7 +168,7 @@ register_tools! {
 ## 5. App shell (crate `navaja`)
 
 **Commands.** Every command is declared in `AppManifest::commands` and granted individually.
-- **Threads:** commands that touch the OS or the disk (`run_tool`, `copy_text`, `settings_set`) run off the main thread. The rest are cheap (in memory, or a few window calls) and run inline on the main thread.
+- **Threads:** commands that touch the OS or the disk (`run_tool`, `copy_text`, `settings_set`, `open_logs`, `open_url`) run off the main thread. The rest are cheap (in memory, or a few window calls) and run inline on the main thread.
 - **Panics:** `Registry::run`'s `catch_unwind` contains a tool panic, and `copy_text` wraps its clipboard call in its own.
 
 | Command | Notes |
@@ -178,15 +178,31 @@ register_tools! {
 | `cancel_run`, `copy_text` | |
 | `settings_get`, `settings_set` | |
 | `app_info`, `shell_ready` | |
-| `open_logs`, `quit` | Not implemented yet (roadmap M2a, item 6) |
-| `open_url` | Only `https://github.com/joaovitorpina/Navaja/...`. Not implemented yet (roadmap M2a, item 6) |
+| `open_logs` | Shows `APP_DIR/logs` in the file manager, creating it (privately) if it is missing. An error if Navaja has no `APP_DIR` |
+| `quit` | The tray's Quit path, so the `RunEvent::Exit` clean-up runs. Logs whether the tray or the command asked |
+| `open_url(url)` | Only the URLs Navaja links to, compared exactly (below) and then handed to the browser unchanged |
 | `update_check`, `update_install` | Behind the `updater` feature (M6) |
+
+**`open_url`'s rule.** The URL must equal, byte for byte, one entry of `ALLOWED_URLS` in `opener.rs`: the URLs the front end links to. Today that is only the repository, `https://github.com/joaovitorpina/Navaja`.
+- Pages under the repository are refused too. GitHub serves a fork's commits under the parent's URLs (`/raw/<sha>/…`, `/archive/<sha>.zip`), so a rule for paths would let a page open content anyone can push.
+- A new link adds its exact URL to the list.
+- A refusal is logged without the URL, not even its scheme.
+
+**Hand-offs to other programs.** `open_url` and `open_logs` call tauri-plugin-opener's free functions, through `opener.rs`, the one module the lints let call them (§2). The plugin is never registered, so its own commands and its link-click script do not exist. Each hand-off runs on a short-lived thread, because opening a folder on Windows initialises COM on the calling thread.
+- **Windows:** a URL goes through `ShellExecuteExW`, so a browser it starts can be Navaja's child process. A folder goes through `SHOpenFolderAndSelectItems`, which Explorer opens in its own process.
+- **macOS:** `/usr/bin/open` runs briefly as Navaja's child and asks LaunchServices, so launchd, not Navaja, starts the browser or Finder.
+- **Linux:** `xdg-open` (or gio, gnome-open, kde-open) starts after a double fork and `setsid`. It leaves Navaja's process tree by parentage, but a tracer that follows forks, such as `strace -f`, still follows it and the browser.
+  - **Failures after the start go unseen:** tauri-plugin-opener, through the `open` crate, returns success as soon as the launcher has been executed, without waiting for it. A launcher that then fails, with no default browser set for example, shows no alert and logs nothing.
+- So the offline checks (the strace guard, the S2.7 capture) must never click these links, and no end-to-end test opens a URL or the logs folder.
+- **Disclosure:** `privacy.md` lists both hand-offs (roadmap M6, item 6). `SECURITY.md` does not count what the browser or file manager loads at the user's request as Navaja's traffic, even when that program is Navaja's child process.
+- **A failed hand-off** logs the error's kind and the OS error code (an HRESULT in hex), never the error's text, which can quote the URL or the path.
 
 **Input limits.** Rust checks what the webview sends:
 - `run_tool` refuses malformed tool and action ids, and logs only ids the registry knows (`<unknown>` otherwise). It caps `input` at 64 MiB of string data (object keys included) and 1,000,000 JSON nodes, and returns `core.invalid_input` above that, without echoing the input. Tauri has already parsed the IPC body by then, so the cap bounds tool work, not IPC memory.
 - Run ids are 1 to 64 ASCII letters, digits or `-`.
 - `search` reads at most 200 characters of the query.
 - `copy_text` refuses text over 64 MiB.
+- `open_url` refuses any URL that is not on its list (`open_url`'s rule above).
 
 Rust never runs a destructive action from argv.
 
@@ -198,7 +214,16 @@ Rust never runs a destructive action from argv.
   - `Permissions-Policy` denies the camera, microphone, geolocation, display capture, USB, serial, HID, Bluetooth, MIDI, payment, WebAuthn (`publickey-credentials-get`), the screen wake lock, and clipboard read and write through the async Clipboard API;
   - `X-Content-Type-Options: nosniff`.
 - **DNS prefetch:** `index.html` sets `x-dns-prefetch-control: off`, so the engine makes no speculative lookups for links.
-- **Capability:** it grants only the app's own commands, with no `core:default`, and the resolved ACL is snapshotted in `acl.lock.json`.
+- **No external links:** the page holds no external `href`. About's repository link is a button that asks `open_url`, so a middle-click, a prefetch or a navigation has nothing to follow.
+- **Capability:** it grants only the app's own commands, with no `core:default` and no plugin permission.
+  - **ACL snapshot:** `app/src-tauri/acl.lock.json` holds the resolved ACL of the release configuration: `tauri.conf.json`'s capabilities with the default features, not the e2e overlay. It lists every command the ACL lets the webview call, with its windows, webviews, origins and scopes, plus denied commands and global scopes, for Linux, macOS and Windows.
+  - **The one exemption:** Tauri lets `plugin:__TAURI_CHANNEL__|fetch` skip the ACL, so no capability grants it and the lock cannot list it; its `$comment` names it. `ipc::Channel` uses it for large payloads, such as `run_tool`'s progress, and it only returns data queued for the calling webview.
+  - **Updating it:** `cargo xtask acl` resolves it with Tauri's own code (tauri-utils, pinned to tauri's version) from what the app's build script writes, and rewrites the file. `cargo xtask check` resolves it again and fails, naming each command that differs, until the new file is committed. So a new grant is reviewed as a diff.
+  - **What it covers:** `tauri.conf.json` alone (the capabilities it names, and any inline ones), every capability file tauri-build finds under `capabilities/`, and the permission manifests of the app (from `build.rs`) and of every plugin it depends on when built with its default features (so not the `e2e` plugins). It does not cover the e2e overlay or the `TAURI_CONFIG` variable the Tauri CLI passes it in; only test builds use them.
+  - **What `cargo xtask check` refuses,** because the build would read it and the snapshot would not:
+    - a per-platform config beside `tauri.conf.json`: `tauri.<os>.conf.json`, `tauri.<os>.conf.json5` or `Tauri.<os>.toml`, for linux, macos, windows, android or ios. Tauri merges it over `tauri.conf.json` when it builds for that OS;
+    - a `generate_context!` call with arguments, such as a config path or `capabilities = [...]`, in any file under `app/src-tauri/src`, or a renamed import of the macro.
+  - **Runtime grants:** Tauri's default `dynamic-acl` feature compiles in `Manager::add_capability`, which adds a capability after start. `clippy.toml` bans it.
 - **Plugins never used:** http, fs, shell, dialog, clipboard-manager and store.
 - **Window:** one Rust builder creates it with:
   - incognito mode;
@@ -224,7 +249,7 @@ Rust never runs a destructive action from argv.
 - Tauri core `tray-icon`;
 - `single-instance`, registered first. Known issue: on macOS it hands off through a world-shared socket in `/tmp` with no peer check; the fix is roadmap M2b, item 9;
 - `window-state`;
-- `opener`;
+- `opener`, from Rust only and never registered (see "Hand-offs to other programs" above);
 - `updater` (M6);
 - `global-shortcut` (a stretch goal).
 
@@ -408,7 +433,7 @@ Installs from a package manager show that manager's upgrade command instead of i
 
 - **Settings:** a typed TOML file in `APP_DIR`. Writes are atomic, and a corrupt file is set aside. Unix permissions are 0700 for the directory and 0600 for files.
 - **`NAVAJA_APP_DIR`:** replaces `APP_DIR` in debug builds only, so tests use a throwaway directory; the end-to-end harness always sets it to a fresh temporary one (§5). Release builds ignore it.
-- **Logs:** written with tracing to `APP_DIR/logs`, rotated daily, 7 kept. They record only the tool id, action, duration and error code, never payloads.
+- **Logs:** written with tracing to `APP_DIR/logs`, rotated daily, 7 kept. They record only the tool id, action, duration and error code, never payloads. Settings and the start-failure view open the folder through `open_logs`.
 - **Crash files:** `APP_DIR/crash`, 10 kept, local only. They never contain the panic payload.
 - **Panic hook:** the app replaces the panic hook first thing in `navaja_lib::run`, once it knows `APP_DIR`. The hook records the location, the thread and a backtrace (symbols and source paths only), and it never reads the payload. It also never chains to the default hook, which would print the payload to stderr (journald on Linux).
 

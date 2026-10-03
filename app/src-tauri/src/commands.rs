@@ -4,7 +4,8 @@
 //! What the host checks before any work: run ids, the shape of tool and
 //! action ids, and the overall size of a run's input (string bytes and JSON
 //! nodes). The search query is truncated and copied text is size-capped.
-//! Each tool validates its own options (docs/architecture.md §3).
+//! `open_url` opens only the exact URLs Navaja links to. Each tool validates
+//! its own options (docs/architecture.md §3).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -15,7 +16,7 @@ use navaja_core::{
 };
 use serde::Serialize;
 use tauri::ipc::{Channel, Response};
-use tauri::{Runtime, State, WebviewWindow};
+use tauri::{AppHandle, Runtime, State, WebviewWindow};
 
 use crate::settings::{Settings, Theme};
 use crate::state::AppState;
@@ -68,6 +69,8 @@ const MAX_INPUT_NODES: usize = 1_000_000;
 /// Logged in place of a tool or action id the registry doesn't know, so
 /// text from the webview never reaches the log.
 const UNKNOWN_ID: &str = "<unknown>";
+/// `open_url`'s answer to a URL it does not open. Never echoes the URL.
+const OPEN_URL_REFUSED: &str = "Navaja opens only its own links.";
 
 #[tauri::command]
 pub fn app_info() -> AppInfo {
@@ -293,6 +296,41 @@ pub fn settings_set<R: Runtime>(
         .set(settings, |saved| apply_theme(&window, saved.theme))
 }
 
+/// Shows the log folder in the OS file manager, creating it if it is
+/// missing. Off the main thread: it touches the disk and starts a program.
+#[tauri::command(async)]
+pub fn open_logs(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    let Some(app_dir) = state.app_dir.as_deref() else {
+        return Err("Navaja has no folder for its files on this system.".to_owned());
+    };
+    let logs = crate::paths::logs_dir(app_dir);
+    crate::paths::ensure_private_dir(&logs).map_err(|error| {
+        tracing::warn!(%error, "could not create the log folder");
+        "Could not create the log folder.".to_owned()
+    })?;
+    crate::opener::open_folder(&logs)
+}
+
+/// Opens one of the URLs Navaja links to in the default browser; any other
+/// URL is refused before anything starts. Off the main thread: it starts a
+/// program.
+#[tauri::command(async)]
+pub fn open_url(url: String) -> Result<(), String> {
+    if !crate::opener::is_allowed_url(&url) {
+        // Not even the scheme: all of it comes from the webview.
+        tracing::warn!("refused to open a URL Navaja does not link to");
+        return Err(OPEN_URL_REFUSED.to_owned());
+    }
+    crate::opener::open_url(&url)
+}
+
+/// Quits through the same path as the tray's Quit, so the same clean-up
+/// runs.
+#[tauri::command]
+pub fn quit<R: Runtime>(app: AppHandle<R>) {
+    crate::quit(&app, crate::QuitFrom::Command);
+}
+
 pub fn apply_theme<R: Runtime>(window: &WebviewWindow<R>, theme: Theme) {
     let native = match theme {
         Theme::System => None,
@@ -355,6 +393,55 @@ mod tests {
             let error = precheck("uuid", action, &input).unwrap_err();
             assert_eq!(error.code, ErrorCode::UNKNOWN_ACTION, "{action:?}");
             assert_eq!(error.details, None);
+        }
+    }
+
+    /// Only refused URLs: an accepted one would start a browser.
+    #[test]
+    fn open_url_refuses_what_navaja_does_not_link_to() {
+        let repository = crate::opener::REPOSITORY;
+        for url in [
+            String::new(),
+            format!("{repository}/issues"),
+            format!("{repository}/raw/0123456789abcdef0123456789abcdef01234567/page.html"),
+            format!("{repository}/archive/0123456789abcdef0123456789abcdef01234567.zip"),
+            format!("{repository}#readme"),
+            repository.to_lowercase(),
+            "https://example.com/".to_owned(),
+            "file:///etc/passwd".to_owned(),
+        ] {
+            assert_eq!(
+                open_url(url.clone()),
+                Err("Navaja opens only its own links.".to_owned()),
+                "{url:?}"
+            );
+        }
+    }
+
+    /// At `trace` level, a refused URL reaches neither the log nor the
+    /// error the webview gets back.
+    #[test]
+    fn a_refused_url_is_never_logged_or_echoed() {
+        let canary = crate::test_support::canary();
+        let urls = [
+            canary.clone(),
+            format!("https://{canary}.example/"),
+            format!("{}/{canary}", crate::opener::REPOSITORY),
+            format!("{}#{canary}", crate::opener::REPOSITORY),
+            format!("javascript:{canary}"),
+        ];
+        let (errors, log): (Vec<String>, _) = crate::test_support::capture_log(|| {
+            urls.into_iter()
+                .map(|url| open_url(url).unwrap_err())
+                .collect()
+        });
+
+        // The refusals were logged, so the capture works.
+        assert_eq!(log.matches("refused to open a URL").count(), 5, "{log}");
+        let canary = canary.to_ascii_lowercase();
+        assert!(!log.to_ascii_lowercase().contains(&canary), "{log}");
+        for error in errors {
+            assert!(!error.to_ascii_lowercase().contains(&canary), "{error}");
         }
     }
 
@@ -425,6 +512,7 @@ mod tests {
         Arc::new(AppState::new(
             registry,
             crate::settings::SettingsStore::load(None),
+            None,
         ))
     }
 
