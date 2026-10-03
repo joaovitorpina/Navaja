@@ -1,0 +1,184 @@
+name: spikes
+
+# Spike steps that need no human (docs/roadmap.md §2; results go in
+# docs/spikes.md). Run by hand from the Actions tab, and on a PR that changes
+# this workflow or scripts/spikes/.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/spikes.yml
+      - scripts/spikes/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spikes-${{ github.ref }}
+  # Cancel superseded PR runs only; a run started by hand keeps its result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The same as ci.yml, so that rust-cache computes the same cache key.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+jobs:
+  # S2.2: can a custom view live in tools/<id>/ui/, outside app/? A throwaway
+  # tool with a custom view (scripts/spikes/s2-2-probe.sh) goes through every
+  # check the roadmap's PASS names, each in its own step. A failed check
+  # doesn't stop the ones after it, and the last step writes a PASS/FAIL
+  # table to the run's summary.
+  s2-2:
+    name: S2.2 views outside app/ (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pinned runner labels (never -latest), as in ci.yml.
+        os: [windows-2025, ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    # As ci.yml's os job: a hung end-to-end run fails here instead of holding
+    # the runner for 6 h.
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Linux system packages for Tauri and the end-to-end run
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential file libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev xvfb dbus
+
+      - name: Install Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      # Restores what ci.yml's os job saved on main, under the same key. The
+      # spike never saves: its target directory holds the probe.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ${{ matrix.os }}
+          save-if: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: a. Create the probe tool in tools/probe/
+        id: probe
+        run: bash scripts/spikes/s2-2-probe.sh create
+
+      - name: b. Registry accepts the probe (cargo test -p navaja-tools)
+        id: registry
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
+        run: bash scripts/spikes/s2-2-check.sh registry
+
+      - name: c. svelte-check type-checks the view (pnpm check)
+        id: check
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
+        run: pnpm check
+
+      - name: d. ESLint and Prettier pass the view (pnpm lint)
+        id: lint
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
+        run: pnpm lint
+
+      - name: d. ESLint refuses a forbidden import in the view
+        id: lint_refuses
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
+        run: bash scripts/spikes/s2-2-check.sh lint-refuses
+
+      - name: e. Vitest runs the view's test (pnpm test)
+        id: vitest
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
+        run: bash scripts/spikes/s2-2-check.sh vitest
+
+      - name: f. The build gives the view its own chunk and its CSS (pnpm build)
+        id: build
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
+        run: bash scripts/spikes/s2-2-check.sh build
+
+      - name: g. Build the app for the end-to-end run
+        id: packaged_build
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
+        run: pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
+
+      # The probe's spec only, not the suite. On Linux inside dbus-run-session
+      # and xvfb-run, as in ci.yml, but without the strace network guard,
+      # which runs the whole suite and is ci.yml's job.
+      - name: g. The packaged app shows the view and its answer from Rust
+        id: packaged
+        if: ${{ !cancelled() && steps.packaged_build.outcome == 'success' }}
+        run: bash scripts/spikes/s2-2-check.sh packaged
+
+      - name: h. Vite hot-reloads the view and its import (HMR)
+        id: hmr
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
+        run: node scripts/spikes/hmr-check.mjs
+
+      # Also proves that `remove` puts tools/lib.rs back on every OS.
+      - name: Remove the probe; the tree is clean again
+        id: remove
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
+        run: |
+          bash scripts/spikes/s2-2-probe.sh remove
+          changes=$(git status --porcelain)
+          if [ -n "$changes" ]; then
+            echo "::error::files left after removing the probe:"
+            printf '%s\n' "$changes"
+            exit 1
+          fi
+
+      - name: i. Summary
+        if: always()
+        env:
+          OS: ${{ matrix.os }}
+          PROBE: ${{ steps.probe.outcome }}
+          REGISTRY: ${{ steps.registry.outcome }}
+          CHECK: ${{ steps.check.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          LINT_REFUSES: ${{ steps.lint_refuses.outcome }}
+          VITEST: ${{ steps.vitest.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          PACKAGED_BUILD: ${{ steps.packaged_build.outcome }}
+          PACKAGED: ${{ steps.packaged.outcome }}
+          HMR: ${{ steps.hmr.outcome }}
+          REMOVE: ${{ steps.remove.outcome }}
+        run: |
+          result() {
+            case "$1" in
+              success) echo PASS ;;
+              failure) echo FAIL ;;
+              skipped | '') echo 'not run' ;;
+              *) echo "$1" ;;
+            esac
+          }
+          {
+            echo "### S2.2 views outside app/: $OS"
+            echo
+            echo '| Check | Result |'
+            echo '|---|---|'
+            echo "| a. Probe created (\`s2-2-probe.sh create\`) | $(result "$PROBE") |"
+            echo "| b. Registry accepts it (\`cargo test -p navaja-tools\`) | $(result "$REGISTRY") |"
+            echo "| c. svelte-check (\`pnpm check\`) | $(result "$CHECK") |"
+            echo "| d. ESLint and Prettier pass the view (\`pnpm lint\`) | $(result "$LINT") |"
+            echo "| d. ESLint refuses a forbidden import | $(result "$LINT_REFUSES") |"
+            echo "| e. Vitest runs the view's test (\`pnpm test\`) | $(result "$VITEST") |"
+            echo "| f. Build: own chunk, Tailwind class in the CSS (\`pnpm build\`) | $(result "$BUILD") |"
+            echo "| g. Packaged app builds (\`tauri build --features e2e\`) | $(result "$PACKAGED_BUILD") |"
+            echo "| g. Packaged app shows the view and the answer from Rust | $(result "$PACKAGED") |"
+            echo "| h. HMR for the view and its import | $(result "$HMR") |"
+            echo "| Probe removed, tree clean | $(result "$REMOVE") |"
+          } >> "$GITHUB_STEP_SUMMARY"
