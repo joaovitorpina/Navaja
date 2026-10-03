@@ -36,9 +36,10 @@ Copy this for each spike and fill it in.
 - **Time box:** ½ d
 - **Question:** can a custom view and its tests live in `tools/<id>/ui/`, outside `app/`, and still be type-checked, tested, built, hot-reloaded and packaged like code in `app/src`?
 - **Method:** Windows 11 Pro 10.0.26300, Node 24.15.0, pnpm 11.28.3, Vite 8.3.2, Vitest 5.0.3, svelte-check 4.7.6, Svelte 5.57.1. A throwaway `tools/probe/ui/` held `View.svelte` (importing `$lib/view-kit`, `$bindings/Category` and `./label.ts`), `label.ts`, and `View.test.ts` (importing `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`). Runs: a view with a type error plus a test that fails on purpose; a view importing a missing `./` module; a correct view with a passing test, then `vite build`; a view using a Tailwind class found nowhere else, then `vite build`. Each resolution setting below was also removed once to confirm it is needed. The probe was deleted afterwards.
+  - **ESLint and Prettier** (later on 2026-10-03; ESLint 10.11.0, typescript-eslint 8.71.0, eslint-plugin-svelte 3.23.0, Prettier 3.9.9, prettier-plugin-svelte 4.1.1): a second throwaway `tools/probe/ui/` held `View.svelte`, `label.ts`, `View.test.ts` and `sub/helper.js`, with one allowlist violation of each kind plus `/* eslint-disable */`, `// eslint-disable-next-line` and `<!-- eslint-disable -->` comments. The real `pnpm lint` ran on it, then the Prettier half of the script on its own, since the ESLint half stops the script first. The layouts that fail were tried too: the config only in `app/`, and a config file planted in `tools/probe/ui/`. That probe was deleted as well.
 - **PASS if:** HMR, build, packaged app, svelte-check, ESLint and Vitest all work on 3 OSes
 - **FAIL then:** tsconfig and Vitest aliases; otherwise `app/src/tools/<id>/` (needs sign-off)
-- **Result:** not finished (2026-10-03). svelte-check, Vitest and `vite build` work on Windows, but only with the tsconfig, Vite and Tailwind settings below. HMR, the packaged app, ESLint, macOS and Linux are not verified yet.
+- **Result:** not finished (2026-10-03). svelte-check, Vitest, `vite build`, ESLint and Prettier work on Windows, but only with the tsconfig, Vite, Tailwind, ESLint and Prettier settings below. HMR, the packaged app, macOS and Linux are not verified yet.
 - **Numbers and evidence:**
 
   | Check (Windows) | Without settings (PR #4 head) | With settings |
@@ -50,17 +51,28 @@ Copy this for each spike and fill it in.
   | Vitest, test importing `@testing-library/svelte` | `Failed to resolve import` | passes (render, click, `copy_text` mocked) |
   | `vite build`, the view | builds (these settings don't affect it) | its own lazy chunk (`View-*.js`) |
   | `vite build`, a Tailwind class used only in the view | missing from the CSS: `@source '../../tools/*/ui'` matched nothing | in the CSS with `@source '../../tools/*/ui/**/*.{svelte,ts}'` |
-  | HMR, packaged app (`tauri build`), ESLint, macOS, Linux | not run | not run |
+  | ESLint, a view file, config only in `app/`, run from `app/` with `--config` | `File ignored because outside of base path`, a warning: exit 0 | — |
+  | ESLint, the same, run from `app/` with config lookup | `ESLint couldn't find an eslint.config.* file`: exit 2 | — |
+  | ESLint, every violation in the probe (`pnpm lint`) | — | all reported: 13 `navaja/view-imports` errors in 4 files, plus 3 from the base rules (`svelte/no-svelte-internal`, and `no-require-imports` and `no-undef` on `require`); the allowed imports in the same files pass; exit 1 |
+  | ESLint, `/* … */` and `// eslint-disable…` in a view | — | ignored; ESLint warns each "has no effect because you have 'noInlineConfig' setting", which `--max-warnings 0` fails |
+  | ESLint, `<!-- eslint-disable -->` above an `import()` in markup | — | ignored: the import is still reported |
+  | ESLint, `export default []` planted as `tools/probe/ui/eslint.config.js` | with config lookup it wins: the view's files come out as `File ignored because no matching configuration was supplied` | `--config eslint.config.mjs` ignores it; the violations are reported |
+  | Prettier, the probe files | — | the shared config applies, through `--config` and through lookup of the root `prettier.config.mjs` alike (the single-quoted `.ts` files pass), and `.svelte` goes through the plugin: the over-long line in `View.svelte` fails the check, exit 1 |
+  | HMR, packaged app (`tauri build`), macOS, Linux | not run | not run |
 
-  The "without" column for the type error, the missing import and the failing test comes from the PR #4 review, which ran the same probe on the PR head. The other rows were run here.
+  The "without" column for the type error, the missing import and the failing test comes from the PR #4 review, which ran the same probe on the PR head. For the ESLint rows, "without" means the config sits in `app/` alone, or a tool folder holds its own. The other rows were run here.
 
   The resolution failures come from pnpm's isolated layout: it installs packages under `app/node_modules` only, so bare imports from `tools/` find nothing. `svelte` and `$bindings/*` were not affected (vite-plugin-svelte dedupes `svelte`, and `$bindings` is an alias).
-- **Decision:** keep custom views in `tools/<id>/ui/`; the `app/src/tools/<id>/` fallback is not needed so far. The settings that make it work, all in `app/`:
+
+  ESLint 10 looks for a config from each linted file's folder upwards, so files in `tools/` never find one in `app/`. With `--config`, the base path is the working directory, and it skips files outside it with only a warning. Prettier also looks its config up from each file, and it loads plugins named as strings from the working directory.
+- **Decision:** keep custom views in `tools/<id>/ui/`; the `app/src/tools/<id>/` fallback is not needed so far. The settings that make it work, all in `app/` apart from the two root config files that load ESLint's and Prettier's:
   - `tsconfig.json` includes `../tools/*/ui/**/*.ts` and `../tools/*/ui/**/*.svelte`, and maps `vitest`, `@testing-library/svelte` and `@tauri-apps/api/*` to `./node_modules/` through `paths`.
   - `vite.config.ts` adds `../tools/*/ui/**/*.test.ts` to Vitest's `include` and, under Vitest only, sets `resolve.dedupe` to those three packages so they resolve from `app/`. A view test that needs another package must be added to both lists.
   - `app.css` names the view files in its `@source` glob; a glob ending in a directory finds no classes.
   - `$lib/view-kit` exists and is what views import from the shell. ToolHost types the glob against its `ViewProps`.
-  - Still open before S2.2 can pass: HMR and the packaged app on Windows, the same checks on macOS and Linux in CI, and the ESLint import allowlist (tracked in roadmap M2a, item 7). Once it passes, this entry needs an ADR for the tsconfig and Vite settings, since the roadmap counts them as the first fallback.
+  - ESLint's config is `app/eslint/config.js`, loaded by the root `eslint.config.mjs`, so its base path is the repository root and its patterns cover `app/` and `tools/*/ui/`. `pnpm lint` runs from the root with `--config eslint.config.mjs`, so a config file placed under `tools/` is never used. The import allowlist (architecture §4) is in place, and `app/eslint/config.test.ts` runs the real config through ESLint's Node API on a file under `tools/`, so a change that drops `tools/` fails a test.
+  - Prettier's config is `app/prettier.config.js`, loaded by the root `prettier.config.mjs`. It resolves the Svelte plugin from `app/`.
+  - Still open before S2.2 can pass: HMR and the packaged app on Windows, and the same checks on macOS and Linux in CI (CI runs `pnpm lint` on Linux only, in the checks job). Once it passes, this entry needs an ADR for the tsconfig and Vite settings, since the roadmap counts them as the first fallback.
 
 ## S2.3 Tray icon
 

@@ -20,6 +20,7 @@ Navaja/
 ├── Cargo.toml            virtual workspace: crates/*, tools, app/src-tauri, xtask · [workspace.lints]
 ├── rust-toolchain.toml · clippy.toml · deny.toml · release-plz.toml · renovate.json · .gitattributes (eol=lf)
 ├── package.json · pnpm-workspace.yaml   (pnpm 11 pinned via packageManager; workspace root lets Vite serve ../tools)
+├── eslint.config.mjs · prettier.config.mjs · .prettierignore   (load app/'s configs from the root, so they also cover tools/*/ui)
 ├── .github/workflows/    ci · advisories · bundle · spikes · release · release-build
 ├── crates/
 │   ├── navaja-core/      Tool, ToolMeta, UiSpec, payload types, ToolError, Ctx, Registry, search::rank, sys::spawn_system
@@ -37,6 +38,7 @@ Navaja/
 │   ├── src/generic/      GeneratorView · TransformView · OptionControl · OutputView (one renderer per OutputKind)
 │   ├── src/editor/       CodeMirror 6 {@attach} + size thresholds
 │   ├── e2e/              wdio.conf.ts · strace-guard.sh (Linux) · support/ · specs/{launch,smoke,single-instance,egress,json,ports}.e2e.ts
+│   ├── eslint/           config.js (ESLint) · view-imports.js (the custom-view import allowlist, §4) · their tests
 │   └── src-tauri/        crate navaja · features: default [docker], updater (M6), e2e
 │       ├── tauri.conf.json · tauri.release.conf.json (updater artifacts + pubkey) · e2e.conf.json
 │       ├── capabilities/main.json · acl.lock.json · nsis/hooks.nsh
@@ -140,8 +142,15 @@ register_tools! {
 | **New capability, output kind or host service** | A separate, reviewed `host-change` PR | none |
 
 - **Strings:** text goes through `t(key, fallback)`. Keys derive from the tool id, action, option and error code, and Rust's English text is the fallback, so a text tool needs no `.ts` edit. A custom view adds its own `tools/<id>/ui/i18n/en.ts`.
-- **Custom views:** they import only `./`, `svelte`, `$lib/view-kit` and `$bindings/*`, enforced by an ESLint allowlist. The shell finds them with `import.meta.glob('@tools/*/ui/View.svelte')`.
-  - The ESLint allowlist is not in place yet; see roadmap M2a, item 7.
+- **Custom views** live in `tools/<id>/ui/`. The shell finds them with `import.meta.glob('@tools/*/ui/View.svelte')`.
+  - **Imports:** the ESLint rule `navaja/view-imports` (`app/eslint/view-imports.js`) applies to every script file under `tools/*/ui/`. A view may import only:
+    - relative paths that resolve inside its own `tools/<id>/ui/` folder, written without back slashes or percent escapes;
+    - `svelte` and its subpaths, except `svelte/internal` and anything under it;
+    - `$lib/view-kit`, exactly;
+    - `$bindings/<name>` and `$bindings/<dir>/<name>`, with no `.` or `..` segments.
+  - **Tests:** a view's `*.test.ts` and `*.spec.ts` files may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`, and nothing else.
+  - **Forms checked:** static, type-only and side-effect imports, `export … from`, `import()` and `require()`, TypeScript's `import x = require()` and `typeof import()`, and `new URL('./x', import.meta.url)`. A computed specifier is an error, and `import.meta.glob` is not allowed.
+  - **No opt-out:** a view can't switch rules off with a comment (`noInlineConfig`, plus markup `<!-- eslint-disable -->`). `pnpm lint` runs ESLint from the repository root with `--config`, so a config file placed under `tools/` is never used. CI runs `pnpm lint` in the checks job.
   - **(S2.2)** If views outside `app/` turn out not to work, the fallback is `app/src/tools/<id>/`. That would be a brief deviation and needs sign-off.
 - **Tool preferences** never become shell `Settings` fields. `Settings.tools`, a TOML table per tool id, is reserved until a tool needs it.
 
@@ -256,6 +265,7 @@ Rust never runs a destructive action from argv.
   **(S3.1)** tunes these thresholds.
 - **Components:** Bits UI 2 with shadcn-svelte copies, Tailwind v4 tokens and system fonts.
 - **Accessibility:** landmarks, F6 to cycle panes, Esc, a live region, and real tables with `aria-sort`.
+- **Lint:** `pnpm lint` runs ESLint (the recommended JavaScript, TypeScript and Svelte rules, plus the custom-view allowlist from §4) and Prettier over `app/` and `tools/*/ui/`. `pnpm format` applies Prettier.
 - **Tests:** Vitest with `mockIPC` and axe, and WebdriverIO end-to-end tests on all three OSes **(S2.6)**.
   - The end-to-end tests drive the real debug app through its embedded WebDriver server (§5). On Linux they run under the strace network guard (roadmap §2).
   - axe is not wired in yet. It joins Vitest in M3 (roadmap M3, item 3).

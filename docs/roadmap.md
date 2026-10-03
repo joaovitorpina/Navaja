@@ -63,8 +63,8 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
    - the shell;
    - the generic views with Generator and Text outputs;
    - theme;
-   - accessibility basics.
-   - **Still to do:** ESLint (flat config) with the custom-view import allowlist from architecture §4, scoped to `tools/*/ui/**`, and `pnpm lint` in the CI checks job. `$lib/view-kit` exists and is the one app module the allowlist lets custom views import. This must land before the first custom view (the M4 port inspector).
+   - accessibility basics;
+   - ESLint (flat config) and Prettier as `pnpm lint`, run in the CI checks job, with the custom-view import allowlist from architecture §4 on `tools/*/ui/**`. `$lib/view-kit` is the one app module it lets custom views import.
 8. **Window code:** `window.rs`, `guard.rs`, and `args.rs` with single instance and the elevation banner.
 9. **Tray:** a minimal tray with placeholder icons (Open, Search, `meta.tray` entries, Quit). **S2.3** runs on it before M2a exit. The StatusNotifier host check moved to M2b, item 1, beside S2.4.
 10. **End-to-end tests:** smoke (palette → UUID), single instance, a first launch with `--tool`, and the egress canary. A Linux strace guard is added, then **S2.6** and **S2.7**.
@@ -294,7 +294,7 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 
 | Workflow | Runs |
 |---|---|
-| `ci.yml` checks (ubuntu-24.04) | fmt, ESLint, svelte-check, cargo-deny on 4 targets, `xtask check`, `bindings --check`, `tool-gate`, the JS licence allowlist, gitleaks over fixtures and snapshots |
+| `ci.yml` checks (ubuntu-24.04) | fmt, ESLint and Prettier (`pnpm lint`), svelte-check, cargo-deny on 4 targets, `xtask check`, `bindings --check`, `tool-gate`, the JS licence allowlist, gitleaks over fixtures and snapshots |
 | `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --no-bundle` → the same build with `--features e2e` and `e2e.conf.json` → WebdriverIO. Linux runs the suite under the strace guard, inside `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The job stops after 45 min, so a hung run fails instead of holding the runner for GitHub's 6 h. macOS also runs `cargo check --target x86_64-apple-darwin` |
 | `advisories.yml` | Daily `cargo deny check advisories`. Opens an issue but never blocks a PR |
 | `bundle.yml` | Weekly, keyless build of the release matrix: NSIS and zip, universal DMG, deb, rpm and AppImage in `container: ubuntu:22.04` |
