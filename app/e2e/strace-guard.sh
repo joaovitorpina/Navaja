@@ -57,19 +57,29 @@ exec strace -f -qq -I1 --kill-on-exit -e trace=connect,sendto,sendmsg,sendmmsg -
 EOF
 chmod +x "$wrapper"
 
+# A Navaja already running from the same build (say, `pnpm tauri dev`) is
+# not this run's: it is never reported or killed.
+before="$(pgrep -f "$binary" || true)"
+ours() {
+  pgrep -f "$binary" | grep -vxF -f <(printf '%s\n' "$before") || true
+}
+
 status=0
 NAVAJA_E2E_BINARY="$wrapper" pnpm e2e || status=$?
 
 # Nothing the suite started may outlive it. The kernel ends the traced
 # processes once strace exits, which can take a moment.
 for _ in $(seq 20); do
-  pgrep -f "$binary" > /dev/null || break
+  [ -z "$(ours)" ] && break
   sleep 0.25
 done
-if pgrep -f "$binary" > /dev/null; then
+left="$(ours)"
+if [ -n "$left" ]; then
   echo "::error::network guard: app processes are still running after the end-to-end run"
-  pgrep -af "$binary" || true
-  pkill -KILL -f "$binary" || true
+  for pid in $left; do
+    ps -o pid=,args= -p "$pid" || true
+    kill -KILL "$pid" 2> /dev/null || true
+  done
   status=1
 fi
 

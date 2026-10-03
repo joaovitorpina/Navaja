@@ -361,6 +361,14 @@ fn config_problems(root: &Path) -> Result<Vec<String>> {
 
 fn tauri_config_problems(config: &Value) -> Vec<String> {
     let mut problems = Vec::new();
+    // `tauri build` passes these to cargo, which would put features such as
+    // `e2e` into release builds behind the back of release_feature_problems.
+    if !config["build"]["features"].is_null() {
+        problems.push(
+            "tauri.conf.json: build.features must not be set; release builds use the              crate's default features only"
+                .to_owned(),
+        );
+    }
     let app = &config["app"];
     if app["withGlobalTauri"].as_bool().unwrap_or(false) {
         problems.push("tauri.conf.json: app.withGlobalTauri must be false".to_owned());
@@ -411,6 +419,35 @@ const E2E_OVERLAY_ALLOWED: &[&[&str]] = &[
 fn e2e_overlay_problems(overlay: &Value) -> Vec<String> {
     let mut problems = Vec::new();
     overlay_walk(overlay, &mut Vec::new(), &mut problems);
+    let capabilities = &overlay["app"]["security"]["capabilities"];
+    for capability in capabilities.as_array().into_iter().flatten() {
+        problems.extend(e2e_capability_problems(capability));
+    }
+    problems
+}
+
+/// Inline capabilities in the overlay add WebdriverIO's own permissions and
+/// nothing else: no core or other plugin permissions, and no remote origins.
+/// Capability names refer to files in capabilities/, checked on their own.
+fn e2e_capability_problems(capability: &Value) -> Vec<String> {
+    let mut problems = Vec::new();
+    if capability.is_string() {
+        return problems;
+    }
+    if !capability["remote"].is_null() {
+        problems.push("e2e.conf.json: an e2e capability may not grant remote origins".to_owned());
+    }
+    for permission in capability["permissions"].as_array().into_iter().flatten() {
+        let id = permission
+            .as_str()
+            .or_else(|| permission["identifier"].as_str())
+            .unwrap_or("");
+        if !id.starts_with("wdio:") {
+            problems.push(format!(
+                "e2e.conf.json: e2e capability permission {id:?} is not one of WebdriverIO's"
+            ));
+        }
+    }
     problems
 }
 
@@ -537,6 +574,10 @@ mod tests {
         let mut global = good.clone();
         global["app"]["withGlobalTauri"] = json!(true);
         assert!(!tauri_config_problems(&global).is_empty());
+
+        let mut features = good.clone();
+        features["build"] = json!({ "features": ["e2e"] });
+        assert!(!tauri_config_problems(&features).is_empty());
     }
 
     fn dependency(name: &str, rename: Option<&str>, optional: bool) -> Dependency {
@@ -727,6 +768,22 @@ mod tests {
             );
         }
         assert!(!e2e_overlay_problems(&json!([])).is_empty());
+
+        for capability in [
+            json!({ "identifier": "e2e", "permissions": ["core:default"] }),
+            json!({ "identifier": "e2e", "permissions": [{ "identifier": "fs:read-all" }] }),
+            json!({ "identifier": "e2e", "permissions": ["wdio:default"],
+                    "remote": { "urls": ["https://example.com"] } }),
+        ] {
+            let overlay =
+                json!({ "app": { "security": { "capabilities": ["main", capability] } } });
+            assert_eq!(
+                e2e_overlay_problems(&overlay).len(),
+                1,
+                "{overlay}: {:?}",
+                e2e_overlay_problems(&overlay)
+            );
+        }
     }
 
     #[test]
