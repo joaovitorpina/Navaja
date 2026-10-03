@@ -1,5 +1,6 @@
-# Prettier formats only the code ESLint lints (the "lint" and "format" scripts
-# in app/package.json). These keep the form their tools give them.
+# Prettier checks ("lint") and formats ("format", both in app/package.json)
+# every file it can parse under app/ and tools/*/ui/: not only the code ESLint
+# lints, but JSON, CSS and HTML too. These keep the form their tools give them.
 
 # ts-rs output; `cargo xtask bindings --check` compares it byte for byte.
 app/src/bindings/
