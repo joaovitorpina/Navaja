@@ -1,7 +1,10 @@
-// ESLint for the app and for custom views. The root eslint.config.mjs loads
-// this file, so patterns here are relative to the repository root: custom views
-// live in tools/<id>/ui/, outside app/, and ESLint skips files outside the
-// folder of the config it uses (docs/spikes.md S2.2).
+// ESLint for the app and for custom views. Patterns here are relative to the
+// repository root, which must be ESLint's base path: custom views live in
+// tools/<id>/ui/, outside app/, and ESLint skips files outside its base path
+// (docs/spikes.md S2.2). With --config (`pnpm lint`, config.test.ts) the base
+// path is the working directory, so both run from the root. With config lookup
+// (editors) it is the folder of the eslint.config.* found: the root
+// eslint.config.mjs, which loads this file.
 import js from '@eslint/js';
 import prettier from 'eslint-config-prettier/flat';
 import svelte from 'eslint-plugin-svelte';
