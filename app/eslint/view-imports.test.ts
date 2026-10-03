@@ -22,6 +22,15 @@ const NESTED_TS = ui(join('parts', 'row.ts'));
 const TEST = ui('View.test.ts');
 const SPEC = ui('View.spec.ts');
 
+// Windows names, written out: a drive path, a UNC path (\\host\share\…) and a
+// \\?\ path, each with a file in a subfolder.
+const WIN = 'C:\\repo\\tools\\demo\\ui\\label.ts';
+const WIN_NESTED = 'C:\\repo\\tools\\demo\\ui\\parts\\row.ts';
+const UNC = '\\\\host\\share\\repo\\tools\\demo\\ui\\label.ts';
+const UNC_NESTED = '\\\\host\\share\\repo\\tools\\demo\\ui\\parts\\row.ts';
+const LONG = '\\\\?\\C:\\repo\\tools\\demo\\ui\\label.ts';
+const LONG_NESTED = '\\\\?\\C:\\repo\\tools\\demo\\ui\\parts\\row.ts';
+
 const svelte = {
   parser: svelteParser,
   parserOptions: { parser: ts.parser },
@@ -55,6 +64,13 @@ tester.run('view-imports', rule, {
     view("  import { label } from '../label';", NESTED),
     { code: "import { label } from '../label';", filename: NESTED_TS },
     { code: "import { label } from '../ui/label';", filename: TS },
+    // Windows names, so that every OS runs the back-slash handling.
+    { code: "import { label } from './label';", filename: WIN },
+    { code: "import { label } from '../label';", filename: WIN_NESTED },
+    { code: "import { label } from './label';", filename: UNC },
+    { code: "import { label } from '../label';", filename: UNC_NESTED },
+    { code: "import { label } from './label';", filename: LONG },
+    { code: "import { label } from '../label';", filename: LONG_NESTED },
     // svelte and its browser subpaths.
     { code: "import { onMount } from 'svelte';", filename: TS },
     { code: "import type { HTMLAttributes } from 'svelte/elements';", filename: TS },
@@ -111,6 +127,12 @@ tester.run('view-imports', rule, {
     notAllowed("import x from '../uix/y';"),
     notAllowed("import x from '../../x';", NESTED_TS),
     notAllowed("import x from '../../../app/src/lib/ipc';"),
+    notAllowed("import x from '../x';", WIN),
+    notAllowed("import x from '../../x';", WIN_NESTED),
+    notAllowed("import x from '../x';", UNC),
+    notAllowed("import x from '../../x';", UNC_NESTED),
+    notAllowed("import x from '../x';", LONG),
+    notAllowed("import x from '../../x';", LONG_NESTED),
     // Forms some resolvers read differently: back slashes, percent escapes.
     notAllowed("import x from './sub\\\\..\\\\..\\\\x';"),
     notAllowed("import x from './%2e%2e/x';"),
