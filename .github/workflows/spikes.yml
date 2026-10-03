@@ -95,7 +95,7 @@ jobs:
         if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
         run: pnpm lint
 
-      - name: d. ESLint refuses a forbidden import in the view
+      - name: d. ESLint refuses forbidden imports in the view (.ts and .svelte)
         id: lint_refuses
         if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
         run: bash scripts/spikes/s2-2-check.sh lint-refuses
@@ -174,7 +174,7 @@ jobs:
             echo "| b. Registry accepts it (\`cargo test -p navaja-tools\`) | $(result "$REGISTRY") |"
             echo "| c. svelte-check (\`pnpm check\`) | $(result "$CHECK") |"
             echo "| d. ESLint and Prettier pass the view (\`pnpm lint\`) | $(result "$LINT") |"
-            echo "| d. ESLint refuses a forbidden import | $(result "$LINT_REFUSES") |"
+            echo "| d. ESLint refuses forbidden imports | $(result "$LINT_REFUSES") |"
             echo "| e. Vitest runs the view's test (\`pnpm test\`) | $(result "$VITEST") |"
             echo "| f. Build: own chunk, Tailwind class in the CSS (\`pnpm build\`) | $(result "$BUILD") |"
             echo "| g. Packaged app builds (\`tauri build --features e2e\`) | $(result "$PACKAGED_BUILD") |"

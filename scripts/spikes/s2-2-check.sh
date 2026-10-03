@@ -7,7 +7,7 @@
 # Usage, from anywhere in the repository, after `pnpm install` and
 # `bash scripts/spikes/s2-2-probe.sh create`:
 #   bash scripts/spikes/s2-2-check.sh registry      # cargo test -p navaja-tools, the probe's own test included
-#   bash scripts/spikes/s2-2-check.sh lint-refuses  # pnpm lint fails on a forbidden import and names it
+#   bash scripts/spikes/s2-2-check.sh lint-refuses  # pnpm lint fails on forbidden imports (.ts and .svelte) and names them
 #   bash scripts/spikes/s2-2-check.sh vitest        # pnpm test, with the probe's View.test.ts among the passes
 #   bash scripts/spikes/s2-2-check.sh build         # pnpm build: the view in a chunk of its own, its class in the CSS
 #   bash scripts/spikes/s2-2-check.sh packaged      # the probe's end-to-end spec, after the e2e build
@@ -57,13 +57,14 @@ lint_refuses() {
   # ESLint's formatter colours it otherwise.
   FORCE_COLOR=0 pnpm lint > "$log" 2>&1 || status=$?
   cat "$log"
-  [ "$status" -ne 0 ] || fail "lint: pnpm lint passed with a forbidden import in tools/probe/ui/forbidden.ts"
+  [ "$status" -ne 0 ] || fail "lint: pnpm lint passed with forbidden imports in tools/probe/ui/"
   grep -q 'forbidden\.ts' "$log" || fail "lint: the output does not name forbidden.ts"
+  grep -q 'Forbidden\.svelte' "$log" || fail "lint: the output does not name Forbidden.svelte"
   grep -qF "'\$lib/ipc' is not allowed here" "$log" || fail "lint: the output does not name '\$lib/ipc'"
   grep -qF 'navaja/view-imports' "$log" || fail "lint: the error is not from navaja/view-imports"
-  grep -qF '1 problem (1 error, 0 warnings)' "$log" ||
-    fail "lint: expected exactly one problem, the forbidden import"
-  echo "pnpm lint failed (exit $status) on the forbidden import, and named it."
+  grep -qF '2 problems (2 errors, 0 warnings)' "$log" ||
+    fail "lint: expected exactly two problems, the forbidden imports"
+  echo "pnpm lint failed (exit $status) on both forbidden imports, and named them."
 }
 
 vitest() {

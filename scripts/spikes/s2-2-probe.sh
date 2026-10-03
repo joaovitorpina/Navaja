@@ -34,6 +34,7 @@ PROBE=tools/probe
 SPEC_DIR=app/e2e/spikes
 SPEC="$SPEC_DIR/s2-2-probe.e2e.ts"
 FORBIDDEN="$PROBE/ui/forbidden.ts"
+FORBIDDEN_VIEW="$PROBE/ui/Forbidden.svelte"
 
 fail() {
   echo "::error::s2-2-probe: $*"
@@ -284,12 +285,20 @@ import { listTools } from '$lib/ipc';
 
 export const forbidden = listTools;
 EOF
-  echo "Forbidden import written: $FORBIDDEN."
+  # The same kind of import in a component, so the check covers .svelte too.
+  cat > "$FORBIDDEN_VIEW" <<'EOF'
+<script lang="ts">
+  import { searchTools } from '$lib/ipc';
+
+  void searchTools;
+</script>
+EOF
+  echo "Forbidden imports written: $FORBIDDEN and $FORBIDDEN_VIEW."
 }
 
 unforbid() {
-  rm -f "$FORBIDDEN"
-  echo "Forbidden import removed."
+  rm -f "$FORBIDDEN" "$FORBIDDEN_VIEW"
+  echo "Forbidden imports removed."
 }
 
 remove() {
