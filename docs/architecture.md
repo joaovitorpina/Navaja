@@ -170,15 +170,13 @@ register_tools! {
 | `app_info`, `shell_ready` | |
 | `open_logs` | Shows `APP_DIR/logs` in the file manager, creating it (privately) if it is missing. An error if Navaja has no `APP_DIR` |
 | `quit` | The tray's Quit path, so the `RunEvent::Exit` clean-up runs. Logs whether the tray or the command asked |
-| `open_url(url)` | Only the repository's pages, checked exactly (below) and then handed to the browser unchanged |
+| `open_url(url)` | Only the URLs Navaja links to, compared exactly (below) and then handed to the browser unchanged |
 | `update_check`, `update_install` | Behind the `updater` feature (M6) |
 
-**`open_url`'s rule.** The URL must be at most 256 bytes and:
-- start with exactly `https://github.com/joaovitorpina/Navaja` (scheme, host, owner and repository are case-sensitive);
-- continue with any number of `/segment`, then optionally `#fragment`;
-- use only letters, digits, `.`, `_` and `-` in segments and the fragment, neither of which may be empty; a segment is never `.` or `..`.
-
-So there is no query, percent-encoding, userinfo, port, backslash, whitespace or control character. A refusal is logged without the URL, not even its scheme.
+**`open_url`'s rule.** The URL must equal, byte for byte, one entry of `ALLOWED_URLS` in `opener.rs`: the URLs the front end links to. Today that is only the repository, `https://github.com/joaovitorpina/Navaja`.
+- Pages under the repository are refused too. GitHub serves a fork's commits under the parent's URLs (`/raw/<sha>/…`, `/archive/<sha>.zip`), so a rule for paths would let a page open content anyone can push.
+- A new link adds its exact URL to the list.
+- A refusal is logged without the URL, not even its scheme.
 
 **Hand-offs to other programs.** `open_url` and `open_logs` call tauri-plugin-opener's free functions. The plugin is never registered, so its own commands and its link-click script do not exist. Each hand-off runs on a short-lived thread, because opening a folder on Windows initialises COM on the calling thread.
 - **Windows:** a URL goes through `ShellExecuteExW`, so a browser it starts can be Navaja's child process. A folder goes through `SHOpenFolderAndSelectItems`, which Explorer opens in its own process.
@@ -191,7 +189,7 @@ So there is no query, percent-encoding, userinfo, port, backslash, whitespace or
 - Run ids are 1 to 64 ASCII letters, digits or `-`.
 - `search` reads at most 200 characters of the query.
 - `copy_text` refuses text over 64 MiB.
-- `open_url` refuses anything but the repository's pages (`open_url`'s rule above).
+- `open_url` refuses any URL that is not on its list (`open_url`'s rule above).
 
 Rust never runs a destructive action from argv.
 

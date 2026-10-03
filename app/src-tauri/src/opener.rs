@@ -1,7 +1,7 @@
-//! Hands a repository page to the default browser, or a folder to the file
-//! manager, through tauri-plugin-opener's free functions. The plugin is
-//! never registered, so the webview has none of its commands, and only the
-//! app's own `open_url` and `open_logs` reach this module.
+//! Hands one of Navaja's own links to the default browser, or a folder to
+//! the file manager, through tauri-plugin-opener's free functions. The
+//! plugin is never registered, so the webview has none of its commands, and
+//! only the app's own `open_url` and `open_logs` reach this module.
 //!
 //! What starts (docs/architecture.md §5): on Windows, `ShellExecuteExW` for
 //! a URL and `SHOpenFolderAndSelectItems` for a folder; on macOS,
@@ -14,46 +14,20 @@ use std::path::Path;
 /// The repository, spelled as frozen in docs/adr/0001-stack.md.
 pub const REPOSITORY: &str = "https://github.com/joaovitorpina/Navaja";
 
-/// Longer than any page Navaja links to, short enough to never matter.
-const MAX_URL_LEN: usize = 256;
+/// Every URL Navaja links to, exactly as the front end sends it. Pages under
+/// the repository are refused too: GitHub serves a fork's commits under the
+/// parent's URLs (`/raw/<sha>/...`, `/archive/<sha>.zip`), so a rule for
+/// paths would let a page open content anyone can push. A new link adds its
+/// exact URL here.
+const ALLOWED_URLS: &[&str] = &[REPOSITORY];
 
-/// Whether `url` is the repository or a page under it, in the one plain
-/// spelling Navaja hands to a browser: the repository URL, then any number
-/// of `/segment`, then an optional `#fragment`. Segments and the fragment
-/// are non-empty and use only letters, digits, `.`, `_` and `-`; a segment
-/// is never `.` or `..`. So there is no query, percent-encoding, userinfo,
-/// port, backslash, whitespace or control character, and nothing a browser
-/// would normalise into another place.
-pub fn is_repository_url(url: &str) -> bool {
-    if url.len() > MAX_URL_LEN {
-        return false;
-    }
-    let Some(rest) = url.strip_prefix(REPOSITORY) else {
-        return false;
-    };
-    let (path, fragment) = match rest.split_once('#') {
-        Some((path, fragment)) => (path, Some(fragment)),
-        None => (rest, None),
-    };
-    let path_ok = path.is_empty()
-        || path
-            .strip_prefix('/')
-            .is_some_and(|segments| segments.split('/').all(is_segment));
-    path_ok
-        && fragment.is_none_or(|fragment| !fragment.is_empty() && fragment.bytes().all(is_plain))
-}
-
-fn is_segment(segment: &str) -> bool {
-    !segment.is_empty() && segment != "." && segment != ".." && segment.bytes().all(is_plain)
-}
-
-/// Nothing a browser decodes, normalises or reads as a delimiter.
-fn is_plain(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+/// Whether `url` is, byte for byte, one of [`ALLOWED_URLS`].
+pub fn is_allowed_url(url: &str) -> bool {
+    ALLOWED_URLS.contains(&url)
 }
 
 /// Opens `url` in the default browser. The caller has checked it with
-/// [`is_repository_url`]; it is passed on exactly as given.
+/// [`is_allowed_url`]; it is passed on exactly as given.
 pub fn open_url(url: &str) -> Result<(), String> {
     let url = url.to_owned();
     hand_off("the web browser", move || {
@@ -110,34 +84,28 @@ mod tests {
     }
 
     #[test]
-    fn the_repository_and_its_pages() {
-        let longest = under(&format!(
-            "/{}",
-            "a".repeat(MAX_URL_LEN - REPOSITORY.len() - 1)
-        ));
-        assert_eq!(longest.len(), MAX_URL_LEN);
+    fn the_listed_urls_only() {
+        assert_eq!(ALLOWED_URLS, [REPOSITORY]);
+        assert!(is_allowed_url(REPOSITORY));
+    }
+
+    #[test]
+    fn everything_else_is_refused() {
         for url in [
-            REPOSITORY.to_owned(),
+            String::new(),
+            // Pages under the repository, a fork's commits among them.
             under("/issues"),
             under("/releases"),
             under("/blob/main/SECURITY.md"),
             under("/releases/tag/v1.0.0"),
             under("/security/advisories/new"),
+            under("/raw/0123456789abcdef0123456789abcdef01234567/page.html"),
+            under("/archive/0123456789abcdef0123456789abcdef01234567.zip"),
+            under("/tree/0123456789abcdef0123456789abcdef01234567"),
             under("#readme"),
             under("/blob/main/docs/install.md#windows"),
             under("/..."),
-            longest,
-        ] {
-            assert!(is_repository_url(&url), "{url}");
-        }
-    }
-
-    #[test]
-    fn everything_else_is_refused() {
-        let too_long = under(&format!("/{}", "a".repeat(MAX_URL_LEN - REPOSITORY.len())));
-        assert_eq!(too_long.len(), MAX_URL_LEN + 1);
-        for url in [
-            String::new(),
+            under(&format!("/{}", "a".repeat(300))),
             // Another scheme, host, port, userinfo or casing.
             REPOSITORY.replacen("https", "http", 1),
             REPOSITORY.replacen("https", "HTTPS", 1),
@@ -175,12 +143,12 @@ mod tests {
             under("/issues\u{0}"),
             under("/\u{0131}ssues"),
             " ".to_owned() + REPOSITORY,
+            REPOSITORY.to_owned() + "\n",
             "javascript:alert(1)".to_owned(),
             "file:///C:/Windows/System32/".to_owned(),
             "file:///etc/passwd".to_owned(),
-            too_long,
         ] {
-            assert!(!is_repository_url(&url), "{url:?}");
+            assert!(!is_allowed_url(&url), "{url:?}");
         }
     }
 }

@@ -4,7 +4,7 @@
 //! What the host checks before any work: run ids, the shape of tool and
 //! action ids, and the overall size of a run's input (string bytes and JSON
 //! nodes). The search query is truncated and copied text is size-capped.
-//! `open_url` opens only pages of Navaja's repository. Each tool validates
+//! `open_url` opens only the exact URLs Navaja links to. Each tool validates
 //! its own options (docs/architecture.md §3).
 
 use std::sync::Arc;
@@ -69,6 +69,8 @@ const MAX_INPUT_NODES: usize = 1_000_000;
 /// Logged in place of a tool or action id the registry doesn't know, so
 /// text from the webview never reaches the log.
 const UNKNOWN_ID: &str = "<unknown>";
+/// `open_url`'s answer to a URL it does not open. Never echoes the URL.
+const OPEN_URL_REFUSED: &str = "Navaja opens only its own links.";
 
 #[tauri::command]
 pub fn app_info() -> AppInfo {
@@ -309,15 +311,15 @@ pub fn open_logs(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     crate::opener::open_folder(&logs)
 }
 
-/// Opens a page of Navaja's repository in the default browser; any other
+/// Opens one of the URLs Navaja links to in the default browser; any other
 /// URL is refused before anything starts. Off the main thread: it starts a
 /// program.
 #[tauri::command(async)]
 pub fn open_url(url: String) -> Result<(), String> {
-    if !crate::opener::is_repository_url(&url) {
+    if !crate::opener::is_allowed_url(&url) {
         // Not even the scheme: all of it comes from the webview.
-        tracing::warn!("refused to open a URL outside the repository");
-        return Err("Only pages of Navaja's repository can be opened.".to_owned());
+        tracing::warn!("refused to open a URL Navaja does not link to");
+        return Err(OPEN_URL_REFUSED.to_owned());
     }
     crate::opener::open_url(&url)
 }
