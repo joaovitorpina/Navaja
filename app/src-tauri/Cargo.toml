@@ -55,6 +55,10 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Turns WebRTC off in WebKit (platform/macos.rs); the version Tauri already uses.
+objc2 = "0.6.4"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # Clipboard on Wayland through the data-control protocol (X11 works without it).
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }

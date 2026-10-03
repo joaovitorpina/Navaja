@@ -131,6 +131,17 @@ pub fn create_main<R: Runtime>(
     }
     let window = builder.build()?;
 
+    // WebKit skips the guard script in `srcdoc` frames, so on macOS WebRTC is
+    // also switched off in the engine (docs/architecture.md §5).
+    #[cfg(target_os = "macos")]
+    if let Err(error) = window.with_webview(|webview| {
+        if !crate::platform::disable_peer_connections(webview.inner()) {
+            tracing::warn!("this WebKit has no switch to turn WebRTC off");
+        }
+    }) {
+        tracing::warn!(%error, "could not reach the webview to turn WebRTC off");
+    }
+
     // The toggles read focus from the window's own events, not is_focused():
     // a tray click on Windows moves focus to the taskbar before it arrives
     // (see TRAY_BLUR_GRACE).

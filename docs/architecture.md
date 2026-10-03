@@ -40,7 +40,7 @@ Navaja/
 │   └── src-tauri/        crate navaja · features: default [docker], updater (M6), e2e
 │       ├── tauri.conf.json · tauri.release.conf.json (updater artifacts + pubkey) · e2e.conf.json
 │       ├── capabilities/main.json · acl.lock.json · nsis/hooks.nsh
-│       ├── src/          commands · state · paths · window · guard · tray · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{mod,unix,linux,windows}.rs
+│       ├── src/          commands · state · paths · window · guard · tray · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{mod,unix,linux,macos,windows}.rs
 │       └── tests/        privacy.rs (canary input kept out of logs and crash files)
 ├── xtask/                check · tool-gate · bindings · icons · notices · capture-ports · measure · verify-release · manifests
 ├── assets/brand/         navaja.svg · tray-template.svg · tray-color.svg · GUIDELINES.md
@@ -191,7 +191,7 @@ Rust never runs a destructive action from argv.
   - **One layer, not a guarantee.** The script is a layer under the CSP, and a frame it never runs in keeps the constructors.
     - WebView2 runs it in every frame, empty and `srcdoc` iframes included.
     - WebKitGTK ships with WebRTC disabled (`enable-webrtc` defaults to false, and wry leaves it).
-    - On macOS, WebKit skips user scripts in an iframe's initial empty document, and `frame-src 'none'` keeps the iframe there. Script already running in the app origin may get the constructor back from such an iframe. The end-to-end egress canary checks this on macOS (roadmap M2a, item 10). If it fails, the follow-up turns peer connections off in the engine, through `WKPreferences`.
+    - On macOS, WebKit does not inject the script into `srcdoc` iframes, which the egress canary showed on its first macOS run. So macOS also turns peer connections off in the engine: `platform/macos.rs` calls `WKPreferences`' private `_setPeerConnectionEnabled:` (checked with `respondsToSelector:` first) right after the window is built, which covers every frame created afterwards. The end-to-end egress canary checks the page and four kinds of iframe on every OS.
   - **macOS text fields:** the native menu there also offers OS services: Look Up, Translate, Search With Google, Share and Services. They send the selected text only when the user picks one. `privacy.md` discloses them (roadmap M6, item 6).
 - **WebView2 arguments:** any extra arguments must re-include wry's defaults.
 - **Clipboard:** `copy_text` writes through arboard and always sets the OS's exclusion markers; there is no opt-out. A native copy (Ctrl/Cmd+C, the context menu) whose selection touches a region marked `data-output` goes through it too, wherever the selection starts; copies from text fields stay native, since they hold the user's own input. What the markers achieve:

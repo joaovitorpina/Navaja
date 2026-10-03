@@ -2335,6 +2335,7 @@ dependencies = [
  "libloading",
  "navaja-core",
  "navaja-tools",
+ "objc2",
  "rustix",
  "serde",
  "serde_json",
