@@ -27,6 +27,20 @@ export const SVELTE_ENTRIES = new Set([
   'svelte/transition',
 ]);
 
+/**
+ * Vitest's calls that take a module specifier, on `vi` and its alias `vitest`.
+ * Vitest resolves it through the same aliases as an import, and importActual
+ * loads the module itself.
+ */
+const VITEST_MODULE_CALLS = new Set([
+  'mock',
+  'doMock',
+  'unmock',
+  'doUnmock',
+  'importActual',
+  'importMock',
+]);
+
 const TEST_FILE = /\.(test|spec)\.ts$/;
 const BINDING = /^\$bindings(\/[A-Za-z0-9_-]+)+$/;
 
@@ -127,6 +141,21 @@ function propertyName(node) {
   return node.computed ? literal(node.property) : node.property.name;
 }
 
+/**
+ * Whether `callee` is `vi.mock`, `vitest.importActual` or another call that
+ * takes a module specifier.
+ * @param {any} callee
+ */
+function isVitestModuleCall(callee) {
+  if (callee.type !== 'MemberExpression' || callee.object.type !== 'Identifier') return false;
+  const name = propertyName(callee);
+  return (
+    (callee.object.name === 'vi' || callee.object.name === 'vitest') &&
+    typeof name === 'string' &&
+    VITEST_MODULE_CALLS.has(name)
+  );
+}
+
 /** @type {import('eslint').Rule.RuleModule} */
 const rule = {
   meta: {
@@ -148,7 +177,8 @@ const rule = {
   },
   create(context) {
     const file = posix(context.filename);
-    const allowed = TEST_FILE.test(file) ? ALLOWED_IN_TESTS : ALLOWED;
+    const isTest = TEST_FILE.test(file);
+    const allowed = isTest ? ALLOWED_IN_TESTS : ALLOWED;
 
     /**
      * Reports `node` unless it spells an allowed specifier.
@@ -179,6 +209,10 @@ const rule = {
       CallExpression(node) {
         if (node.callee.type === 'Identifier' && node.callee.name === 'require') {
           check(node.arguments[0] ?? node);
+        } else if (isTest && isVitestModuleCall(node.callee)) {
+          // vi.mock(import('…')) is checked as an import already.
+          const [target] = node.arguments;
+          if (target?.type !== 'ImportExpression') check(target ?? node);
         }
       },
       // Vite bundles the file behind `new URL(x, import.meta.url)`, as an

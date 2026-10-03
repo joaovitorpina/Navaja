@@ -94,6 +94,12 @@ tester.run('view-imports', rule, {
     { code: "import { render } from '@testing-library/svelte';", filename: TEST },
     { code: "import { mockIPC } from '@tauri-apps/api/mocks';", filename: SPEC },
     { code: "import View from './View.svelte';", filename: TEST },
+    // Vitest's calls that take a specifier, with allowed ones.
+    { code: "vi.mock('./label', () => ({ label: 'x' }));", filename: TEST },
+    { code: "vitest.doMock('$lib/view-kit');", filename: TEST },
+    { code: "const actual = await vi.importActual('./label');", filename: SPEC },
+    { code: "vi.mock(import('./label'));", filename: TEST },
+    { code: "vi.spyOn(console, 'log');", filename: TEST },
   ],
   invalid: [
     // Relative paths that leave tools/demo/ui/.
@@ -220,6 +226,25 @@ tester.run('view-imports', rule, {
     notAllowed("import matchers from '@testing-library/svelte/vitest';", TEST),
     notAllowed("import { it } from 'vitest';", ui('View.test.js')),
     notAllowed("import { it } from 'vitest';", ui('helpers.ts')),
+    // Vitest resolves a mocked or imported specifier through the same aliases.
+    ...['vi', 'vitest'].flatMap((object) =>
+      ['mock', 'doMock', 'unmock', 'doUnmock', 'importActual', 'importMock'].map((method) =>
+        notAllowed(`${object}.${method}('$lib/ipc');`, TEST),
+      ),
+    ),
+    notAllowed("vi.mock('../x', () => ({}));", SPEC),
+    notAllowed("vi['mock']('$lib/ipc');", TEST),
+    notAllowed("vi.mock(import('$lib/ipc'));", TEST),
+    {
+      code: 'const name = "$lib/ipc"; vi.mock(name);',
+      filename: TEST,
+      errors: [{ messageId: 'nonLiteral' }],
+    },
+    {
+      code: 'vi.importActual();',
+      filename: TEST,
+      errors: [{ messageId: 'nonLiteral' }],
+    },
     // The message names the allowed set and the contract.
     {
       code: "import { t } from '$lib/i18n';",
