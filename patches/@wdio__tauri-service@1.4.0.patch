@@ -1,0 +1,26 @@
+diff --git a/dist/cjs/index.js b/dist/cjs/index.js
+index c14f1e3d83824dbc24a130c7aab60572036650be..d9b1d240590fc3a2380a7fc16f61ddb6cc46b42e 100644
+--- a/dist/cjs/index.js
++++ b/dist/cjs/index.js
+@@ -2101,7 +2101,7 @@ class TauriLaunchService {
+         // resolved. msedgedriver is a single machine-global driver, so one check
+         // (matched to the first resolved binary) covers every instance. Keep this
+         // outside the resolution loop: a break here would skip the remaining caps.
+-        if (process.platform === 'win32' && firstResolvedBinaryPath !== undefined) {
++        if (!isEmbedded && process.platform === 'win32' && firstResolvedBinaryPath !== undefined) {
+             const autoDownloadEdgeDriver = this.options.autoDownloadEdgeDriver ?? true;
+             log$6.debug('Checking Edge WebDriver compatibility...');
+             // Read the version pin / fixed-runtime folder from the global options: msedgedriver is
+diff --git a/dist/esm/index.js b/dist/esm/index.js
+index 7f49bdefae0380e164bfb2c8a149288cc80193ad..3d3a47a9ad3287627a58b59a3bf2d3f294ed0c97 100644
+--- a/dist/esm/index.js
++++ b/dist/esm/index.js
+@@ -2097,7 +2097,7 @@ class TauriLaunchService {
+         // resolved. msedgedriver is a single machine-global driver, so one check
+         // (matched to the first resolved binary) covers every instance. Keep this
+         // outside the resolution loop: a break here would skip the remaining caps.
+-        if (process.platform === 'win32' && firstResolvedBinaryPath !== undefined) {
++        if (!isEmbedded && process.platform === 'win32' && firstResolvedBinaryPath !== undefined) {
+             const autoDownloadEdgeDriver = this.options.autoDownloadEdgeDriver ?? true;
+             log$6.debug('Checking Edge WebDriver compatibility...');
+             // Read the version pin / fixed-runtime folder from the global options: msedgedriver is

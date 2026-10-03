@@ -67,7 +67,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
    - **Still to do:** ESLint (flat config) with the custom-view import allowlist from architecture §4, scoped to `tools/*/ui/**`, and `pnpm lint` in the CI checks job. `$lib/view-kit` exists and is the one app module the allowlist lets custom views import. This must land before the first custom view (the M4 port inspector).
 8. **Window code:** `window.rs`, `guard.rs`, and `args.rs` with single instance and the elevation banner.
 9. **S2.3**, then a minimal tray (Open, Search, `meta.tray` entries, Quit) and the StatusNotifier host check in `platform/linux.rs`.
-10. **End-to-end tests:** smoke (palette → UUID), single instance and the egress canary. A Linux strace guard is added, then **S2.6** and **S2.7**.
+10. **End-to-end tests:** smoke (palette → UUID), single instance, a first launch with `--tool`, and the egress canary. A Linux strace guard is added, then **S2.6** and **S2.7**.
 11. **`docs/adding-a-tool.md`.**
 
 **Exit:**
@@ -270,15 +270,19 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace        # includes serial live port tests from M4
 cargo deny check bans licenses sources
 pnpm check && pnpm lint && pnpm test # svelte-check, ESLint+Prettier, Vitest+axe
-pnpm tauri build --debug --features e2e --config src-tauri/e2e.conf.json && pnpm e2e
+pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json && pnpm e2e
+# Linux, as CI runs it after the same build: the end-to-end suite under the strace network guard
+WEBKIT_DISABLE_DMABUF_RENDERER=1 dbus-run-session -- xvfb-run -a bash app/e2e/strace-guard.sh
 ```
+
+The end-to-end build is isolated from a Navaja you already run: it has its own identifier, starts its WebDriver server only when the harness asks, and gets a fresh temporary `NAVAJA_APP_DIR` (architecture §5).
 
 **Workflows:**
 
 | Workflow | Runs |
 |---|---|
 | `ci.yml` checks (ubuntu-24.04) | fmt, ESLint, svelte-check, cargo-deny on 4 targets, `xtask check`, `bindings --check`, `tool-gate`, the JS licence allowlist, gitleaks over fixtures and snapshots |
-| `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --features e2e` → WebdriverIO. Linux runs under `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. macOS also runs `cargo check --target x86_64-apple-darwin` |
+| `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --no-bundle` → the same build with `--features e2e` and `e2e.conf.json` → WebdriverIO. Linux runs the suite under the strace guard, inside `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The job stops after 45 min, so a hung run fails instead of holding the runner for GitHub's 6 h. macOS also runs `cargo check --target x86_64-apple-darwin` |
 | `advisories.yml` | Daily `cargo deny check advisories`. Opens an issue but never blocks a PR |
 | `bundle.yml` | Weekly, keyless build of the release matrix: NSIS and zip, universal DMG, deb, rpm and AppImage in `container: ubuntu:22.04` |
 | `spikes.yml` | Manual. macOS spike steps that need no human |
@@ -292,8 +296,8 @@ pnpm tauri build --debug --features e2e --config src-tauri/e2e.conf.json && pnpm
 
 **Offline and privacy checks:**
 - **On every PR:**
-  - an egress canary: fetch, image, beacon, WebSocket, `window.open` and RTCPeerConnection, all blocked;
-  - a Linux strace guard: any `connect` or `sendto` outside 127.0.0.1 fails the run;
+  - an egress canary: fetch, image, beacon, WebSocket, `window.open`, top-level navigation, and WebRTC in the page and in the iframes it creates, all blocked. Fetch, image, beacon and WebSocket must each raise their own CSP violation, since a request that fails for some other reason proves nothing;
+  - a Linux strace guard: a `connect`, `sendto`, `sendmsg` or `sendmmsg` to any address other than 127.0.0.1 or ::1 fails the run (the 127.0.0.53 DNS stub included). So does an inet call whose address can't be read, or an app process still running after the suite;
   - a canary input at `NAVAJA_LOG=trace`, plus a panicking tool, must not appear in logs, crash files or stderr. The integration test `app/src-tauri/tests/privacy.rs`, run by nextest, checks logs and crash files at trace level; it does not capture stderr yet.
 - **In M2a and M6:**
   - a whole-process-tree NIC capture on each OS (S2.7);

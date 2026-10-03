@@ -1,8 +1,9 @@
 import { $, browser, expect } from '@wdio/globals';
-
-const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+import { currentHash, goHome, UUID_V4 } from '../support/app';
 
 describe('shell', () => {
+  beforeEach(goHome);
+
   it('opens the UUID generator from the palette and generates a UUID', async () => {
     await $('nav[aria-label="Tools"]').waitForDisplayed();
 
@@ -15,6 +16,11 @@ describe('shell', () => {
     await expect(first).toHaveText(expect.stringContaining('UUID generator'));
     await browser.keys('Enter');
 
+    // The test started on Home, so only the palette can have opened the tool.
+    await browser.waitUntil(async () => (await currentHash()) === '#/tool/uuid', {
+      timeoutMsg: 'choosing the palette entry did not open the tool',
+    });
+    await expect($('[role="dialog"]')).not.toBeExisting();
     await expect($('h1')).toHaveText('UUID generator');
     const output = $('section[aria-label="UUIDs"] pre');
     await browser.waitUntil(async () => UUID_V4.test(await output.getText()), {

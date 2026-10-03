@@ -84,9 +84,19 @@ pub fn run() -> Result<i32, Box<dyn std::error::Error>> {
         .plugin(guard::init());
     // End-to-end test builds only (`--features e2e`, docs/roadmap.md §2).
     #[cfg(feature = "e2e")]
-    let builder = builder
-        .plugin(tauri_plugin_wdio::init())
-        .plugin(tauri_plugin_wdio_webdriver::init());
+    let builder = {
+        let builder = builder.plugin(tauri_plugin_wdio::init());
+        // The embedded WebDriver server listens on localhost with no
+        // authentication, so it starts only when the test harness launched
+        // the app, never when someone runs a leftover e2e build by hand.
+        let webdriver = e2e_harness_launched();
+        tracing::info!(webdriver, "end-to-end test build");
+        if webdriver {
+            builder.plugin(tauri_plugin_wdio_webdriver::init())
+        } else {
+            builder
+        }
+    };
 
     // Tauri errors carry no user input, so they are logged in full. A setup
     // error becomes Tauri's panic, whose message the panic hook withholds.
@@ -140,6 +150,16 @@ pub fn run() -> Result<i32, Box<dyn std::error::Error>> {
         }
     });
     Ok(code)
+}
+
+/// Whether the end-to-end harness started this process: `@wdio/tauri-service`
+/// sets `WDIO_EMBEDDED_SERVER` when it launches the app, and a harness that
+/// launches it another way sets `NAVAJA_E2E_WEBDRIVER`.
+#[cfg(feature = "e2e")]
+fn e2e_harness_launched() -> bool {
+    ["WDIO_EMBEDDED_SERVER", "NAVAJA_E2E_WEBDRIVER"]
+        .into_iter()
+        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
 }
 
 /// A second `navaja` launch: show (or toggle) the running window and open

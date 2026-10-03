@@ -113,6 +113,9 @@ jobs:
         # Pinned runner labels (never -latest), as decided in docs/adr/0001-stack.md.
         os: [windows-2025, ubuntu-24.04, macos-26]
     runs-on: ${{ matrix.os }}
+    # A hung end-to-end run (a second instance that never exits, an app that
+    # never answers) fails here instead of holding the runner for 6 h.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -171,8 +174,6 @@ jobs:
       # The same app plus WebdriverIO's test-only plugins (feature `e2e`).
       - name: Build the app for end-to-end tests
         shell: bash
-        env:
-          VITE_NAVAJA_E2E: '1'
         run: pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
 
       - name: End-to-end tests

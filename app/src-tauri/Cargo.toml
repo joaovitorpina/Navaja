@@ -21,7 +21,9 @@ path = "src/main.rs"
 # Derive TypeScript bindings for the app's own IPC types (cargo xtask bindings).
 ts = ["dep:ts-rs", "navaja-core/ts"]
 # End-to-end tests only: WebdriverIO's Tauri plugins, including an embedded
-# WebDriver server on localhost. Never part of a release build.
+# WebDriver server on localhost that starts only when the test harness
+# launches the app. Never part of a release build: `cargo xtask check` asserts
+# that no default feature reaches `e2e` and that only `e2e` enables the plugins.
 e2e = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
 
 [build-dependencies]
