@@ -18,6 +18,7 @@ tools/<id>/
 - It equals the folder name.
 - It is permanent: settings and translations are keyed by it.
 - Ids containing `__` are reserved for extensions, and `core` is reserved for the host.
+- It can't be a Rust keyword or reserved word, such as `type`, `match`, `ref`, `box`, `try` or `gen`. `register_tools!` declares `mod <id>;`, which doesn't compile for a keyword, and the raw form `r#type` doesn't match the folder name.
 
 **`icon.svg`** follows "Tool icons" in [GUIDELINES.md](../assets/brand/GUIDELINES.md#tool-icons-toolsidiconsvg). The registry rejects an icon that breaks these rules ([`icon.rs`](../crates/navaja-core/src/icon.rs)):
 - The root is `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">`.
@@ -168,6 +169,22 @@ For a `Generator`, start from [`tools/uuid/mod.rs`](../tools/uuid/mod.rs). It im
 - **Order:** `typed()` first, then checks that need no work, then `ctx.check()`, then the work.
 - **Actions:** `Registry::run` answers an undeclared action with `core.unknown_action` and never calls `invoke`, so `action` is always a declared id. A one-action tool can ignore it, as uuid does. A `match` needs its fallback arm only for the compiler.
 
+### Metadata
+
+The top-level `ToolMeta` fields. `Registry::new` rejects a tool that breaks a rule below ([`registry.rs`](../crates/navaja-core/src/registry.rs)).
+
+| Field | Meaning |
+|---|---|
+| `spec_version`, `id` | `SPEC_VERSION`, and the id from §1. |
+| `name`, `description` | English fallbacks, not empty. The app shows `tool.<id>.name` and `tool.<id>.description` when a translation exists. |
+| `category` | `Category::ENCODERS`, `FORMATTERS`, `GENERATORS` or `SYSTEM`. Any other `[a-z][a-z0-9_]*` id is accepted, but the app shows it as a group labelled with the raw id, after the built-in ones. Adding a category is a `host-change` PR. |
+| `keywords` | Extra search terms, each non-empty and lower case. Search already matches the name, the id and the category label, so add other words, like uuid's `guid`. |
+| `capabilities` | The host services the tool uses, such as `Capability::PROCESS_INSPECT`. Empty for a text tool. |
+| `tray` | `true` lists the tool in the tray menu. |
+| `icon` | `include_str!("icon.svg").into()`, checked as in §1. |
+| `actions` | `ActionMeta::new(id, label)`, plus `.destructive()` when the shell must ask before running it. At least one; ids follow the id grammar and are unique; each must be reachable from `ui`. |
+| `ui` | See below. |
+
 ### Choosing the UI
 
 | `UiSpec` | Use it for | What you write |
@@ -206,7 +223,7 @@ Each `OptionSpec` becomes one key of the input object:
 | `Text { default, limit }` | a string; `limit` is its maximum length in characters | `default` within `limit` |
 
 - **What the view sends:** every option that applies to the current mode, starting at its default ([`options.ts`](../app/src/generic/options.ts)). Options for other modes are left out.
-- **Nothing clamps:** the registry checks the spec, never the values, and in the view `min`, `max` and `limit` are only HTML input attributes. `invoke` re-checks any bound it relies on (§4).
+- **Nothing clamps:** the registry checks the spec, never the values, and the view applies `min`, `max` and `limit` through HTML form validation only. `invoke` re-checks any bound it relies on (§4).
 - **Integer type:** deserialize into any integer type that holds `min..=max` (uuid uses `u32`). A number that doesn't fit the type fails `typed()` with `core.invalid_input`.
 - **Defaults:** each default lives twice, in the `Control` (what the view sends) and in the serde default (used when the key is missing: options outside the current mode, and tests that send `{}`). Nothing checks that the two agree, so use one const for both, like `DEFAULT_WIDTH` above.
 
