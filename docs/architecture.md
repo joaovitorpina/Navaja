@@ -38,7 +38,7 @@ Navaja/
 │   ├── src/generic/      GeneratorView · TransformView · OptionControl · OutputView (one renderer per OutputKind)
 │   ├── src/editor/       CodeMirror 6 {@attach} + size thresholds
 │   ├── e2e/              wdio.conf.ts · strace-guard.sh (Linux) · support/ · specs/{launch,smoke,single-instance,egress,json,ports}.e2e.ts
-│   ├── eslint/           config.js (ESLint) · view-imports.js (the custom-view import allowlist, §4) · their tests
+│   ├── eslint/           config.js (ESLint) · view-imports.js (the custom-view import allowlist, §4) · view-files.js (what tools/ may hold, §4) · their tests
 │   └── src-tauri/        crate navaja · features: default [docker], updater (M6), e2e
 │       ├── tauri.conf.json · tauri.release.conf.json (updater artifacts + pubkey) · e2e.conf.json
 │       ├── capabilities/main.json · acl.lock.json · nsis/hooks.nsh
@@ -150,6 +150,9 @@ register_tools! {
     - `$lib/view-kit`, exactly;
     - `$bindings/<name>` and `$bindings/<dir>/<name>`, with no `.` or `..` segments.
   - **Tests:** a view's `*.test.ts` and `*.spec.ts` files may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`, and nothing else.
+  - **Files:** a view folder holds only the scripts ESLint lints, with the extensions `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx` and `.svelte`, and the assets `.css`, `.svg`, `.json`, `.png` and `.webp`. Extensions are lower case, and the folder has no `node_modules` folder. Nothing under `tools/` is a symbolic link or a submodule.
+    - Vite bundles any file a view imports, but ESLint skips other extensions (`.es6`, `.JS`, or none) and `node_modules`, and neither it nor Prettier follows links. A view could import such a file, and the file could import anything.
+    - `pnpm lint` first runs `app/eslint/view-files.js` over the files git tracks under `tools/` and fails on any other. The script extensions are one list, shared with the ESLint config.
   - **Forms checked:** static, type-only and side-effect imports, `export … from`, `import()` and `require()`, TypeScript's `import x = require()` and `typeof import()`, and the first argument of `new URL(x, import.meta.url)`. Vite bundles that file as an asset or a worker and resolves a bare `x` through its aliases, so `x` must be allowed like an import, and an absolute URL is refused too. A computed specifier is an error, and `import.meta.glob` is not allowed.
   - **No opt-out:** a view can't switch rules off with a comment (`noInlineConfig`, plus markup `<!-- eslint-disable -->`). `pnpm lint` runs ESLint from the repository root with `--config`, so a config file placed under `tools/` is never used. CI runs `pnpm lint` in the checks job.
   - **(S2.2)** If views outside `app/` turn out not to work, the fallback is `app/src/tools/<id>/`. That would be a brief deviation and needs sign-off.
@@ -266,7 +269,7 @@ Rust never runs a destructive action from argv.
   **(S3.1)** tunes these thresholds.
 - **Components:** Bits UI 2 with shadcn-svelte copies, Tailwind v4 tokens and system fonts.
 - **Accessibility:** landmarks, F6 to cycle panes, Esc, a live region, and real tables with `aria-sort`.
-- **Lint:** `pnpm lint` runs ESLint (the recommended JavaScript, TypeScript and Svelte rules, plus the custom-view allowlist from §4) and Prettier over `app/` and `tools/*/ui/`. `pnpm format` applies Prettier.
+- **Lint:** `pnpm lint` checks which files `tools/` holds (§4), then runs ESLint (the recommended JavaScript, TypeScript and Svelte rules, plus the custom-view allowlist from §4) and Prettier over `app/` and `tools/*/ui/`. `pnpm format` applies Prettier.
 - **Tests:** Vitest with `mockIPC` and axe, and WebdriverIO end-to-end tests on all three OSes **(S2.6)**.
   - The end-to-end tests drive the real debug app through its embedded WebDriver server (§5). On Linux they run under the strace network guard (roadmap §2).
   - axe is not wired in yet. It joins Vitest in M3 (roadmap M3, item 3).

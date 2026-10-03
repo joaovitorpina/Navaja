@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings && tsc -p tsconfig.node.json && tsc -p e2e/tsconfig.json",
-    "lint": "cd .. && eslint --config eslint.config.mjs --max-warnings 0 --no-error-on-unmatched-pattern app \"tools/*/ui/**\" && prettier --check --config prettier.config.mjs --ignore-unknown --no-error-on-unmatched-pattern app \"tools/*/ui/**\"",
+    "lint": "cd .. && node app/eslint/view-files.js && eslint --config eslint.config.mjs --max-warnings 0 --no-error-on-unmatched-pattern app \"tools/*/ui/**\" && prettier --check --config prettier.config.mjs --ignore-unknown --no-error-on-unmatched-pattern app \"tools/*/ui/**\"",
     "format": "cd .. && prettier --write --config prettier.config.mjs --ignore-unknown --no-error-on-unmatched-pattern app \"tools/*/ui/**\"",
     "test": "vitest run",
     "tauri": "tauri",

@@ -8,10 +8,15 @@ import svelte from 'eslint-plugin-svelte';
 import { defineConfig, globalIgnores } from 'eslint/config';
 import globals from 'globals';
 import ts from 'typescript-eslint';
+import { VIEW_EXTENSIONS } from './view-files.js';
 import viewImports from './view-imports.js';
 
+// view-files.js holds the list, so that `pnpm lint` can refuse any other file
+// in a view folder without loading ESLint's plugins first.
+export { VIEW_EXTENSIONS };
+
 /** Every script file a custom view could hold, so none skips the allowlist. */
-const VIEW_FILES = 'tools/*/ui/**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,svelte}';
+const VIEW_FILES = `tools/*/ui/**/*.{${VIEW_EXTENSIONS.join(',')}}`;
 
 export default defineConfig(
   globalIgnores([

@@ -87,10 +87,11 @@ describe('the ESLint config', () => {
   });
 
   it('is what `pnpm lint` runs, from the repository root, over app/ and tools/*/ui/', () => {
+    // view-files.js first refuses any file in a view folder ESLint would skip.
     // `--config` keeps ESLint from picking up a config file placed under tools/.
     const pkg = JSON.parse(readFileSync(join(root, 'app', 'package.json'), 'utf8'));
     expect(pkg.scripts.lint).toMatch(
-      /^cd \.\. && eslint --config eslint\.config\.mjs [^&]* app "tools\/\*\/ui\/\*\*" && /,
+      /^cd \.\. && node app\/eslint\/view-files\.js && eslint --config eslint\.config\.mjs [^&]* app "tools\/\*\/ui\/\*\*" && /,
     );
   });
 });
