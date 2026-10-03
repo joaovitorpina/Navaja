@@ -101,6 +101,8 @@ Its tests (`*.test.ts` and `*.spec.ts` files in `ui/`, which Vitest runs) may al
 
 `pnpm lint` must pass. It checks the files in `ui/`, these imports and the Prettier formatting of `ui/`, CSS and JSON included (`pnpm format` fixes the formatting). A comment can't turn the check off, and `import.meta.glob` or a computed `import()` is an error. If a view needs something else from the shell, add it to `$lib/view-kit` in a `host-change` PR first.
 
+CSS is not checked: ESLint reads neither `<style>` blocks nor `.css` files. A view's CSS `@import` and `url()` must also stay inside `tools/<id>/ui/`, and review checks them.
+
 ### Outputs
 
 Each output in the spec has a `key` and a format. `invoke` returns one JSON object containing every declared key, with no extra keys. Use `null` when there is nothing to show. With debug assertions (the default for `cargo test`), the registry rejects any other shape with `core.invalid_output`; each value must round-trip exactly through its payload type.
