@@ -90,12 +90,18 @@ Prefer `Transform` or `Generator`. A custom view needs a reason in the PR. A `Ge
 The shell loads `tools/<id>/ui/View.svelte` and passes it `ViewProps` from `$lib/view-kit`. A view may import only (architecture §4):
 - its own files, through relative paths that stay inside `tools/<id>/ui/`;
 - `svelte` and its browser subpaths, but not `svelte/internal`, `svelte/compiler` or `svelte/server`;
-- `$lib/view-kit`, the shell's API for views: `t`, `runTool`, `copyText`, `CopyButton`, `ToolIcon` and their types;
+- `$lib/view-kit`, the shell's API for views: `t`, `runTool`, `copyText`, `CopyButton`, `ToolIcon`, `OUTPUT_ATTRIBUTE` and their types;
 - generated types from `$bindings/<name>`.
 
-Its tests (`*.test.ts` and `*.spec.ts` files in `ui/`, which Vitest runs) may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`.
+Put `OUTPUT_ATTRIBUTE` (`data-output`) on every element that shows tool output, so the shell sends a native copy (Ctrl/Cmd+C or the context menu) whose selection touches it through Rust, like `copyText`, with the markers that keep it out of clipboard history (architecture §5, Clipboard). A copy from a text field stays native, so don't show output in one.
 
-`pnpm lint` must pass. It checks these imports and the Prettier formatting of the code in `ui/` (`pnpm format` fixes the formatting). A comment can't turn the check off, and `import.meta.glob` or a computed `import()` is an error. If a view needs something else from the shell, add it to `$lib/view-kit` in a `host-change` PR first.
+Its tests (`*.test.ts` and `*.spec.ts` files in `ui/`, which Vitest runs) may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`. They import `vi` by that name (`import { vi } from 'vitest'`), use it only as `vi.<name>`, and call `vi.mock`, `vi.importActual` and Vitest's other calls that take a module directly, so the check can read the module each one takes.
+
+`ui/` holds only scripts ESLint lints (`.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.svelte`) and the assets `.css`, `.svg`, `.json`, `.png` and `.webp`, with lower-case extensions. It has no `node_modules` folder, and nothing in the tool folder is a symbolic link, a submodule, a `package.json` or a `tsconfig.json`. Paths keep the exact case of `tools/` and `ui/`. ESLint would never see any other file, but Vite would still bundle it, and Vite reads those two to resolve imports.
+
+`pnpm lint` must pass. It checks the files in `ui/`, these imports and the Prettier formatting of `ui/`, CSS and JSON included (`pnpm format` fixes the formatting). A comment can't turn the check off, and `import.meta.glob`, a computed `import()`, JSX or a `@jsxImportSource` comment is an error. If a view needs something else from the shell, add it to `$lib/view-kit` in a `host-change` PR first.
+
+CSS is not checked: ESLint reads neither `<style>` blocks nor `.css` files. A view's CSS `@import` and `url()` must also stay inside `tools/<id>/ui/`, and so must Tailwind's `@reference`, `@plugin` and `@config`, which the app's Tailwind build reads. Review checks them. `@plugin` and `@config` load JavaScript and run it in Node at build time, so review reads that code too.
 
 ### Outputs
 

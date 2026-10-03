@@ -27,6 +27,32 @@ export const SVELTE_ENTRIES = new Set([
   'svelte/transition',
 ]);
 
+/**
+ * Vitest's calls that take a module specifier, on `vi` and its alias `vitest`.
+ * Vitest resolves it through the same aliases as an import, and importActual
+ * loads the module itself.
+ */
+const VITEST_MODULE_CALLS = new Set([
+  'mock',
+  'doMock',
+  'unmock',
+  'doUnmock',
+  'importActual',
+  'importMock',
+]);
+
+/**
+ * The names a view's test reaches Vitest's `vi` object by. The rule keeps
+ * that object under these names, so it can find each call above.
+ */
+const VITEST_OBJECTS = new Set(['vi', 'vitest']);
+
+/** The only forms a test may name 'vitest' in: an import declaration, a type. */
+const STATIC_IMPORT = new Set(['ImportDeclaration', 'TSImportType']);
+
+/** The nodes a JSX element or fragment parses to. */
+const JSX = new Set(['JSXElement', 'JSXFragment']);
+
 const TEST_FILE = /\.(test|spec)\.ts$/;
 const BINDING = /^\$bindings(\/[A-Za-z0-9_-]+)+$/;
 
@@ -40,11 +66,14 @@ const SEE = 'See docs/architecture.md §4.';
 
 /**
  * `filename` with forward slashes, so that path.posix works on it on every
- * OS. A name with no folder (`<input>`) gets one, so `..` still leaves it.
+ * OS, and normalized as path.posix.join normalizes the paths it is compared
+ * with: a UNC (\\host\share\…) or \\?\ name would otherwise keep a leading
+ * `//` that the joined paths lose. A name with no folder (`<input>`) gets
+ * one, so `..` still leaves it.
  * @param {string} filename
  */
 function posix(filename) {
-  const file = filename.replaceAll('\\', '/');
+  const file = path.posix.normalize(filename.replaceAll('\\', '/'));
   return file.startsWith('/') || /^[A-Za-z]:\//.test(file) ? file : `/unnamed/${file}`;
 }
 
@@ -127,6 +156,52 @@ function propertyName(node) {
   return node.computed ? literal(node.property) : node.property.name;
 }
 
+/**
+ * The name of Vitest's call that takes a module specifier, when `node` reads
+ * one: `vi.mock`, `vitest['importActual']`. Any object counts, as `vi`
+ * methods such as resetModules return `vi`.
+ * @param {any} node
+ * @returns {string | undefined}
+ */
+function moduleCallName(node) {
+  if (node?.type !== 'MemberExpression') return undefined;
+  const name = propertyName(node);
+  return typeof name === 'string' && VITEST_MODULE_CALLS.has(name) ? name : undefined;
+}
+
+/**
+ * Whether `node` is the callee of a call: `vi.mock(…)`, not `vi.mock.call(…)`.
+ * @param {any} node
+ */
+function isCallee(node) {
+  return node.parent?.type === 'CallExpression' && node.parent.callee === node;
+}
+
+/**
+ * Whether `id`, a reference to `vi` or `vitest`, reads a member it names
+ * (`vi.fn`, `vi['mock']`) or sits in a type (`typeof vi.fn`).
+ * @param {any} id
+ */
+function readsNamedMember(id) {
+  const { parent } = id;
+  if (parent?.type === 'MemberExpression') {
+    return parent.object === id && propertyName(parent) !== undefined;
+  }
+  return parent?.type === 'TSTypeQuery' || parent?.type === 'TSQualifiedName';
+}
+
+/**
+ * Whether a specifier of `import … from 'vitest'` leaves `vi` and `vitest`
+ * under their own names: not `* as`, not a default, not `vi as v`.
+ * @param {any} specifier
+ */
+function keepsVitestNames(specifier) {
+  if (specifier.type !== 'ImportSpecifier') return false;
+  if (specifier.importKind === 'type') return true;
+  const imported = specifier.imported.name ?? specifier.imported.value;
+  return !VITEST_OBJECTS.has(imported) || specifier.local.name === imported;
+}
+
 /** @type {import('eslint').Rule.RuleModule} */
 const rule = {
   meta: {
@@ -144,11 +219,28 @@ const rule = {
       glob:
         'A custom view may not use import.meta.glob: it loads files this check cannot see. ' +
         'It may import {{allowed}}. {{see}}',
+      jsxImportSource:
+        'A custom view may not set @jsxImportSource: the build then imports ' +
+        '<source>/jsx-runtime, which this check cannot see. It may import {{allowed}}. {{see}}',
+      jsx:
+        'A custom view may not use JSX: the build turns it into an import of a JSX runtime ' +
+        '(react/jsx-runtime by default), which this check cannot see. ' +
+        'It may import {{allowed}}. {{see}}',
+      vitestImport:
+        "A view's test imports vi and vitest by name and under those names " +
+        "(import { vi } from 'vitest'), so this check can find the calls that take a module " +
+        '({{calls}}). {{see}}',
+      vitestUse:
+        "A view's test uses vi and vitest only as vi.<name>, and calls {{calls}} directly, " +
+        'so this check can read the module each one takes. {{see}}',
     },
   },
   create(context) {
     const file = posix(context.filename);
-    const allowed = TEST_FILE.test(file) ? ALLOWED_IN_TESTS : ALLOWED;
+    const isTest = TEST_FILE.test(file);
+    const allowed = isTest ? ALLOWED_IN_TESTS : ALLOWED;
+    const names = [...VITEST_MODULE_CALLS].map((name) => `vi.${name}`);
+    const calls = `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 
     /**
      * Reports `node` unless it spells an allowed specifier.
@@ -160,12 +252,63 @@ const rule = {
         context.report({ node, messageId: 'nonLiteral', data: { allowed, see: SEE } });
       } else if (!isAllowed(file, source)) {
         context.report({ node, messageId: 'notAllowed', data: { source, allowed, see: SEE } });
+      } else if (source === 'vitest' && !STATIC_IMPORT.has(node.parent?.type)) {
+        // import('vitest'), a re-export and the like hand out vi under any name.
+        report(node, 'vitestImport');
       }
     }
 
+    /**
+     * Reports a misuse of Vitest in a view's test.
+     * @param {any} node
+     * @param {'vitestImport' | 'vitestUse'} messageId
+     */
+    function report(node, messageId) {
+      context.report({ node, messageId, data: { calls, see: SEE } });
+    }
+
     return {
+      // In a .jsx or .tsx file, a @jsxImportSource comment makes the build
+      // import `<source>/jsx-runtime` without any import in the code.
+      Program() {
+        for (const comment of context.sourceCode.getAllComments()) {
+          if (comment.loc && /@jsxImportSource\b/.test(comment.value)) {
+            context.report({
+              loc: comment.loc,
+              messageId: 'jsxImportSource',
+              data: { allowed, see: SEE },
+            });
+          }
+        }
+      },
+      // In a .jsx or .tsx file, the build turns JSX into an import of a JSX
+      // runtime that no import in the code names. Once per outermost element.
+      /** @param {any} node */
+      'JSXElement, JSXFragment'(node) {
+        if (context.sourceCode.getAncestors(node).some((a) => JSX.has(a.type))) return;
+        context.report({ node, messageId: 'jsx', data: { allowed, see: SEE } });
+      },
+      // In a test, each read of vi or vitest names a member (vi.fn), so vi
+      // never ends up under another name, where its calls would go unseen.
+      'Program:exit'() {
+        if (!isTest) return;
+        for (const scope of context.sourceCode.scopeManager?.scopes ?? []) {
+          for (const reference of scope.references) {
+            const id = reference.identifier;
+            if (VITEST_OBJECTS.has(id.name) && reference.isRead() && !readsNamedMember(id)) {
+              report(id, 'vitestUse');
+            }
+          }
+        }
+      },
+      /** @param {any} node TypeScript's ImportDeclaration, which has an importKind */
       ImportDeclaration(node) {
         check(node.source);
+        if (isTest && literal(node.source) === 'vitest' && node.importKind !== 'type') {
+          for (const specifier of node.specifiers) {
+            if (!keepsVitestNames(specifier)) report(specifier, 'vitestImport');
+          }
+        }
       },
       ExportNamedDeclaration(node) {
         if (node.source) check(node.source);
@@ -179,7 +322,21 @@ const rule = {
       CallExpression(node) {
         if (node.callee.type === 'Identifier' && node.callee.name === 'require') {
           check(node.arguments[0] ?? node);
+        } else if (isTest && moduleCallName(node.callee)) {
+          // vi.mock(import('…')) is checked as an import already.
+          const [target] = node.arguments;
+          if (target?.type !== 'ImportExpression') check(target ?? node);
         }
+      },
+      // `const { importActual } = vi` would hide the call from the check
+      // above. A pattern can't tell vi from a mock function, so in a test it
+      // takes none of these names.
+      /** @param {any} node */
+      'ObjectPattern > Property'(node) {
+        if (!isTest) return;
+        const key =
+          node.computed || node.key.type !== 'Identifier' ? literal(node.key) : node.key.name;
+        if (key !== undefined && VITEST_MODULE_CALLS.has(key)) report(node, 'vitestUse');
       },
       // Vite bundles the file behind `new URL(x, import.meta.url)`, as an
       // asset or a worker. It resolves a bare x through the aliases too
@@ -195,6 +352,16 @@ const rule = {
         const name = propertyName(node);
         if (isImportMeta(node.object) && typeof name === 'string' && name.startsWith('glob')) {
           context.report({ node, messageId: 'glob', data: { allowed, see: SEE } });
+        }
+        // In a test, Vitest's calls that take a module are read only to be
+        // called: not `vi.importActual.call(…)` or `const f = vi.mock`. A mock
+        // function has a `.mock` of its own (fn.mock.calls), so for that name
+        // only vi.mock and vitest.mock count.
+        const call = isTest ? moduleCallName(node) : undefined;
+        if (call && !isCallee(node)) {
+          const object = node.object;
+          const isVi = object.type === 'Identifier' && VITEST_OBJECTS.has(object.name);
+          if (call !== 'mock' || isVi) report(node, 'vitestUse');
         }
       },
       // TypeScript's own forms: `import x = require('…')` and `typeof import('…')`.

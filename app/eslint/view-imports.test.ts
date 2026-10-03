@@ -22,6 +22,15 @@ const NESTED_TS = ui(join('parts', 'row.ts'));
 const TEST = ui('View.test.ts');
 const SPEC = ui('View.spec.ts');
 
+// Windows names, written out: a drive path, a UNC path (\\host\share\…) and a
+// \\?\ path, each with a file in a subfolder.
+const WIN = 'C:\\repo\\tools\\demo\\ui\\label.ts';
+const WIN_NESTED = 'C:\\repo\\tools\\demo\\ui\\parts\\row.ts';
+const UNC = '\\\\host\\share\\repo\\tools\\demo\\ui\\label.ts';
+const UNC_NESTED = '\\\\host\\share\\repo\\tools\\demo\\ui\\parts\\row.ts';
+const LONG = '\\\\?\\C:\\repo\\tools\\demo\\ui\\label.ts';
+const LONG_NESTED = '\\\\?\\C:\\repo\\tools\\demo\\ui\\parts\\row.ts';
+
 const svelte = {
   parser: svelteParser,
   parserOptions: { parser: ts.parser },
@@ -42,6 +51,13 @@ const notAllowed = (code: string, filename = TS) => ({
   errors: [{ messageId: 'notAllowed' }],
 });
 
+/** A case in a view's test that reports `messageIds`, in order. */
+const inTest = (code: string, ...messageIds: string[]) => ({
+  code,
+  filename: TEST,
+  errors: messageIds.map((messageId) => ({ messageId })),
+});
+
 tester.run('view-imports', rule, {
   valid: [
     // Relative paths that stay inside tools/demo/ui/.
@@ -49,10 +65,19 @@ tester.run('view-imports', rule, {
     { code: "import Row from './parts/Row.svelte';", filename: TS },
     { code: "import { label } from './parts/../label';", filename: TS },
     { code: "import raw from './icon.svg?raw';", filename: TS },
+    { code: "import { label } from './label#x';", filename: TS },
+    { code: "const w = new URL('./worker.ts?worker#x', import.meta.url);", filename: TS },
     { code: "import index from '.';", filename: TS },
     view("  import { label } from '../label';", NESTED),
     { code: "import { label } from '../label';", filename: NESTED_TS },
     { code: "import { label } from '../ui/label';", filename: TS },
+    // Windows names, so that every OS runs the back-slash handling.
+    { code: "import { label } from './label';", filename: WIN },
+    { code: "import { label } from '../label';", filename: WIN_NESTED },
+    { code: "import { label } from './label';", filename: UNC },
+    { code: "import { label } from '../label';", filename: UNC_NESTED },
+    { code: "import { label } from './label';", filename: LONG },
+    { code: "import { label } from '../label';", filename: LONG_NESTED },
     // svelte and its browser subpaths.
     { code: "import { onMount } from 'svelte';", filename: TS },
     { code: "import type { HTMLAttributes } from 'svelte/elements';", filename: TS },
@@ -76,6 +101,7 @@ tester.run('view-imports', rule, {
     { code: "const w = new URL('./worker.ts', import.meta.url);", filename: TS },
     // Not imports.
     { code: "const page = new URL('https://example.com/');", filename: TS },
+    { code: '// A view has no JSX.\nexport const el = 1;\n', filename: ui('x.tsx') },
     { code: 'const dev = import.meta.env.DEV;', filename: TS },
     { code: 'export const label = "x";', filename: TS },
     // Both script blocks and the markup of a .svelte file.
@@ -92,6 +118,34 @@ tester.run('view-imports', rule, {
     { code: "import { render } from '@testing-library/svelte';", filename: TEST },
     { code: "import { mockIPC } from '@tauri-apps/api/mocks';", filename: SPEC },
     { code: "import View from './View.svelte';", filename: TEST },
+    // Vitest's calls that take a specifier, with allowed ones.
+    { code: "vi.mock('./label', () => ({ label: 'x' }));", filename: TEST },
+    { code: "vitest.doMock('$lib/view-kit');", filename: TEST },
+    { code: "const actual = await vi.importActual('./label');", filename: SPEC },
+    { code: "vi.mock(import('./label'));", filename: TEST },
+    { code: "vi?.mock('./label');", filename: TEST },
+    { code: "vi.spyOn(console, 'log');", filename: TEST },
+    // vi and vitest under their own names, read by member, and mock functions.
+    {
+      code:
+        "import { expect, vi, vitest } from 'vitest';\n" +
+        "vi.fn();\nvitest.spyOn(console, 'log');\nvi['useFakeTimers']();\n",
+      filename: TEST,
+    },
+    {
+      code:
+        "import { expect, vi } from 'vitest';\nconst fn = vi.fn();\n" +
+        'expect(fn.mock.calls).toEqual([]);\nexpect(vi.mocked(fn).mock.results).toEqual([]);\n',
+      filename: TEST,
+    },
+    {
+      code:
+        "import { vi } from 'vitest';\nlet spy: ReturnType<typeof vi.fn>;\n" +
+        "type Vi = typeof vi;\nimport type * as Vitest from 'vitest';\n",
+      filename: SPEC,
+    },
+    // Outside tests, these names mean nothing.
+    { code: 'const vi = { mock: 1 };\nexport const { mock } = vi;\n', filename: TS },
   ],
   invalid: [
     // Relative paths that leave tools/demo/ui/.
@@ -103,9 +157,20 @@ tester.run('view-imports', rule, {
     notAllowed("import x from '../uix/y';"),
     notAllowed("import x from '../../x';", NESTED_TS),
     notAllowed("import x from '../../../app/src/lib/ipc';"),
+    notAllowed("import x from '../x';", WIN),
+    notAllowed("import x from '../../x';", WIN_NESTED),
+    notAllowed("import x from '../x';", UNC),
+    notAllowed("import x from '../../x';", UNC_NESTED),
+    notAllowed("import x from '../x';", LONG),
+    notAllowed("import x from '../../x';", LONG_NESTED),
     // Forms some resolvers read differently: back slashes, percent escapes.
     notAllowed("import x from './sub\\\\..\\\\..\\\\x';"),
     notAllowed("import x from './%2e%2e/x';"),
+    // A ?query or #hash, which Vite strips: each leaves the folder only one way.
+    notAllowed("import x from '../outside.js?/../ui/outside.js';"),
+    notAllowed("import x from './b#/../../outside.js';"),
+    notAllowed("const w = new URL('../outside.js?/../ui/outside.js', import.meta.url);"),
+    notAllowed("const w = new URL('./b#/../../outside.js', import.meta.url);"),
     // Bare names and aliases off the list.
     notAllowed("import x from 'sub/x';"),
     notAllowed("import { invoke } from '@tauri-apps/api/core';"),
@@ -178,6 +243,36 @@ tester.run('view-imports', rule, {
       filename: TS,
       errors: [{ messageId: 'nonLiteral' }],
     },
+    // JSX makes the build import react/jsx-runtime, and a JSX import source
+    // <source>/jsx-runtime.
+    {
+      code: 'export const el = <div />;\n',
+      filename: ui('x.tsx'),
+      errors: [{ messageId: 'jsx' }],
+    },
+    {
+      code: 'export const el = <>\n  <b>{true && <i />}</b>\n</>;\nexport const f = <p />;\n',
+      filename: ui('x.jsx'),
+      errors: [
+        { messageId: 'jsx', line: 1 },
+        { messageId: 'jsx', line: 4 },
+      ],
+    },
+    {
+      code: '/** @jsxImportSource .. */\nexport const el = <div />;\n',
+      filename: ui('x.tsx'),
+      errors: [{ messageId: 'jsxImportSource' }, { messageId: 'jsx' }],
+    },
+    {
+      code: '// @jsxImportSource preact\nexport const el = <div />;\n',
+      filename: ui('x.jsx'),
+      errors: [{ messageId: 'jsxImportSource' }, { messageId: 'jsx' }],
+    },
+    {
+      code: '/* @jsxRuntime automatic @jsxImportSource ./ui */\nexport const el = 1;\n',
+      filename: TS,
+      errors: [{ messageId: 'jsxImportSource' }],
+    },
     // Views may not glob.
     {
       code: "const views = import.meta.glob('./*.svelte');",
@@ -213,6 +308,63 @@ tester.run('view-imports', rule, {
     notAllowed("import matchers from '@testing-library/svelte/vitest';", TEST),
     notAllowed("import { it } from 'vitest';", ui('View.test.js')),
     notAllowed("import { it } from 'vitest';", ui('helpers.ts')),
+    // Vitest resolves a mocked or imported specifier through the same aliases.
+    ...['vi', 'vitest'].flatMap((object) =>
+      ['mock', 'doMock', 'unmock', 'doUnmock', 'importActual', 'importMock'].map((method) =>
+        notAllowed(`${object}.${method}('$lib/ipc');`, TEST),
+      ),
+    ),
+    notAllowed("vi.mock('../x', () => ({}));", SPEC),
+    notAllowed("vi['mock']('$lib/ipc');", TEST),
+    notAllowed("vi.mock(import('$lib/ipc'));", TEST),
+    {
+      code: 'const name = "$lib/ipc"; vi.mock(name);',
+      filename: TEST,
+      errors: [{ messageId: 'nonLiteral' }],
+    },
+    {
+      code: 'vi.importActual();',
+      filename: TEST,
+      errors: [{ messageId: 'nonLiteral' }],
+    },
+    // Any object's call counts: vi.resetModules() and the like return vi.
+    notAllowed("vi.resetModules().importActual('$lib/ipc');", TEST),
+    // vi under another name, where those calls would go unseen.
+    inTest("import { vi as v } from 'vitest';", 'vitestImport'),
+    inTest("import { vitest as v } from 'vitest';", 'vitestImport'),
+    inTest("import { vi as vitest } from 'vitest';", 'vitestImport'),
+    inTest("import * as vt from 'vitest';", 'vitestImport'),
+    inTest("export { vi } from 'vitest';", 'vitestImport'),
+    inTest("export * from 'vitest';", 'vitestImport'),
+    inTest("const vt = await import('vitest');", 'vitestImport'),
+    inTest("import vt = require('vitest');", 'vitestImport'),
+    inTest("const vt = await vi.importActual('vitest');", 'vitestImport'),
+    inTest(
+      "import { expect, it, vi as v } from 'vitest';\nawait v.importActual('$lib/ipc');",
+      'vitestImport',
+      'notAllowed',
+    ),
+    inTest(
+      "import * as vt from 'vitest';\nawait vt.vi.importActual('$lib/ipc');",
+      'vitestImport',
+      'notAllowed',
+    ),
+    inTest("import { vi } from 'vitest';\nconst v = vi;", 'vitestUse'),
+    inTest("import { vi } from 'vitest';\nexport { vi };", 'vitestUse'),
+    inTest('wrap(vi);', 'vitestUse'),
+    inTest("const name = 'importActual';\nvi[name]('$lib/ipc');", 'vitestUse'),
+    // Those calls taken apart.
+    inTest(
+      "import { vi } from 'vitest';\nconst { importActual } = vi;\n" +
+        "await importActual('$lib/router.svelte');",
+      'vitestUse',
+      'vitestUse',
+    ),
+    inTest('const { mock: m } = vi.resetModules();', 'vitestUse'),
+    inTest('const f = vi.importActual;', 'vitestUse'),
+    inTest("(0, vi.mock)('$lib/ipc');", 'vitestUse'),
+    inTest("vi.mock.apply(vi, ['$lib/ipc']);", 'vitestUse', 'vitestUse'),
+    inTest("vi.resetModules().doMock.call(null, '$lib/ipc');", 'vitestUse'),
     // The message names the allowed set and the contract.
     {
       code: "import { t } from '$lib/i18n';",
