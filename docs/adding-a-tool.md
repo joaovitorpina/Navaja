@@ -51,7 +51,8 @@ register_tools! {
 A complete `Transform` tool with two modes and one option. With the icon above and the `tests.rs` from §5, it compiles as is in `tools/my_tool/`:
 
 ```rust
-//! My tool: indents or dedents every line of pasted text.
+//! My tool: indents every line of pasted text, or strips the spaces and tabs
+//! that start each line.
 
 use navaja_core::{
     ActionMeta, Category, Control, Ctx, ErrorCode, InputSpec, OptionSpec, OutputKind, OutputSpec,
@@ -64,8 +65,10 @@ pub(crate) const TOOL: MyTool = MyTool;
 
 pub(crate) struct MyTool;
 
+// One const per value, shared by the spec, serde and the bounds check.
+const MIN_WIDTH: u32 = 0;
 const MAX_WIDTH: u32 = 16;
-const DEFAULT_WIDTH: u32 = 2; // used by the spec and by serde
+const DEFAULT_WIDTH: u32 = 2;
 const WIDTH_OUT_OF_RANGE: ErrorCode = ErrorCode::from_static("my_tool.width_out_of_range");
 
 #[derive(Deserialize)]
@@ -86,7 +89,7 @@ impl Tool for MyTool {
             spec_version: SPEC_VERSION,
             id: ToolId::from_static("my_tool"),
             name: "My tool".into(),
-            description: "Indents or dedents every line of pasted text.".into(),
+            description: "Indents every line, or strips its leading spaces and tabs.".into(),
             category: Category::FORMATTERS,
             keywords: vec!["indent".into(), "dedent".into()],
             icon: include_str!("icon.svg").into(),
@@ -106,7 +109,7 @@ impl Tool for MyTool {
                     key: "width".into(),
                     label: "Width".into(),
                     control: Control::Integer {
-                        min: 0,
+                        min: i64::from(MIN_WIDTH),
                         max: i64::from(MAX_WIDTH),
                         default: i64::from(DEFAULT_WIDTH),
                     },
@@ -124,11 +127,10 @@ impl Tool for MyTool {
 
     fn invoke(&self, action: &str, input: Value, ctx: &Ctx<'_>) -> Result<Value, ToolError> {
         let input: Input = typed(input)?; // never echoes the input in errors
-        if input.width > MAX_WIDTH {
-            return Err(
-                ToolError::new(WIDTH_OUT_OF_RANGE, "Choose a width from 0 to 16.")
-                    .with_details(json!({ "min": 0, "max": MAX_WIDTH })),
-            );
+        if !(MIN_WIDTH..=MAX_WIDTH).contains(&input.width) {
+            let message = format!("Choose a width from {MIN_WIDTH} to {MAX_WIDTH}.");
+            return Err(ToolError::new(WIDTH_OUT_OF_RANGE, message)
+                .with_details(json!({ "min": MIN_WIDTH, "max": MAX_WIDTH })));
         }
         ctx.check()?; // before any side effect; in long loops too
         let text = match action {
@@ -140,15 +142,20 @@ impl Tool for MyTool {
     }
 }
 
+// `split_inclusive` keeps each line's ending, so `\r\n` and a final newline
+// come back unchanged; `lines()` would drop both.
 fn indent(text: &str, width: u32) -> String {
     let pad = " ".repeat(width as usize);
-    let lines: Vec<String> = text.lines().map(|line| format!("{pad}{line}")).collect();
-    lines.join("\n")
+    text.split_inclusive('\n')
+        .map(|line| format!("{pad}{line}"))
+        .collect()
 }
 
+// Strips every leading space and tab, not just the indent the lines share.
 fn dedent(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().map(str::trim_start).collect();
-    lines.join("\n")
+    text.split_inclusive('\n')
+        .map(|line| line.trim_start_matches([' ', '\t']))
+        .collect()
 }
 
 #[cfg(test)]
@@ -291,6 +298,14 @@ fn indents_every_line_and_bounds_the_width() {
     assert_eq!(out["text"], "    a\n    b");
     let error = run_single(TOOL, "indent", json!({ "input": "a", "width": 17 })).unwrap_err();
     assert_eq!(error.code.as_str(), "my_tool.width_out_of_range");
+}
+
+#[test]
+fn keeps_line_endings_and_the_final_newline() {
+    let out = run_single(TOOL, "indent", json!({ "input": "a\r\nb\n", "width": 1 })).unwrap();
+    assert_eq!(out["text"], " a\r\n b\n");
+    let out = run_single(TOOL, "dedent", json!({ "input": " \ta\r\n  b\n" })).unwrap();
+    assert_eq!(out["text"], "a\r\nb\n");
 }
 ```
 
