@@ -6,6 +6,7 @@
 // helper scales them to the capture's pixels):
 //   s2-3-menubar screen                     # the main display: points, pixels, scale, menu bar
 //   s2-3-menubar items                      # every on-screen window in the menu bar, left to right
+//   s2-3-menubar windows                    # every on-screen window, for when `items` finds none
 //   s2-3-menubar wait-item <pid> <seconds>  # waits for a status item of <pid>; prints its rectangle
 //   s2-3-menubar measure <png> <x> <y> <w> <h>        # what the capture shows there (see Measure)
 //   s2-3-menubar crop <png> <out.png> <x> <y> <w> <h> [zoom]  # a crop, enlarged without smoothing
@@ -33,8 +34,9 @@ func displayBounds() -> CGRect {
   CGDisplayBounds(CGMainDisplayID())
 }
 
-/// The menu bar's height in points: windows at the status level sit inside it.
-func menuBarHeight() -> CGFloat {
+/// NSStatusBar's thickness, in points. On macOS 26 the bar is drawn taller
+/// than this (its status item windows are), so the strip below allows more.
+func statusBarThickness() -> CGFloat {
   NSStatusBar.system.thickness
 }
 
@@ -45,26 +47,31 @@ struct Window {
   let bounds: CGRect
 }
 
-/// On-screen windows that lie inside the menu bar strip, left to right.
+/// On-screen windows at the top of the display, no taller than a menu bar
+/// can be (50 points) and narrower than 400, left to right.
 func menuBarWindows() -> [Window] {
+  allWindows().filter {
+    $0.bounds.minY >= 0 && $0.bounds.minY <= 1 && $0.bounds.height <= 50 && $0.bounds.width < 400
+      && $0.bounds.width > 0
+  }
+  .sorted { $0.bounds.minX < $1.bounds.minX }
+}
+
+/// Every on-screen window, front to back.
+func allWindows() -> [Window] {
   let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
   guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
     fail("CGWindowListCopyWindowInfo returned nothing")
   }
-  let strip = menuBarHeight() + 2
   return list.compactMap { info -> Window? in
     guard let layer = info[kCGWindowLayer as String] as? Int,
       let dictionary = info[kCGWindowBounds as String] as? NSDictionary,
       let bounds = CGRect(dictionaryRepresentation: dictionary as CFDictionary)
     else { return nil }
-    guard bounds.minY >= 0, bounds.maxY <= strip, bounds.width < 400, bounds.width > 0 else {
-      return nil
-    }
     let owner = info[kCGWindowOwnerName as String] as? String ?? "?"
     let pid = (info[kCGWindowOwnerPID as String] as? Int).map { Int32($0) } ?? -1
     return Window(owner: owner, pid: pid, layer: layer, bounds: bounds)
   }
-  .sorted { $0.bounds.minX < $1.bounds.minX }
 }
 
 /// The status level, where NSStatusItem windows live.
@@ -236,10 +243,18 @@ case "screen":
   let pixelsWide = mode?.pixelWidth ?? 0
   let pixelsHigh = mode?.pixelHeight ?? 0
   let scale = NSScreen.main?.backingScaleFactor ?? 0
+  let itemHeight = menuBarWindows().filter { $0.layer == statusLevel }.map { $0.bounds.maxY }.max() ?? 0
   print(
     "display: \(fmt(bounds.width, 0))x\(fmt(bounds.height, 0)) points, "
       + "\(pixelsWide)x\(pixelsHigh) pixels, backing scale \(fmt(scale)); "
-      + "menu bar \(fmt(menuBarHeight())) points; status level \(statusLevel)")
+      + "NSStatusBar thickness \(fmt(statusBarThickness())) points; status items "
+      + "\(fmt(itemHeight)) points tall; status level \(statusLevel)")
+
+case "windows":
+  for window in allWindows() {
+    print(
+      "\(describe(window.bounds))  layer \(window.layer)  pid \(window.pid)  \(window.owner)")
+  }
 
 case "items":
   for window in menuBarWindows() {
@@ -345,5 +360,5 @@ case "tint":
   print("The icon is monochrome and takes the reference item's colour in both appearances.")
 
 default:
-  fail("usage: s2-3-menubar screen|items|wait-item|measure|crop|present|tint ...")
+  fail("usage: s2-3-menubar screen|items|windows|wait-item|measure|crop|present|tint ...")
 }

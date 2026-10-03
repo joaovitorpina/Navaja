@@ -6,18 +6,26 @@
 #
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/clipboard-history.ps1 <mode> [-Text <text>] [-Seconds <n>]
-#   enable         turns clipboard history on for this user (EnableClipboardHistory = 1),
-#                  restarts the per-user clipboard service, and waits until the API says it is on
+#   enable         turns clipboard history on for this user (EnableClipboardHistory = 1) and
+#                  restarts the per-user clipboard service; if the API still says it is off,
+#                  sets the AllowClipboardHistory policy too. Prints "History: on" or
+#                  "History: off" and, on CI, writes enabled=true|false to $GITHUB_OUTPUT.
+#                  It fails only on an error, not when history stays off.
 #   status         whether history is on, and what it holds
 #   put            puts -Text on the clipboard the ordinary way, with no exclusion formats
 #   clipboard-is   fails unless the clipboard holds -Text
+#   formats        fails unless the clipboard holds -Text and carries the exclusion formats
+#                  Windows documents, as Navaja's copies should: CanIncludeInClipboardHistory
+#                  and CanUploadToCloudClipboard as a DWORD 0, and
+#                  ExcludeClipboardContentFromMonitorProcessing
 #   history-has    waits up to -Seconds for -Text to appear in clipboard history
 #   history-lacks  waits -Seconds, then fails if -Text is in clipboard history
 #
-# `enable` changes this user's settings; it is meant for CI runners.
+# `enable` changes this user's settings and, if needed, a machine policy; it
+# is meant for CI runners.
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [ValidateSet('enable', 'status', 'put', 'clipboard-is', 'history-has', 'history-lacks')]
+  [ValidateSet('enable', 'status', 'put', 'clipboard-is', 'formats', 'history-has', 'history-lacks')]
   [string] $Mode,
   [string] $Text = '',
   [int] $Seconds = 30
@@ -135,6 +143,64 @@ function Wait-Enabled([int] $For) {
   return $true
 }
 
+# The clipboard's formats, by name, with the first bytes of the exclusion
+# formats' data. Windows' own clipboard API, since .NET's lists only the
+# formats it knows.
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class ClipboardFormats {
+  [DllImport("user32.dll", SetLastError = true)] static extern bool OpenClipboard(IntPtr owner);
+  [DllImport("user32.dll")] static extern bool CloseClipboard();
+  [DllImport("user32.dll")] static extern uint EnumClipboardFormats(uint format);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClipboardFormatName(uint format, StringBuilder name, int size);
+  [DllImport("user32.dll")] static extern IntPtr GetClipboardData(uint format);
+  [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr memory);
+  [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr memory);
+  [DllImport("kernel32.dll")] static extern UIntPtr GlobalSize(IntPtr memory);
+
+  static readonly string[] Exclusions = {
+    "CanIncludeInClipboardHistory", "CanUploadToCloudClipboard", "ExcludeClipboardContentFromMonitorProcessing",
+  };
+
+  // name -> the data's first bytes as hex (exclusion formats only), or "".
+  public static Dictionary<string, string> Read() {
+    for (int i = 0; !OpenClipboard(IntPtr.Zero); i++) {
+      if (i >= 40) throw new InvalidOperationException("cannot open the clipboard");
+      System.Threading.Thread.Sleep(50);
+    }
+    var formats = new Dictionary<string, string>();
+    try {
+      for (uint format = EnumClipboardFormats(0); format != 0; format = EnumClipboardFormats(format)) {
+        var name = new StringBuilder(256);
+        string key = GetClipboardFormatName(format, name, name.Capacity) > 0 ? name.ToString() : "#" + format;
+        string data = "";
+        if (Array.IndexOf(Exclusions, key) >= 0) {
+          IntPtr handle = GetClipboardData(format);
+          IntPtr bytes = handle == IntPtr.Zero ? IntPtr.Zero : GlobalLock(handle);
+          if (bytes != IntPtr.Zero) {
+            int size = (int)Math.Min((ulong)GlobalSize(handle), 16UL);
+            var buffer = new byte[size];
+            Marshal.Copy(bytes, buffer, 0, size);
+            GlobalUnlock(handle);
+            data = BitConverter.ToString(buffer);
+          } else {
+            data = "(no data)";
+          }
+        }
+        formats[key] = data;
+      }
+    } finally {
+      CloseClipboard();
+    }
+    return formats;
+  }
+}
+'@
+
 switch ($Mode) {
   'enable' {
     Show-Session
@@ -144,18 +210,26 @@ switch ($Mode) {
     Set-ItemProperty -Path $key -Name EnableClipboardHistory -Value 1 -Type DWord
     Write-Output 'Set HKCU\Software\Microsoft\Clipboard EnableClipboardHistory = 1.'
     Restart-ClipboardService
-    if (-not (Wait-Enabled 15)) {
-      # Windows Server may keep history off unless the policy allows it.
+    $enabled = Wait-Enabled 15
+    if (-not $enabled) {
+      # A policy can keep history off whatever the user setting says.
       $policy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
       if (-not (Test-Path $policy)) { $null = New-Item -Path $policy -Force }
       Set-ItemProperty -Path $policy -Name AllowClipboardHistory -Value 1 -Type DWord
       Write-Output 'Still off; set the policy AllowClipboardHistory = 1 too.'
       Restart-ClipboardService
-      $null = Wait-Enabled $Seconds
+      $enabled = Wait-Enabled 15
     }
     Show-Keys
     Show-History (Get-History)
-    if (-not (Test-Enabled)) { Fail 'enable: clipboard history is still off' }
+    if ($env:GITHUB_OUTPUT) {
+      Add-Content -Path $env:GITHUB_OUTPUT -Value ("enabled=" + "$enabled".ToLower()) -Encoding utf8
+    }
+    if ($enabled) {
+      Write-Output 'History: on.'
+    } else {
+      Write-Output 'History: off. This Windows does not turn clipboard history on, so it cannot show whether a copy stays out of it.'
+    }
   }
 
   'status' {
@@ -176,6 +250,25 @@ switch ($Mode) {
     $now = Get-Clipboard -Raw
     if ($now -cne $Text) { Fail "clipboard-is: the clipboard holds '$now', not '$Text'" }
     Write-Output "The clipboard holds $Text."
+  }
+
+  'formats' {
+    if (-not $Text) { Fail 'formats: no -Text' }
+    $now = Get-Clipboard -Raw
+    if ($now -cne $Text) { Fail "formats: the clipboard holds '$now', not '$Text'" }
+    $formats = [ClipboardFormats]::Read()
+    Write-Output "The clipboard holds $Text, in $($formats.Count) formats:"
+    foreach ($name in $formats.Keys) { Write-Output "  | $name $($formats[$name])" }
+    $problems = @()
+    foreach ($name in 'CanIncludeInClipboardHistory', 'CanUploadToCloudClipboard') {
+      if (-not $formats.ContainsKey($name)) { $problems += "no $name" }
+      elseif (-not $formats[$name].StartsWith('00-00-00-00')) { $problems += "$name is $($formats[$name]), not a DWORD 0" }
+    }
+    if (-not $formats.ContainsKey('ExcludeClipboardContentFromMonitorProcessing')) {
+      $problems += 'no ExcludeClipboardContentFromMonitorProcessing'
+    }
+    if ($problems) { Fail ('formats: ' + ($problems -join '; ')) }
+    Write-Output 'It carries all three exclusion formats.'
   }
 
   'history-has' {

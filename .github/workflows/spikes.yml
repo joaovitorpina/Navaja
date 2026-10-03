@@ -221,13 +221,16 @@ jobs:
 
   # S2.3: is the tray icon crisp, and does the macOS template icon work? It
   # runs the app as shipped (`tauri build --debug --no-bundle`, no e2e
-  # overlay). On macOS: the menu bar captured before the app starts and with
-  # it running, in the light and the dark appearance, then checks on the
-  # icon's pixels against a system item's (scripts/spikes/s2-3-check.sh),
-  # with a negative control on the capture taken before. On Windows: the icon promoted out of the overflow, found
-  # through UI Automation and captured at the runner's own scale
-  # (scripts/spikes/s2-3-tray.ps1). Other Windows scales need a person
-  # (docs/spikes.md). The captures are the run's artifact.
+  # overlay).
+  # - macOS (scripts/spikes/s2-3-check.sh): the menu bar captured before the
+  #   app starts and with it running, in the light and the dark appearance,
+  #   then checks on the icon's pixels against a system item's. Two negative
+  #   controls: the presence check on the capture taken before the app
+  #   started, and the tint check on a build whose icon is not a template.
+  # - Windows (scripts/spikes/s2-3-tray.ps1): the icon promoted out of the
+  #   overflow, found through UI Automation and captured at the runner's own
+  #   scale. Other scales need a person (docs/spikes.md).
+  # The captures are the run's artifact.
   s2-3:
     name: S2.3 tray icon (${{ matrix.os }})
     strategy:
@@ -301,6 +304,17 @@ jobs:
         if: ${{ !cancelled() && steps.capture.outcome == 'success' }}
         run: bash scripts/spikes/s2-3-check.sh tint
 
+      # Overwrites target/debug/navaja, so it runs after the checks above.
+      - name: h. Build the app again with its icon not a template (macOS)
+        id: control_build
+        if: ${{ !cancelled() && steps.capture.outcome == 'success' }}
+        run: bash scripts/spikes/s2-3-check.sh control-build
+
+      - name: h. The tint check fails on that build's icon (macOS)
+        id: tint_refuses
+        if: ${{ !cancelled() && steps.control_build.outcome == 'success' }}
+        run: bash scripts/spikes/s2-3-check.sh tint-refuses
+
       - name: Quit the app and put the appearance back (macOS)
         if: ${{ always() && runner.os == 'macOS' }}
         run: bash scripts/spikes/s2-3-check.sh stop
@@ -324,6 +338,18 @@ jobs:
         if: ${{ always() && runner.os == 'Windows' }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 stop
 
+      # tray.rs is put back by control-build itself and again by `stop`.
+      - name: The tree is clean again
+        id: clean
+        if: always()
+        run: |
+          changes=$(git status --porcelain)
+          if [ -n "$changes" ]; then
+            echo "::error::files left after the checks:"
+            printf '%s\n' "$changes"
+            exit 1
+          fi
+
       - name: Upload the captures
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -336,7 +362,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: h. Summary
+      - name: i. Summary
         if: always()
         env:
           OS: ${{ matrix.os }}
@@ -348,9 +374,12 @@ jobs:
           PRESENT: ${{ steps.present.outcome }}
           PRESENT_REFUSES: ${{ steps.present_refuses.outcome }}
           TINT: ${{ steps.tint.outcome }}
+          CONTROL_BUILD: ${{ steps.control_build.outcome }}
+          TINT_REFUSES: ${{ steps.tint_refuses.outcome }}
           WIN_BEFORE: ${{ steps.win_before.outcome }}
           WIN_LAUNCH: ${{ steps.win_launch.outcome }}
           WIN_CAPTURE: ${{ steps.win_capture.outcome }}
+          CLEAN: ${{ steps.clean.outcome }}
         run: |
           result() {
             case "$1" in
@@ -374,20 +403,27 @@ jobs:
               echo "| f. Icon drawn in both captures | $(result "$PRESENT") |"
               echo "| f. Same check finds no icon before the app starts | $(result "$PRESENT_REFUSES") |"
               echo "| g. Monochrome; tinted like a system item in each appearance | $(result "$TINT") |"
+              echo "| h. Control build, icon not a template | $(result "$CONTROL_BUILD") |"
+              echo "| h. Tint check fails on that icon | $(result "$TINT_REFUSES") |"
             else
               echo "| b. No Navaja icon in the notification area before the app starts | $(result "$WIN_BEFORE") |"
               echo "| c. App starts; its icon appears in the notification area | $(result "$WIN_LAUNCH") |"
               echo "| d. Notification area captured at the runner's scale | $(result "$WIN_CAPTURE") |"
               echo "| Crisp at 100-200 % | needs a person (docs/spikes.md) |"
             fi
+            echo "| Tree clean | $(result "$CLEAN") |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # M2a exit check "Copy stays out of Windows clipboard history" (roadmap
-  # M2a, Exit). Clipboard history is turned on for the runner's user; an
-  # ordinary copy must reach it (the control), Navaja's Copy button must put
-  # a fresh UUID on the clipboard but not in the history, and the same UUID
-  # copied the ordinary way must reach it (the negative control for the
-  # lookup). scripts/spikes/exit-clipboard-check.sh and clipboard-history.ps1.
+  # M2a, Exit). The job turns clipboard history on for the runner's user.
+  # Navaja's Copy button must put a fresh UUID on the clipboard, with the
+  # exclusion formats Windows documents (and an ordinary copy of the same
+  # text must fail that check). Where history turns on, an ordinary copy
+  # must reach it (the control), Navaja's must not, and the same UUID
+  # copied the ordinary way must (the lookup's negative control). Windows
+  # Server keeps history off, so on windows-2025 those three steps are
+  # skipped and the summary says the runner cannot answer. Scripts:
+  # scripts/spikes/exit-clipboard-check.sh and clipboard-history.ps1.
   exit-clipboard-history:
     name: Exit check, copy stays out of clipboard history (windows-2025)
     runs-on: windows-2025
@@ -421,29 +457,42 @@ jobs:
         id: build
         run: pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
 
+      # Sets the step output `enabled`. It fails only on an error, not when
+      # Windows keeps history off.
       - name: b. Turn on clipboard history for the runner's user
         id: enable
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/clipboard-history.ps1 enable
 
       - name: c. Control, an ordinary copy reaches clipboard history
         id: control
-        if: ${{ !cancelled() && steps.enable.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.enable.outputs.enabled == 'true' }}
         run: bash scripts/spikes/exit-clipboard-check.sh control
 
       - name: d. Navaja's Copy button puts a fresh UUID on the clipboard
         id: copy
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.control.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.enable.outcome == 'success' }}
         run: bash scripts/spikes/exit-clipboard-check.sh copy
 
-      - name: e. Navaja's copy stays out of clipboard history
-        id: absent
+      - name: e. Navaja's copy carries the exclusion formats
+        id: formats
         if: ${{ !cancelled() && steps.copy.outcome == 'success' }}
+        run: bash scripts/spikes/exit-clipboard-check.sh formats
+
+      - name: f. Navaja's copy stays out of clipboard history
+        id: absent
+        if: ${{ !cancelled() && steps.copy.outcome == 'success' && steps.control.outcome == 'success' }}
         run: bash scripts/spikes/exit-clipboard-check.sh absent
 
-      - name: f. The same UUID, copied the ordinary way, reaches clipboard history
+      # The last two replace the clipboard's contents.
+      - name: g. The same UUID, copied the ordinary way, reaches clipboard history
         id: detects
-        if: ${{ !cancelled() && steps.copy.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.copy.outcome == 'success' && steps.control.outcome == 'success' }}
         run: bash scripts/spikes/exit-clipboard-check.sh detects
+
+      - name: h. The formats check refuses the same UUID copied the ordinary way
+        id: formats_refuses
+        if: ${{ !cancelled() && steps.copy.outcome == 'success' }}
+        run: bash scripts/spikes/exit-clipboard-check.sh formats-refuses
 
       - name: Remove the spec; the tree is clean again
         id: clean
@@ -457,15 +506,18 @@ jobs:
             exit 1
           fi
 
-      - name: g. Summary
+      - name: i. Summary
         if: always()
         env:
           BUILD: ${{ steps.build.outcome }}
           ENABLE: ${{ steps.enable.outcome }}
+          ENABLED: ${{ steps.enable.outputs.enabled }}
           CONTROL: ${{ steps.control.outcome }}
           COPY: ${{ steps.copy.outcome }}
+          FORMATS: ${{ steps.formats.outcome }}
           ABSENT: ${{ steps.absent.outcome }}
           DETECTS: ${{ steps.detects.outcome }}
+          FORMATS_REFUSES: ${{ steps.formats_refuses.outcome }}
           CLEAN: ${{ steps.clean.outcome }}
         run: |
           result() {
@@ -476,16 +528,26 @@ jobs:
               *) echo "$1" ;;
             esac
           }
+          # The steps that need clipboard history, where Windows keeps it off.
+          history() {
+            if [ "$ENABLE" = success ] && [ "$ENABLED" != true ]; then
+              echo 'inconclusive: this Windows keeps clipboard history off'
+            else
+              result "$1"
+            fi
+          }
           {
             echo '### Exit check: copy stays out of Windows clipboard history'
             echo
             echo '| Check | Result |'
             echo '|---|---|'
             echo "| a. End-to-end build | $(result "$BUILD") |"
-            echo "| b. Clipboard history on for the runner's user | $(result "$ENABLE") |"
-            echo "| c. Control: an ordinary copy reaches the history | $(result "$CONTROL") |"
+            echo "| b. Clipboard history turned on (\`enabled=${ENABLED:-?}\`) | $(result "$ENABLE") |"
+            echo "| c. Control: an ordinary copy reaches the history | $(history "$CONTROL") |"
             echo "| d. Navaja's Copy button puts a fresh UUID on the clipboard | $(result "$COPY") |"
-            echo "| e. Navaja's copy stays out of the history | $(result "$ABSENT") |"
-            echo "| f. The same UUID, copied the ordinary way, reaches it | $(result "$DETECTS") |"
+            echo "| e. Navaja's copy carries the exclusion formats | $(result "$FORMATS") |"
+            echo "| f. Navaja's copy stays out of the history | $(history "$ABSENT") |"
+            echo "| g. The same UUID, copied the ordinary way, reaches it | $(history "$DETECTS") |"
+            echo "| h. The formats check refuses that ordinary copy | $(result "$FORMATS_REFUSES") |"
             echo "| Spec removed, tree clean | $(result "$CLEAN") |"
           } >> "$GITHUB_STEP_SUMMARY"

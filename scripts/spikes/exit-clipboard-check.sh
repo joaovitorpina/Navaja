@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
 # M2a exit check "Copy stays out of Windows clipboard history" (docs/spikes.md),
 # job exit-clipboard-history in .github/workflows/spikes.yml. Navaja copies
-# through arboard with Windows' exclusion formats (app/src-tauri/src/clipboard.rs);
-# this checks, on a real Windows clipboard, that such a copy reaches the
-# clipboard and not its history, against controls that show the history
-# records an ordinary copy.
+# through arboard with Windows' exclusion formats (app/src-tauri/src/clipboard.rs).
+# This checks, on a real Windows clipboard, that such a copy reaches the
+# clipboard, carries those formats, and stays out of clipboard history, with
+# controls that show the history records an ordinary copy.
 #
 # Usage, on Windows, from anywhere in the repository, after the end-to-end build
 #   pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
 # and `clipboard-history.ps1 enable`:
-#   bash scripts/spikes/exit-clipboard-check.sh control  # an ordinary copy of a random text reaches the history
-#   bash scripts/spikes/exit-clipboard-check.sh copy     # Navaja's Copy button copies a fresh UUID (the canary)
-#   bash scripts/spikes/exit-clipboard-check.sh absent   # the canary is on the clipboard but not in the history
-#   bash scripts/spikes/exit-clipboard-check.sh detects  # the canary, copied the ordinary way, does reach it
-#   bash scripts/spikes/exit-clipboard-check.sh clean    # removes the spec `copy` writes
+#   bash scripts/spikes/exit-clipboard-check.sh control          # an ordinary copy of a random text reaches the history
+#   bash scripts/spikes/exit-clipboard-check.sh copy             # Navaja's Copy button copies a fresh UUID (the canary)
+#   bash scripts/spikes/exit-clipboard-check.sh formats          # the canary on the clipboard carries the exclusion formats
+#   bash scripts/spikes/exit-clipboard-check.sh absent           # the canary is on the clipboard but not in the history
+#   bash scripts/spikes/exit-clipboard-check.sh detects          # the canary, copied the ordinary way, does reach it
+#   bash scripts/spikes/exit-clipboard-check.sh formats-refuses  # the formats check fails on that ordinary copy
+#   bash scripts/spikes/exit-clipboard-check.sh clean            # removes the spec `copy` writes
+#
+# control, absent and detects need clipboard history, which Windows Server
+# does not turn on (`clipboard-history.ps1 enable` says so); copy, formats
+# and formats-refuses do not. `detects` and `formats-refuses` replace the
+# clipboard's contents, so they run last.
 #
 # The modes share a folder, $EXIT_CLIPBOARD_DIR (default:
 # navaja-exit-clipboard under $RUNNER_TEMP, or under the OS's temporary
@@ -117,6 +124,13 @@ EOF
   ps clipboard-is -Text "$(canary)"
 }
 
+# Navaja's own copy, still on the clipboard, carries the formats that keep it
+# out of clipboard history and cloud sync, and away from clipboard monitors.
+formats() {
+  ps formats -Text "$(canary)"
+  echo "Navaja's copy carries the exclusion formats."
+}
+
 absent() {
   ps clipboard-is -Text "$(canary)"
   ps history-lacks -Text "$(canary)" -Seconds "$WAIT"
@@ -131,6 +145,20 @@ detects() {
   echo "The same text, copied the ordinary way, reaches clipboard history."
 }
 
+# The negative control for `formats`: the same text, copied the ordinary
+# way, carries none of the exclusion formats, and the check must say so.
+formats_refuses() {
+  local log=$DIR/formats-refuses.log status=0
+  ps put -Text "$(canary)"
+  ps formats -Text "$(canary)" > "$log" 2>&1 || status=$?
+  # Behind a prefix: the output holds an error on purpose.
+  sed 's/^/  | /' "$log"
+  [ "$status" -ne 0 ] || fail "formats-refuses: the check passed an ordinary copy"
+  grep -qF 'no CanIncludeInClipboardHistory' "$log" ||
+    fail "formats-refuses: the check failed for another reason"
+  echo "The formats check refuses the same text copied the ordinary way."
+}
+
 clean() {
   rm -f "$SPEC"
   # The folder only if this spec was all it held.
@@ -141,11 +169,13 @@ clean() {
 case "${1:-}" in
   control) control ;;
   copy) copy ;;
+  formats) formats ;;
   absent) absent ;;
   detects) detects ;;
+  formats-refuses) formats_refuses ;;
   clean) clean ;;
   *)
-    echo "usage: $0 control|copy|absent|detects|clean" >&2
+    echo "usage: $0 control|copy|formats|absent|detects|formats-refuses|clean" >&2
     exit 2
     ;;
 esac
