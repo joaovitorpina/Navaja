@@ -27,6 +27,9 @@
 # icon_as_template, builds, keeps the binary in the folder above as
 # navaja-not-template, and puts tray.rs back, pass or fail. It overwrites
 # target/debug/navaja, so it runs after the checks on the shipped build.
+# The copy of tray.rs it keeps in that folder lasts only while the edit
+# does. `stop` puts it back only when tray.rs is still exactly that copy
+# with the edit, so it never overwrites changes made to tray.rs since.
 #
 # It changes the appearance through System Events, which needs the
 # Automation permission that GitHub's macOS images grant; screencapture needs
@@ -40,7 +43,10 @@ HELPER=$DIR/s2-3-menubar
 APP=target/debug/navaja
 CONTROL_APP=$DIR/navaja-not-template
 TRAY=app/src-tauri/src/tray.rs
+TRAY_COPY=$DIR/tray.rs.orig
 TEMPLATE_CALL='.icon_as_template(cfg!(target_os = "macos"))'
+# The control build's one edit to tray.rs, as a sed script.
+CONTROL_EDIT='s/\.icon_as_template(cfg!(target_os = "macos"))/.icon_as_template(false)/'
 mkdir -p "$DIR"
 
 fail() {
@@ -242,16 +248,20 @@ tint() {
 
 control_build() {
   quit_app shipped
-  cp "$TRAY" "$DIR/tray.rs.orig"
-  trap 'cp "$DIR/tray.rs.orig" "$TRAY"' EXIT
   grep -qF "$TEMPLATE_CALL" "$TRAY" || fail "control-build: $TRAY no longer has $TEMPLATE_CALL"
-  sed -i '' 's/\.icon_as_template(cfg!(target_os = "macos"))/.icon_as_template(false)/' "$TRAY"
+  # The copy lives as long as the edit: whichever way this ends, tray.rs
+  # goes back and the copy goes, so no later run can restore a stale one.
+  cp "$TRAY" "$TRAY_COPY"
+  trap 'cp "$TRAY_COPY" "$TRAY" && rm -f "$TRAY_COPY"' EXIT
+  sed -i '' "$CONTROL_EDIT" "$TRAY"
   grep -qF '.icon_as_template(false)' "$TRAY" || fail "control-build: the edit did not apply"
   pnpm tauri build --debug --no-bundle
   cp "$APP" "$CONTROL_APP"
-  cp "$DIR/tray.rs.orig" "$TRAY"
+  cp "$TRAY_COPY" "$TRAY"
   trap - EXIT
-  git diff --quiet -- "$TRAY" || fail "control-build: $TRAY was not put back"
+  # Against the copy, not git: tray.rs may hold changes of its own.
+  cmp -s "$TRAY_COPY" "$TRAY" || fail "control-build: $TRAY was not put back; the copy is $TRAY_COPY"
+  rm -f "$TRAY_COPY"
   echo "Built $CONTROL_APP: the same app, with its tray icon not a template."
 }
 
@@ -321,8 +331,16 @@ stop() {
     set_appearance "$(cat "$DIR/appearance.original")"
   fi
   osascript -e 'quit app "System Events"' 2> /dev/null || true
-  if [ -f "$DIR/tray.rs.orig" ] && ! git diff --quiet -- "$TRAY"; then
-    cp "$DIR/tray.rs.orig" "$TRAY"
+  # A copy left only when control-build was killed before its trap ran.
+  # Put it back only while tray.rs is exactly that copy with the edit.
+  if [ -f "$TRAY_COPY" ]; then
+    if sed "$CONTROL_EDIT" "$TRAY_COPY" | cmp -s - "$TRAY"; then
+      cp "$TRAY_COPY" "$TRAY"
+      echo "Put $TRAY back from $TRAY_COPY."
+    else
+      echo "$TRAY is not the control build's edit of $TRAY_COPY; left as it is."
+    fi
+    rm -f "$TRAY_COPY"
   fi
 }
 

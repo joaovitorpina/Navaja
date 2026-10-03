@@ -15,16 +15,22 @@
 #                    picks an empty stretch of the taskbar for present-refuses
 #   present          an icon is drawn in the button's capture
 #   present-refuses  negative control: the same check finds none on that empty stretch
-#   stop             quits the app
+#   stop             quits the app; puts the icon's IsPromoted back
 #
 # The modes share a folder, $env:S23_DIR (default: navaja-s2-3 under
 # $env:RUNNER_TEMP, or under $env:TEMP outside CI), as s2-3-check.sh does.
-# present and present-refuses read only the files there, so they can run on
-# a downloaded artifact.
+# present and present-refuses read only the capture and the rectangles
+# there (windows-screen.png, icon.rect, empty.rect), which the workflow
+# uploads, so they can run again on a downloaded artifact with S23_DIR set
+# to its folder.
 #
 # Promoting: Windows 11 puts a new icon in the overflow, behind the chevron.
 # Explorer records each icon under HKCU\Control Panel\NotifyIconSettings, and
 # IsPromoted = 1 there shows it on the taskbar, as the Settings page does.
+# launch changes that one per-user value, on the record whose executable is
+# this checkout's target\debug\navaja.exe and no other Navaja's, and saves
+# the value it had; stop puts that back. Run on your own machine, the icon
+# is therefore pinned only while the spike runs.
 param(
   [Parameter(Mandatory = $true, Position = 0)]
   [ValidateSet('before', 'launch', 'capture', 'present', 'present-refuses', 'stop')]
@@ -37,8 +43,11 @@ Set-StrictMode -Version Latest
 $Root = (& git rev-parse --show-toplevel).Trim()
 $Base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
 $Dir = if ($env:S23_DIR) { $env:S23_DIR } else { Join-Path $Base 'navaja-s2-3' }
-$App = Join-Path $Root 'target\debug\navaja.exe'
+$App = [System.IO.Path]::GetFullPath((Join-Path $Root 'target\debug\navaja.exe'))
 $null = New-Item -ItemType Directory -Force -Path $Dir
+$Settings = 'HKCU:\Control Panel\NotifyIconSettings'
+# The record launch promoted, and its IsPromoted before: two lines.
+$Promoted = Join-Path $Dir 'promoted.state'
 
 function Fail([string] $Message) {
   Write-Output "::error::S2.3 $Message"
@@ -49,6 +58,43 @@ function Fail([string] $Message) {
 Add-Type -Namespace S23 -Name Dpi -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();'
 $null = [S23.Dpi]::SetProcessDPIAware()
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase, System.Drawing, System.Windows.Forms
+Add-Type -Namespace S23 -Name Shell -MemberDefinition @'
+[DllImport("shell32.dll")]
+static extern int SHGetKnownFolderPath([MarshalAs(UnmanagedType.LPStruct)] Guid id, uint flags, IntPtr token, out IntPtr path);
+public static string KnownFolder(Guid id) {
+  IntPtr path = IntPtr.Zero;
+  try { return SHGetKnownFolderPath(id, 0, IntPtr.Zero, out path) == 0 ? Marshal.PtrToStringUni(path) : null; }
+  finally { Marshal.FreeCoTaskMem(path); }
+}
+'@
+
+# A NotifyIconSettings record's ExecutablePath as a full path, or $null.
+# Explorer writes some folders as their known-folder GUID, as in
+# {6D809377-6AF0-444B-8957-A3773F02200E}\App\app.exe for Program Files.
+function Resolve-ExecutablePath([string] $Path) {
+  if ($Path -match '^\{([0-9A-Fa-f-]{36})\}(.*)$') {
+    $folder = [S23.Shell]::KnownFolder([Guid]$Matches[1])
+    if (-not $folder) { return $null }
+    $Path = $folder + $Matches[2]
+  }
+  if (-not [System.IO.Path]::IsPathRooted($Path)) { return $null }
+  try { return [System.IO.Path]::GetFullPath($Path) } catch { return $null }
+}
+
+# Puts back the IsPromoted value launch found on the record it promoted.
+function Restore-Promoted {
+  if (-not (Test-Path $Promoted)) { return }
+  $key, $before = @(Get-Content $Promoted)
+  if (Test-Path -LiteralPath $key) {
+    if ($before -eq 'absent') {
+      Remove-ItemProperty -LiteralPath $key -Name IsPromoted -ErrorAction SilentlyContinue
+    } else {
+      Set-ItemProperty -LiteralPath $key -Name IsPromoted -Value ([int]$before) -Type DWord
+    }
+    Write-Output "Put IsPromoted back ($before) on $key."
+  }
+  Remove-Item -Force $Promoted
+}
 
 function Show-Display {
   $screen = [System.Windows.Forms.Screen]::PrimaryScreen
@@ -207,6 +253,10 @@ switch ($Mode) {
 
   'launch' {
     if (-not (Test-Path $App)) { Fail "no $App; build it first with: pnpm tauri build --debug --no-bundle" }
+    # A record an earlier launch left promoted goes back first.
+    Restore-Promoted
+    # The records that exist before the app starts: a new one is this run's.
+    $known = @(if (Test-Path $Settings) { Get-ChildItem $Settings | ForEach-Object { $_.PSChildName } })
     $appDir = Join-Path $Dir 'app-dir'
     $null = New-Item -ItemType Directory -Force -Path $appDir
     $env:NAVAJA_APP_DIR = $appDir
@@ -214,25 +264,32 @@ switch ($Mode) {
     Set-Content -Path (Join-Path $Dir 'navaja.pid') -Value $process.Id
     Write-Output "Started $App, pid $($process.Id)."
 
-    # Explorer's record of the icon, keyed by the executable's path.
-    $settings = 'HKCU:\Control Panel\NotifyIconSettings'
+    # Explorer's record of the icon, keyed by the executable's full path
+    # (compared without regard to case): this build's, not another
+    # Navaja's. A record that did not exist before the app started wins.
     $entry = $null
     $deadline = (Get-Date).AddSeconds(60)
     while (-not $entry -and (Get-Date) -lt $deadline) {
-      if (Test-Path $settings) {
-        $entry = Get-ChildItem $settings | Where-Object {
-          $path = $_.GetValue('ExecutablePath')
-          $path -and ($path -like '*\navaja.exe')
-        } | Select-Object -First 1
+      if (Test-Path $Settings) {
+        $mine = @(Get-ChildItem $Settings | Where-Object {
+            $path = $_.GetValue('ExecutablePath')
+            $path -and ((Resolve-ExecutablePath $path) -eq $App)
+          })
+        $entry = @($mine | Where-Object { $known -notcontains $_.PSChildName }) + $mine | Select-Object -First 1
       }
       if (-not $entry) { Start-Sleep -Milliseconds 250 }
     }
     if ($entry) {
-      Write-Output ("Explorer's record: {0}, IsPromoted {1}." -f $entry.Name, $entry.GetValue('IsPromoted'))
-      Set-ItemProperty -Path $entry.PSPath -Name IsPromoted -Value 1 -Type DWord
-      Write-Output 'Set IsPromoted = 1.'
+      $before = $entry.GetValue('IsPromoted')
+      $before = if ($null -eq $before) { 'absent' } else { [string]$before }
+      $new = if ($known -contains $entry.PSChildName) { 'there before the app started' } else { 'new' }
+      Write-Output ("Explorer's record: {0} ({1}), IsPromoted {2}." -f $entry.Name, $new, $before)
+      # Saved before the change, so that stop can always undo it.
+      Set-Content -Path $Promoted -Value @($entry.PSPath, $before)
+      Set-ItemProperty -LiteralPath $entry.PSPath -Name IsPromoted -Value 1 -Type DWord
+      Write-Output 'Set IsPromoted = 1; stop puts it back.'
     } else {
-      Write-Output "::warning::S2.3 no NotifyIconSettings entry for navaja.exe within 60 s; the icon may stay in the overflow"
+      Write-Output "::warning::S2.3 no NotifyIconSettings entry for $App within 60 s; the icon may stay in the overflow"
     }
 
     $button = $null
@@ -243,7 +300,13 @@ switch ($Mode) {
     }
     Write-Output 'Taskbar buttons with the app running:'
     Show-Buttons
-    if (-not $button) { Fail 'launch: no notification-area button named Navaja within 30 s' }
+    if (-not $button) {
+      foreach ($name in 'navaja.out', 'navaja.err') {
+        Write-Output ("The app's {0}:" -f $name)
+        Get-Content -ErrorAction SilentlyContinue (Join-Path $Dir $name)
+      }
+      Fail 'launch: no notification-area button named Navaja within 30 s'
+    }
     $r = $button.Current.BoundingRectangle
     Set-Content -Path (Join-Path $Dir 'icon.rect') -Value ("{0} {1} {2} {3}" -f [int]$r.X, [int]$r.Y, [int]$r.Width, [int]$r.Height)
     Write-Output ("Navaja's notification-area button: '{0}' at {1},{2}, {3}x{4} pixels." -f $button.Current.Name, $r.X, $r.Y, $r.Width, $r.Height)
@@ -333,5 +396,6 @@ switch ($Mode) {
       Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
       Write-Output 'Navaja stopped.'
     }
+    Restore-Promoted
   }
 }

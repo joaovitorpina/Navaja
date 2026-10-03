@@ -346,11 +346,12 @@ jobs:
         if: ${{ !cancelled() && steps.win_capture.outcome == 'success' }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 present-refuses
 
-      - name: Quit the app (Windows)
+      - name: Quit the app and put its icon's IsPromoted back (Windows)
         if: ${{ always() && runner.os == 'Windows' }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 stop
 
-      # tray.rs is put back by control-build itself and again by `stop`.
+      # tray.rs is put back by control-build itself, or by `stop` if
+      # control-build was cut short with its edit in place.
       - name: The tree is clean again
         id: clean
         if: always()
@@ -362,6 +363,9 @@ jobs:
             exit 1
           fi
 
+      # The captures, the rectangles the checks measured (*.rect), so that
+      # `present` and `present-refuses` can run again on the artifact, and
+      # the app's own output (*.log on macOS; navaja.out and .err on Windows).
       - name: Upload the captures
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -371,6 +375,9 @@ jobs:
             ${{ runner.temp }}/navaja-s2-3/*.png
             ${{ runner.temp }}/navaja-s2-3/*.txt
             ${{ runner.temp }}/navaja-s2-3/*.log
+            ${{ runner.temp }}/navaja-s2-3/*.rect
+            ${{ runner.temp }}/navaja-s2-3/*.out
+            ${{ runner.temp }}/navaja-s2-3/*.err
           if-no-files-found: warn
           retention-days: 30
 
