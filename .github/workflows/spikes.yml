@@ -218,3 +218,372 @@ jobs:
             echo "| h2. HMR in the app's webview | $(result "$HMR_APP") |"
             echo "| Probe removed, tree clean | $(result "$REMOVE") |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # S2.3: is the tray icon crisp, and does the macOS template icon work? It
+  # runs the app as shipped (`tauri build --debug --no-bundle`, no e2e
+  # overlay).
+  # - macOS (scripts/spikes/s2-3-check.sh): the menu bar captured before the
+  #   app starts and with it running, in the light and the dark appearance,
+  #   then checks on the icon's pixels against a system item's. Two negative
+  #   controls: the presence check on the capture taken before the app
+  #   started, and the tint check on a build whose icon is not a template.
+  # - Windows (scripts/spikes/s2-3-tray.ps1): the icon promoted out of the
+  #   overflow, found through UI Automation and captured at the runner's own
+  #   scale, then a check that its button has an icon drawn in it. Its
+  #   negative control is the same check on an empty stretch of the taskbar.
+  #   Other scales need a person (docs/spikes.md).
+  # The captures are the run's artifact.
+  s2-3:
+    name: S2.3 tray icon (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      # Restores what ci.yml's os job saved on main, under the same key.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ${{ matrix.os }}
+          save-if: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: a. Build the app as shipped (no e2e overlay)
+        id: build
+        run: pnpm tauri build --debug --no-bundle
+
+      - name: b. Menu bar helper, and the display's size and scale (macOS)
+        id: helper
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        run: bash scripts/spikes/s2-3-check.sh helper
+
+      - name: c. Capture the menu bar before the app starts (macOS)
+        id: baseline
+        if: ${{ !cancelled() && steps.helper.outcome == 'success' }}
+        run: bash scripts/spikes/s2-3-check.sh baseline
+
+      - name: d. The app starts and its status item appears (macOS)
+        id: launch
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.baseline.outcome == 'success' }}
+        run: bash scripts/spikes/s2-3-check.sh launch
+
+      - name: e. Capture the menu bar in the light and the dark appearance (macOS)
+        id: capture
+        if: ${{ !cancelled() && steps.launch.outcome == 'success' }}
+        run: bash scripts/spikes/s2-3-check.sh capture
+
+      - name: f. The icon is drawn in both captures (macOS)
+        id: present
+        if: ${{ !cancelled() && steps.capture.outcome == 'success' }}
+        run: bash scripts/spikes/s2-3-check.sh present
+
+      - name: f. The same check finds no icon before the app starts (macOS)
+        id: present_refuses
+        if: ${{ !cancelled() && steps.capture.outcome == 'success' }}
+        run: bash scripts/spikes/s2-3-check.sh present-refuses
+
+      - name: g. Monochrome, and tinted like a system item in each appearance (macOS)
+        id: tint
+        if: ${{ !cancelled() && steps.capture.outcome == 'success' }}
+        run: bash scripts/spikes/s2-3-check.sh tint
+
+      # Overwrites target/debug/navaja, so it runs after the checks above.
+      - name: h. Build the app again with its icon not a template (macOS)
+        id: control_build
+        if: ${{ !cancelled() && steps.capture.outcome == 'success' }}
+        run: bash scripts/spikes/s2-3-check.sh control-build
+
+      - name: h. The tint check fails on that build's icon (macOS)
+        id: tint_refuses
+        if: ${{ !cancelled() && steps.control_build.outcome == 'success' }}
+        run: bash scripts/spikes/s2-3-check.sh tint-refuses
+
+      - name: Quit the app and put the appearance back (macOS)
+        if: ${{ always() && runner.os == 'macOS' }}
+        run: bash scripts/spikes/s2-3-check.sh stop
+
+      - name: b. No Navaja icon in the notification area before the app starts (Windows)
+        id: win_before
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 before
+
+      - name: c. The app starts; UI Automation finds its notification-area button (Windows)
+        id: win_launch
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.win_before.outcome == 'success' }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 launch
+
+      - name: d. Capture the notification area at the runner's scale (Windows)
+        id: win_capture
+        if: ${{ !cancelled() && steps.win_launch.outcome == 'success' }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 capture
+
+      - name: e. An icon is drawn in that button (Windows)
+        id: win_present
+        if: ${{ !cancelled() && steps.win_capture.outcome == 'success' }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 present
+
+      - name: e. The same check finds no icon on an empty stretch of the taskbar (Windows)
+        id: win_present_refuses
+        if: ${{ !cancelled() && steps.win_capture.outcome == 'success' }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 present-refuses
+
+      - name: Quit the app and put its icon's IsPromoted back (Windows)
+        if: ${{ always() && runner.os == 'Windows' }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 stop
+
+      # tray.rs is put back by control-build itself, or by `stop` if
+      # control-build was cut short with its edit in place.
+      - name: The tree is clean again
+        id: clean
+        if: always()
+        run: |
+          changes=$(git status --porcelain)
+          if [ -n "$changes" ]; then
+            echo "::error::files left after the checks:"
+            printf '%s\n' "$changes"
+            exit 1
+          fi
+
+      # The captures, the rectangles the checks measured (*.rect), so that
+      # `present` and `present-refuses` can run again on the artifact, and
+      # the app's own output (*.log on macOS; navaja.out and .err on Windows).
+      - name: Upload the captures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: s2-3-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/navaja-s2-3/*.png
+            ${{ runner.temp }}/navaja-s2-3/*.txt
+            ${{ runner.temp }}/navaja-s2-3/*.log
+            ${{ runner.temp }}/navaja-s2-3/*.rect
+            ${{ runner.temp }}/navaja-s2-3/*.out
+            ${{ runner.temp }}/navaja-s2-3/*.err
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: i. Summary
+        if: always()
+        env:
+          OS: ${{ matrix.os }}
+          BUILD: ${{ steps.build.outcome }}
+          HELPER: ${{ steps.helper.outcome }}
+          BASELINE: ${{ steps.baseline.outcome }}
+          LAUNCH: ${{ steps.launch.outcome }}
+          CAPTURE: ${{ steps.capture.outcome }}
+          PRESENT: ${{ steps.present.outcome }}
+          PRESENT_REFUSES: ${{ steps.present_refuses.outcome }}
+          TINT: ${{ steps.tint.outcome }}
+          CONTROL_BUILD: ${{ steps.control_build.outcome }}
+          TINT_REFUSES: ${{ steps.tint_refuses.outcome }}
+          WIN_BEFORE: ${{ steps.win_before.outcome }}
+          WIN_LAUNCH: ${{ steps.win_launch.outcome }}
+          WIN_CAPTURE: ${{ steps.win_capture.outcome }}
+          WIN_PRESENT: ${{ steps.win_present.outcome }}
+          WIN_PRESENT_REFUSES: ${{ steps.win_present_refuses.outcome }}
+          CLEAN: ${{ steps.clean.outcome }}
+        run: |
+          result() {
+            case "$1" in
+              success) echo PASS ;;
+              failure) echo FAIL ;;
+              skipped | '') echo 'not run' ;;
+              *) echo "$1" ;;
+            esac
+          }
+          {
+            echo "### S2.3 tray icon: $OS"
+            echo
+            echo '| Check | Result |'
+            echo '|---|---|'
+            echo "| a. App builds as shipped (\`tauri build --debug --no-bundle\`) | $(result "$BUILD") |"
+            if [ "$RUNNER_OS" = macOS ]; then
+              echo "| b. Menu bar helper compiles; display size and scale | $(result "$HELPER") |"
+              echo "| c. Menu bar captured before the app starts (light) | $(result "$BASELINE") |"
+              echo "| d. App starts; its status item appears | $(result "$LAUNCH") |"
+              echo "| e. Menu bar captured in light and dark appearance (read back) | $(result "$CAPTURE") |"
+              echo "| f. Icon drawn in both captures | $(result "$PRESENT") |"
+              echo "| f. Same check finds no icon before the app starts | $(result "$PRESENT_REFUSES") |"
+              echo "| g. Monochrome; tinted like a system item in each appearance | $(result "$TINT") |"
+              echo "| h. Control build, icon not a template | $(result "$CONTROL_BUILD") |"
+              echo "| h. Tint check fails on that icon | $(result "$TINT_REFUSES") |"
+            else
+              echo "| b. No Navaja icon in the notification area before the app starts | $(result "$WIN_BEFORE") |"
+              echo "| c. App starts; UI Automation finds its notification-area button | $(result "$WIN_LAUNCH") |"
+              echo "| d. Notification area captured at the runner's scale | $(result "$WIN_CAPTURE") |"
+              echo "| e. An icon is drawn in that button | $(result "$WIN_PRESENT") |"
+              echo "| e. Same check finds no icon on an empty stretch of the taskbar | $(result "$WIN_PRESENT_REFUSES") |"
+              echo "| Crisp at 100-200 % | needs a person (docs/spikes.md) |"
+            fi
+            echo "| Tree clean | $(result "$CLEAN") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # M2a exit check "Copy stays out of Windows clipboard history" (roadmap
+  # M2a, Exit). The job turns clipboard history on for the runner's user.
+  # Navaja's Copy button must put a fresh UUID on the clipboard, with the
+  # exclusion formats Windows documents (and an ordinary copy of the same
+  # text must fail that check). Where history turns on, an ordinary copy
+  # must reach it (the control), Navaja's must not, and the same UUID
+  # copied the ordinary way must (the lookup's negative control). Windows
+  # Server keeps history off, so on windows-2025 those three steps are
+  # skipped, the job stays green with a warning, and the summary says the
+  # runner cannot answer. Those three steps have never run with history on.
+  # Scripts: scripts/spikes/exit-clipboard-check.sh and clipboard-history.ps1.
+  exit-clipboard-history:
+    name: Exit check, copy stays out of clipboard history (windows-2025)
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: windows-2025
+          save-if: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: a. Build the app for the end-to-end run
+        id: build
+        run: pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
+
+      # Sets the step output `enabled`. It fails only on an error, not when
+      # Windows keeps history off; then it leaves a warning on the run, so
+      # that the green job does not read as the exit check passing.
+      - name: b. Turn on clipboard history for the runner's user
+        id: enable
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/clipboard-history.ps1 enable
+
+      - name: c. Control, an ordinary copy reaches clipboard history
+        id: control
+        if: ${{ !cancelled() && steps.enable.outputs.enabled == 'true' }}
+        run: bash scripts/spikes/exit-clipboard-check.sh control
+
+      - name: d. Navaja's Copy button puts a fresh UUID on the clipboard
+        id: copy
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.enable.outcome == 'success' }}
+        run: bash scripts/spikes/exit-clipboard-check.sh copy
+
+      - name: e. Navaja's copy carries the exclusion formats
+        id: formats
+        if: ${{ !cancelled() && steps.copy.outcome == 'success' }}
+        run: bash scripts/spikes/exit-clipboard-check.sh formats
+
+      - name: f. Navaja's copy stays out of clipboard history
+        id: absent
+        if: ${{ !cancelled() && steps.copy.outcome == 'success' && steps.control.outcome == 'success' }}
+        run: bash scripts/spikes/exit-clipboard-check.sh absent
+
+      # The last two replace the clipboard's contents.
+      - name: g. The same UUID, copied the ordinary way, reaches clipboard history
+        id: detects
+        if: ${{ !cancelled() && steps.copy.outcome == 'success' && steps.control.outcome == 'success' }}
+        run: bash scripts/spikes/exit-clipboard-check.sh detects
+
+      - name: h. The formats check refuses the same UUID copied the ordinary way
+        id: formats_refuses
+        if: ${{ !cancelled() && steps.copy.outcome == 'success' }}
+        run: bash scripts/spikes/exit-clipboard-check.sh formats-refuses
+
+      - name: Remove the spec; the tree is clean again
+        id: clean
+        if: always()
+        run: |
+          bash scripts/spikes/exit-clipboard-check.sh clean
+          changes=$(git status --porcelain)
+          if [ -n "$changes" ]; then
+            echo "::error::files left after the check:"
+            printf '%s\n' "$changes"
+            exit 1
+          fi
+
+      - name: i. Summary
+        if: always()
+        env:
+          BUILD: ${{ steps.build.outcome }}
+          ENABLE: ${{ steps.enable.outcome }}
+          ENABLED: ${{ steps.enable.outputs.enabled }}
+          CONTROL: ${{ steps.control.outcome }}
+          COPY: ${{ steps.copy.outcome }}
+          FORMATS: ${{ steps.formats.outcome }}
+          ABSENT: ${{ steps.absent.outcome }}
+          DETECTS: ${{ steps.detects.outcome }}
+          FORMATS_REFUSES: ${{ steps.formats_refuses.outcome }}
+          CLEAN: ${{ steps.clean.outcome }}
+        run: |
+          result() {
+            case "$1" in
+              success) echo PASS ;;
+              failure) echo FAIL ;;
+              skipped | '') echo 'not run' ;;
+              *) echo "$1" ;;
+            esac
+          }
+          # The enable step passes when Windows keeps history off, so its
+          # outcome alone would read PASS for history that is not on.
+          enabled() {
+            if [ "$ENABLE" != success ]; then
+              result "$ENABLE"
+            elif [ "$ENABLED" = true ]; then
+              echo PASS
+            else
+              echo 'off: inconclusive (this Windows keeps clipboard history off)'
+            fi
+          }
+          # The steps that need clipboard history, where Windows keeps it off.
+          history() {
+            if [ "$ENABLE" = success ] && [ "$ENABLED" != true ]; then
+              echo 'inconclusive: this Windows keeps clipboard history off'
+            else
+              result "$1"
+            fi
+          }
+          {
+            echo '### Exit check: copy stays out of Windows clipboard history'
+            echo
+            echo '| Check | Result |'
+            echo '|---|---|'
+            echo "| a. End-to-end build | $(result "$BUILD") |"
+            echo "| b. Clipboard history turned on (\`enabled=${ENABLED:-?}\`) | $(enabled) |"
+            echo "| c. Control: an ordinary copy reaches the history | $(history "$CONTROL") |"
+            echo "| d. Navaja's Copy button puts a fresh UUID on the clipboard | $(result "$COPY") |"
+            echo "| e. Navaja's copy carries the exclusion formats | $(result "$FORMATS") |"
+            echo "| f. Navaja's copy stays out of the history | $(history "$ABSENT") |"
+            echo "| g. The same UUID, copied the ordinary way, reaches it | $(history "$DETECTS") |"
+            echo "| h. The formats check refuses that ordinary copy | $(result "$FORMATS_REFUSES") |"
+            echo "| Spec removed, tree clean | $(result "$CLEAN") |"
+          } >> "$GITHUB_STEP_SUMMARY"
