@@ -1,0 +1,29 @@
+[package]
+name = "navaja"
+description = "Navaja: an offline, cross-platform developer toolbox"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+default-run = "navaja"
+
+[lib]
+# Distinct from the binary name to avoid a PDB filename collision on MSVC.
+name = "navaja_lib"
+
+[[bin]]
+name = "navaja"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { workspace = true }
+
+[dependencies]
+navaja-core = { workspace = true }
+serde = { workspace = true }
+tauri = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The main window may call Navaja's own commands and nothing else: no core:default, no plugin permissions.",
+  "windows": ["main"],
+  "permissions": ["allow-app-info", "allow-shell-ready"]
+}

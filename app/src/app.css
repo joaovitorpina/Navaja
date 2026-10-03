@@ -1,0 +1,31 @@
+/* Palette tokens from assets/brand/GUIDELINES.md. */
+:root {
+  --nv-steel-900: #1f2328;
+  --nv-steel-600: #57606a;
+  --nv-steel-200: #d0d7de;
+  --nv-steel-50: #f6f8fa;
+  --nv-brass-500: #975a16;
+  --nv-danger: #cf222e;
+
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, Cantarell, sans-serif;
+  color: var(--nv-steel-900);
+  background: var(--nv-steel-50);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --nv-steel-900: #e6e8eb;
+    --nv-steel-600: #9da5ae;
+    --nv-steel-200: #30363d;
+    --nv-steel-50: #0d1117;
+    --nv-brass-500: #d69e2e;
+    --nv-danger: #f85149;
+  }
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
