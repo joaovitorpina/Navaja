@@ -58,6 +58,48 @@
         ]
       }
     ],
+    "open_logs": [
+      {
+        "context": "local",
+        "windows": [
+          "main"
+        ],
+        "webviews": [],
+        "platforms": [
+          "linux",
+          "macOS",
+          "windows"
+        ]
+      }
+    ],
+    "open_url": [
+      {
+        "context": "local",
+        "windows": [
+          "main"
+        ],
+        "webviews": [],
+        "platforms": [
+          "linux",
+          "macOS",
+          "windows"
+        ]
+      }
+    ],
+    "quit": [
+      {
+        "context": "local",
+        "windows": [
+          "main"
+        ],
+        "webviews": [],
+        "platforms": [
+          "linux",
+          "macOS",
+          "windows"
+        ]
+      }
+    ],
     "run_tool": [
       {
         "context": "local",
