@@ -184,6 +184,7 @@ register_tools! {
 - **Linux:** `xdg-open` (or gio, gnome-open, kde-open) starts after a double fork and `setsid`. It leaves Navaja's process tree by parentage, but a tracer that follows forks, such as `strace -f`, still follows it and the browser.
   - **Failures after the start go unseen:** tauri-plugin-opener, through the `open` crate, returns success as soon as the launcher has been executed, without waiting for it. A launcher that then fails, with no default browser set for example, shows no alert and logs nothing.
 - So the offline checks (the strace guard, the S2.7 capture) must never click these links, and no end-to-end test opens a URL or the logs folder.
+- **Disclosure:** `privacy.md` lists both hand-offs (roadmap M6, item 6). `SECURITY.md` does not count what the browser or file manager loads at the user's request as Navaja's traffic, even when that program is Navaja's child process.
 - **A failed hand-off** logs the error's kind and the OS error code (an HRESULT in hex), never the error's text, which can quote the URL or the path.
 
 **Input limits.** Rust checks what the webview sends:
