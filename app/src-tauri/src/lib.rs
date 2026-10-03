@@ -63,13 +63,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map(|meta| (meta.id.to_string(), meta.name.clone()))
         .collect();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // First, so a second launch hands its arguments over and exits.
         .plugin(tauri_plugin_single_instance::init({
             let state = Arc::clone(&state);
             move |app, argv, _cwd| on_second_launch(app, &state, argv)
         }))
-        .plugin(guard::init())
+        .plugin(guard::init());
+    // End-to-end test builds only (`--features e2e`, docs/roadmap.md §2).
+    #[cfg(feature = "e2e")]
+    let builder = builder
+        .plugin(tauri_plugin_wdio::init())
+        .plugin(tauri_plugin_wdio_webdriver::init());
+
+    builder
         .manage(Arc::clone(&state))
         .invoke_handler(tauri::generate_handler![
             commands::app_info,

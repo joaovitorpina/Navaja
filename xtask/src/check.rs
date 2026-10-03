@@ -33,11 +33,30 @@ pub fn run() -> Result<()> {
         .context("cargo metadata")?;
 
     let mut problems = Vec::new();
+    problems.extend(release_feature_problems(&metadata));
     problems.extend(edge_problems(&metadata));
     problems.extend(closure_problems(&metadata));
     problems.extend(parity_problems(&metadata, &root)?);
     problems.extend(config_problems(&root)?);
     report("xtask check", &problems)
+}
+
+/// Test-only features (WebdriverIO plugins, an embedded WebDriver server)
+/// must never be on by default.
+fn release_feature_problems(metadata: &Metadata) -> Vec<String> {
+    let Some(app) = metadata
+        .workspace_packages()
+        .into_iter()
+        .find(|p| p.name.as_str() == APP)
+    else {
+        return vec!["the app crate is not in the workspace".to_owned()];
+    };
+    let defaults = app.features.get("default").cloned().unwrap_or_default();
+    defaults
+        .iter()
+        .filter(|feature| feature.as_str() == "e2e" || feature.contains("wdio"))
+        .map(|feature| format!("{APP}: feature `{feature}` must not be a default feature"))
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

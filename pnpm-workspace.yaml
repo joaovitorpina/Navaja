@@ -1,2 +1,12 @@
 packages:
   - app
+
+# Dependency install scripts are denied unless reviewed (pnpm 11 strictDepBuilds).
+allowBuilds:
+  # WebdriverIO's browser-driver downloaders: the Tauri embedded WebDriver
+  # needs neither, and installs must not fetch extra binaries.
+  edgedriver: false
+  geckodriver: false
+  # The platform binary comes from esbuild's optional dependency; the
+  # postinstall only re-validates it.
+  esbuild: false
