@@ -55,7 +55,7 @@
     <p class="text-sm text-muted">
       {t(
         'shell.settings.logs.about',
-        'Navaja keeps up to seven daily log files. They never leave this computer.',
+        'Navaja keeps up to seven daily log files on this computer and never sends them anywhere.',
       )}
     </p>
     <OpenLogsButton />

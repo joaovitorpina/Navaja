@@ -4,7 +4,7 @@
 //! What the host checks before any work: run ids, the shape of tool and
 //! action ids, and the overall size of a run's input (string bytes and JSON
 //! nodes). The search query is truncated and copied text is size-capped.
-//! `open_url` opens only pages of Navaja's repository. Each tool validates
+//! `open_url` opens only the exact URLs Navaja links to. Each tool validates
 //! its own options (docs/architecture.md §3).
 
 use std::sync::Arc;
@@ -69,6 +69,8 @@ const MAX_INPUT_NODES: usize = 1_000_000;
 /// Logged in place of a tool or action id the registry doesn't know, so
 /// text from the webview never reaches the log.
 const UNKNOWN_ID: &str = "<unknown>";
+/// `open_url`'s answer to a URL it does not open. Never echoes the URL.
+const OPEN_URL_REFUSED: &str = "Navaja opens only its own links.";
 
 #[tauri::command]
 pub fn app_info() -> AppInfo {
@@ -309,15 +311,15 @@ pub fn open_logs(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     crate::opener::open_folder(&logs)
 }
 
-/// Opens a page of Navaja's repository in the default browser; any other
+/// Opens one of the URLs Navaja links to in the default browser; any other
 /// URL is refused before anything starts. Off the main thread: it starts a
 /// program.
 #[tauri::command(async)]
 pub fn open_url(url: String) -> Result<(), String> {
-    if !crate::opener::is_repository_url(&url) {
+    if !crate::opener::is_allowed_url(&url) {
         // Not even the scheme: all of it comes from the webview.
-        tracing::warn!("refused to open a URL outside the repository");
-        return Err("Only pages of Navaja's repository can be opened.".to_owned());
+        tracing::warn!("refused to open a URL Navaja does not link to");
+        return Err(OPEN_URL_REFUSED.to_owned());
     }
     crate::opener::open_url(&url)
 }
@@ -391,6 +393,81 @@ mod tests {
             let error = precheck("uuid", action, &input).unwrap_err();
             assert_eq!(error.code, ErrorCode::UNKNOWN_ACTION, "{action:?}");
             assert_eq!(error.details, None);
+        }
+    }
+
+    /// Only refused URLs: an accepted one would start a browser.
+    #[test]
+    fn open_url_refuses_what_navaja_does_not_link_to() {
+        let repository = crate::opener::REPOSITORY;
+        for url in [
+            String::new(),
+            format!("{repository}/issues"),
+            format!("{repository}/raw/0123456789abcdef0123456789abcdef01234567/page.html"),
+            format!("{repository}/archive/0123456789abcdef0123456789abcdef01234567.zip"),
+            format!("{repository}#readme"),
+            repository.to_lowercase(),
+            "https://example.com/".to_owned(),
+            "file:///etc/passwd".to_owned(),
+        ] {
+            assert_eq!(
+                open_url(url.clone()),
+                Err("Navaja opens only its own links.".to_owned()),
+                "{url:?}"
+            );
+        }
+    }
+
+    /// An in-memory log for a test subscriber.
+    #[derive(Clone, Default)]
+    struct CapturedLog(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLog {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// At `trace` level, a refused URL reaches neither the log nor the
+    /// error the webview gets back.
+    #[test]
+    fn a_refused_url_is_never_logged_or_echoed() {
+        use std::hash::BuildHasher;
+        let random = std::collections::hash_map::RandomState::new().hash_one(0u8);
+        let canary = format!("CANARY-{random:016x}");
+        let log = CapturedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer({
+                let log = log.clone();
+                move || log.clone()
+            })
+            .finish();
+        let urls = [
+            canary.clone(),
+            format!("https://{canary}.example/"),
+            format!("{}/{canary}", crate::opener::REPOSITORY),
+            format!("{}#{canary}", crate::opener::REPOSITORY),
+            format!("javascript:{canary}"),
+        ];
+        let errors: Vec<String> = tracing::subscriber::with_default(subscriber, || {
+            urls.into_iter()
+                .map(|url| open_url(url).unwrap_err())
+                .collect()
+        });
+
+        let log = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        // The refusals were logged, so the capture works.
+        assert_eq!(log.matches("refused to open a URL").count(), 5, "{log}");
+        let canary = canary.to_ascii_lowercase();
+        assert!(!log.to_ascii_lowercase().contains(&canary), "{log}");
+        for error in errors {
+            assert!(!error.to_ascii_lowercase().contains(&canary), "{error}");
         }
     }
 

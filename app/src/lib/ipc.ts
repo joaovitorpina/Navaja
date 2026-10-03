@@ -52,7 +52,10 @@ export const openLogs = (): Promise<void> => invoke<void>('open_logs');
 /** Quits Navaja the way the tray's Quit does. The promise may never settle. */
 export const quitApp = (): Promise<void> => invoke<void>('quit');
 
-/** Opens a page of Navaja's repository in the default browser. Rust refuses any other URL. */
+/**
+ * Opens one of the URLs Navaja links to (links.ts) in the default browser. Rust
+ * compares it exactly against its own list and refuses any other URL.
+ */
 export const openUrl = (url: string): Promise<void> => invoke<void>('open_url', { url });
 
 /** Opens the repository's home page in the default browser. */
