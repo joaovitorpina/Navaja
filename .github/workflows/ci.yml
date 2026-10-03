@@ -207,15 +207,16 @@ jobs:
         run: cargo test --doc --workspace
 
       # The macOS release is a universal DMG, and this runner is arm64, so
-      # nothing else compiles the Intel slice. Tests are checked too, so
-      # code behind cfg(target_arch) is covered on both sides. The target's
-      # check output lands in target/x86_64-apple-darwin, which rust-cache
-      # keeps with the rest.
-      - name: Intel macOS compiles (x86_64-apple-darwin)
+      # nothing else compiles the Intel slice. Clippy runs on it with the
+      # same bans (clippy.toml, the workspace lints) and -D warnings as the
+      # clippy step above, tests included, so code behind cfg(target_arch)
+      # is covered on both sides. Its output lands in
+      # target/x86_64-apple-darwin, which rust-cache keeps with the rest.
+      - name: Intel macOS passes clippy (x86_64-apple-darwin)
         if: matrix.os == 'macos-26'
         run: |
           rustup target add x86_64-apple-darwin
-          cargo check --workspace --all-targets --target x86_64-apple-darwin
+          cargo clippy --workspace --all-targets --target x86_64-apple-darwin -- -D warnings
 
       - name: Build the app (front end embedded, no bundle)
         run: pnpm tauri build --debug --no-bundle
