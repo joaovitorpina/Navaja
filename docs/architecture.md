@@ -67,7 +67,7 @@ navaja (app) ─► navaja-tools ─► navaja-ports ─► navaja-core
   - **Test builds only:** hyper also comes in through axum, the WebDriver server inside `tauri-plugin-wdio-webdriver`. That plugin is part of the app's test-only `e2e` feature (§5), never of a release build, and cargo-deny allows axum under it alone.
 - **Lints** ban printing, `exit`, `unsafe` outside FFI modules, socket and resolver calls, and `Command::new`.
   - **One exception:** the bind-only reserved-range probe in navaja-ports' Windows module (M5). It never calls `listen()` or `connect()`, and it is allowlisted in its FFI module.
-  - **Process start:** processes start only through `navaja_core::sys::spawn_system`, which takes an absolute OS program path, sets `CREATE_NO_WINDOW` and applies a timeout. The one exception is tauri-plugin-opener, which hands a page to the browser or a folder to the file manager for `open_url` and `open_logs` (§5).
+  - **Process start:** processes start only through `navaja_core::sys::spawn_system`, which takes an absolute OS program path, sets `CREATE_NO_WINDOW` and applies a timeout. The one exception is tauri-plugin-opener, which hands a page to the browser or a folder to the file manager for `open_url` and `open_logs` (§5). `clippy.toml` bans its functions (`open_url`, `open_path`, `reveal_item_in_dir`, `reveal_items_in_dir` and `OpenerExt::opener`) everywhere but the app's `opener.rs`.
 
 ## 3. Core interfaces (`navaja-core`) and the registry
 
@@ -178,7 +178,7 @@ register_tools! {
 - A new link adds its exact URL to the list.
 - A refusal is logged without the URL, not even its scheme.
 
-**Hand-offs to other programs.** `open_url` and `open_logs` call tauri-plugin-opener's free functions. The plugin is never registered, so its own commands and its link-click script do not exist. Each hand-off runs on a short-lived thread, because opening a folder on Windows initialises COM on the calling thread.
+**Hand-offs to other programs.** `open_url` and `open_logs` call tauri-plugin-opener's free functions, through `opener.rs`, the one module the lints let call them (§2). The plugin is never registered, so its own commands and its link-click script do not exist. Each hand-off runs on a short-lived thread, because opening a folder on Windows initialises COM on the calling thread.
 - **Windows:** a URL goes through `ShellExecuteExW`, so a browser it starts can be Navaja's child process. A folder goes through `SHOpenFolderAndSelectItems`, which Explorer opens in its own process.
 - **macOS:** `/usr/bin/open` runs briefly as Navaja's child and asks LaunchServices, so launchd, not Navaja, starts the browser or Finder.
 - **Linux:** `xdg-open` (or gio, gnome-open, kde-open) starts after a double fork and `setsid`. It leaves Navaja's process tree by parentage, but a tracer that follows forks, such as `strace -f`, still follows it and the browser.

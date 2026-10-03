@@ -12,6 +12,13 @@ disallowed-types = [
 disallowed-methods = [
   { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "no name resolution: no tool makes a network request" },
   { path = "std::process::Command::new", reason = "start processes only through navaja_core::sys::spawn_system" },
+  # The one exception to the rule above: app/src-tauri/src/opener.rs hands a
+  # link to the browser or a folder to the file manager, and opts out there.
+  { path = "tauri_plugin_opener::open_url", reason = "processes start only through spawn_system; opener.rs is the one exception (docs/architecture.md §2, §5)" },
+  { path = "tauri_plugin_opener::open_path", reason = "processes start only through spawn_system; opener.rs is the one exception (docs/architecture.md §2, §5)" },
+  { path = "tauri_plugin_opener::reveal_item_in_dir", reason = "processes start only through spawn_system; opener.rs is the one exception (docs/architecture.md §2, §5)" },
+  { path = "tauri_plugin_opener::reveal_items_in_dir", reason = "processes start only through spawn_system; opener.rs is the one exception (docs/architecture.md §2, §5)" },
+  { path = "tauri_plugin_opener::OpenerExt::opener", reason = "processes start only through spawn_system; opener.rs is the one exception (docs/architecture.md §2, §5)" },
   # Tauri's default `dynamic-acl` feature compiles this in. A capability added
   # at run time bypasses acl.lock.json and `cargo xtask check`.
   { path = "tauri::Manager::add_capability", reason = "capabilities come only from tauri.conf.json, which acl.lock.json snapshots (docs/architecture.md §5)" },

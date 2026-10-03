@@ -28,6 +28,10 @@ pub fn is_allowed_url(url: &str) -> bool {
 
 /// Opens `url` in the default browser. The caller has checked it with
 /// [`is_allowed_url`]; it is passed on exactly as given.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the one hand-off to the browser (docs/architecture.md §2, §5)"
+)]
 pub fn open_url(url: &str) -> Result<(), String> {
     let url = url.to_owned();
     hand_off("the web browser", move || {
@@ -36,6 +40,10 @@ pub fn open_url(url: &str) -> Result<(), String> {
 }
 
 /// Opens `dir`, which must exist, in the OS file manager.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the one hand-off to the file manager (docs/architecture.md §2, §5)"
+)]
 pub fn open_folder(dir: &Path) -> Result<(), String> {
     let dir = dir.to_path_buf();
     hand_off("the file manager", move || {
