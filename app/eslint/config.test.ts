@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const eslint = new ESLint({ cwd: root, overrideConfigFile: 'eslint.config.mjs' });
@@ -22,6 +22,10 @@ const VIEW = 'tools/probe/ui/View.svelte';
 const RULE = 'navaja/view-imports';
 
 describe('the ESLint config', () => {
+  // Loading the config and its plugins takes seconds, and on a loaded Windows
+  // machine more than a test's default 5 s, so it happens once, here.
+  beforeAll(() => eslint.calculateConfigForFile(join(root, VIEW)), 60_000);
+
   it('lints custom views in tools/<id>/ui/ with the import allowlist', async () => {
     const messages = await lint(
       "<script lang=\"ts\">\n  import { invoke } from '@tauri-apps/api/core';\n  invoke('x');\n</script>\n",
