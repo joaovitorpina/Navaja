@@ -49,6 +49,8 @@ tester.run('view-imports', rule, {
     { code: "import Row from './parts/Row.svelte';", filename: TS },
     { code: "import { label } from './parts/../label';", filename: TS },
     { code: "import raw from './icon.svg?raw';", filename: TS },
+    { code: "import { label } from './label#x';", filename: TS },
+    { code: "const w = new URL('./worker.ts?worker#x', import.meta.url);", filename: TS },
     { code: "import index from '.';", filename: TS },
     view("  import { label } from '../label';", NESTED),
     { code: "import { label } from '../label';", filename: NESTED_TS },
@@ -106,6 +108,11 @@ tester.run('view-imports', rule, {
     // Forms some resolvers read differently: back slashes, percent escapes.
     notAllowed("import x from './sub\\\\..\\\\..\\\\x';"),
     notAllowed("import x from './%2e%2e/x';"),
+    // A ?query or #hash, which Vite strips: each leaves the folder only one way.
+    notAllowed("import x from '../outside.js?/../ui/outside.js';"),
+    notAllowed("import x from './b#/../../outside.js';"),
+    notAllowed("const w = new URL('../outside.js?/../ui/outside.js', import.meta.url);"),
+    notAllowed("const w = new URL('./b#/../../outside.js', import.meta.url);"),
     // Bare names and aliases off the list.
     notAllowed("import x from 'sub/x';"),
     notAllowed("import { invoke } from '@tauri-apps/api/core';"),
