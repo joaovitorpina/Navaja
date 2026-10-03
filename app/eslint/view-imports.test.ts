@@ -94,6 +94,7 @@ tester.run('view-imports', rule, {
     { code: "const w = new URL('./worker.ts', import.meta.url);", filename: TS },
     // Not imports.
     { code: "const page = new URL('https://example.com/');", filename: TS },
+    { code: '// A view has no JSX.\nexport const el = 1;\n', filename: ui('x.tsx') },
     { code: 'const dev = import.meta.env.DEV;', filename: TS },
     { code: 'export const label = "x";', filename: TS },
     // Both script blocks and the markup of a .svelte file.
@@ -212,6 +213,22 @@ tester.run('view-imports', rule, {
       code: 'const name = "x"; const w = new URL(name, import.meta.url);',
       filename: TS,
       errors: [{ messageId: 'nonLiteral' }],
+    },
+    // A JSX import source makes the build import <source>/jsx-runtime.
+    {
+      code: '/** @jsxImportSource .. */\nexport const el = <div />;\n',
+      filename: ui('x.tsx'),
+      errors: [{ messageId: 'jsxImportSource' }],
+    },
+    {
+      code: '// @jsxImportSource preact\nexport const el = <div />;\n',
+      filename: ui('x.jsx'),
+      errors: [{ messageId: 'jsxImportSource' }],
+    },
+    {
+      code: '/* @jsxRuntime automatic @jsxImportSource ./ui */\nexport const el = 1;\n',
+      filename: TS,
+      errors: [{ messageId: 'jsxImportSource' }],
     },
     // Views may not glob.
     {

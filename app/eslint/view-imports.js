@@ -176,6 +176,9 @@ const rule = {
       glob:
         'A custom view may not use import.meta.glob: it loads files this check cannot see. ' +
         'It may import {{allowed}}. {{see}}',
+      jsxImportSource:
+        'A custom view may not set @jsxImportSource: the build then imports ' +
+        '<source>/jsx-runtime, which this check cannot see. It may import {{allowed}}. {{see}}',
     },
   },
   create(context) {
@@ -197,6 +200,19 @@ const rule = {
     }
 
     return {
+      // In a .jsx or .tsx file, a @jsxImportSource comment makes the build
+      // import `<source>/jsx-runtime` without any import in the code.
+      Program() {
+        for (const comment of context.sourceCode.getAllComments()) {
+          if (comment.loc && /@jsxImportSource\b/.test(comment.value)) {
+            context.report({
+              loc: comment.loc,
+              messageId: 'jsxImportSource',
+              data: { allowed, see: SEE },
+            });
+          }
+        }
+      },
       ImportDeclaration(node) {
         check(node.source);
       },
