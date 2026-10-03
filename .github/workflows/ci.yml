@@ -48,6 +48,12 @@ jobs:
       - name: cargo-deny (bans, licenses, sources)
         run: cargo deny --all-features check bans licenses sources
 
+      # `xtask bindings` builds the app crate (its IPC types), which links Tauri.
+      - name: Linux system packages for Tauri
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             build-essential file libwebkit2gtk-4.1-dev libayatana-appindicator3-dev             librsvg2-dev libxdo-dev libssl-dev
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: checks
