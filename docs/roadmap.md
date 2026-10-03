@@ -280,6 +280,8 @@ cargo xtask check                    # crate edges, dependency closures, release
 cargo xtask acl                      # after a command or capability change: rewrite acl.lock.json, then review its diff
 cargo xtask bindings --check         # ts-rs output == committed bindings
 cargo xtask tool-gate origin/main    # tool PR touches only what architecture §4 allows
+cargo fmt --all --check
+rustfmt --edition 2024 --check tools/*/mod.rs  # tool modules, which cargo fmt skips (declared inside a macro)
 cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace        # includes serial live port tests from M4
 cargo deny check bans licenses sources
@@ -309,7 +311,7 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 
 | Workflow | Runs |
 |---|---|
-| `ci.yml` checks (ubuntu-24.04) | fmt, ESLint and Prettier (`pnpm lint`), svelte-check, cargo-deny on 4 targets, `xtask check`, `bindings --check`, `tool-gate`, the JS licence allowlist (`xtask licenses`), gitleaks over fixtures and snapshots (`scripts/check-fixture-secrets.sh`) |
+| `ci.yml` checks (ubuntu-24.04) | rustfmt (`cargo fmt`, plus `rustfmt --check tools/*/mod.rs` for the tool modules it skips), ESLint and Prettier (`pnpm lint`), svelte-check, cargo-deny on 4 targets, `xtask check`, `bindings --check`, `tool-gate`, the JS licence allowlist (`xtask licenses`), gitleaks over fixtures and snapshots (`scripts/check-fixture-secrets.sh`) |
 | `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --no-bundle` → the same build with `--features e2e` and `e2e.conf.json` → WebdriverIO. Linux runs the suite under the strace guard, inside `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The job stops after 45 min, so a hung run fails instead of holding the runner for GitHub's 6 h. macOS also checks the Intel slice of the universal build: `cargo check --workspace --all-targets --target x86_64-apple-darwin` |
 | `advisories.yml` | Daily `cargo deny check advisories`. Opens an issue but never blocks a PR |
 | `bundle.yml` | Weekly, keyless build of the release matrix: NSIS and zip, universal DMG, deb, rpm and AppImage in `container: ubuntu:22.04` |
