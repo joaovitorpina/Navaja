@@ -82,6 +82,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Dev dependencies included; the list is deny.toml's, plus the
+      # per-package exceptions in js-licenses.toml.
+      - name: JS licence allowlist
+        run: cargo xtask licenses
+
       - name: svelte-check and tsc
         run: pnpm check
 

@@ -5,6 +5,8 @@
 //! - `bindings [--check]`: regenerate the ts-rs bindings, or fail on drift.
 //! - `tool-gate <base>`: a PR that adds a tool touches only what
 //!   docs/architecture.md §4 allows.
+//! - `licenses`: every installed npm package, dev dependencies included, is
+//!   under a licence deny.toml allows, or has an entry in js-licenses.toml.
 #![allow(
     clippy::print_stdout,
     clippy::print_stderr,
@@ -12,17 +14,20 @@
 )]
 #![allow(
     clippy::disallowed_methods,
-    reason = "xtask runs cargo and git as child processes"
+    reason = "xtask runs cargo, git and pnpm as child processes"
 )]
 
 use std::process::ExitCode;
 
 mod bindings;
 mod check;
+mod licenses;
+mod spdx;
 mod tool_gate;
 mod util;
 
-const USAGE: &str = "usage: cargo xtask <check | bindings [--check] | tool-gate <base-ref>>";
+const USAGE: &str =
+    "usage: cargo xtask <check | bindings [--check] | tool-gate <base-ref> | licenses>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,6 +38,7 @@ fn main() -> ExitCode {
             Some(base) => tool_gate::run(base),
             None => Err(anyhow::anyhow!(USAGE)),
         },
+        Some("licenses") => licenses::run(),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
