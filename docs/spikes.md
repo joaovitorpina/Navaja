@@ -134,12 +134,83 @@ Copy this for each spike and fill it in.
 - **Milestone / gates:** M2a, the tray icon format per OS
 - **Time box:** ½ d
 - **Question:** which icon files keep the tray icon crisp at every scale, and does the macOS template icon work?
-- **Method:** not run yet. It runs on the minimal tray from roadmap M2a, item 9: Windows 11 at 100, 125, 150 and 200 %, and macOS 26 with a light and a dark menu bar.
+- **Method:** the minimal tray from roadmap M2a, item 9 (`tray.rs`), with its placeholder icons: `icons/tray/template.png` (64 × 64, black on transparent) as a template image on macOS, and `icons/tray/color-32.png` (32 × 32, colour) elsewhere.
+  - **Automated** (`.github/workflows/spikes.yml`, job `s2-3`, on macos-26 and windows-2025): run by hand, and on a PR that changes the workflow or `scripts/spikes/`. Each runner builds the app as shipped, `pnpm tauri build --debug --no-bundle`, without the end-to-end overlay, and starts `target/debug/navaja` with its own `NAVAJA_APP_DIR`. The app creates its window hidden and shows it once the front end is ready (`window.rs`), so the window is on screen too; the checks look only at the tray.
+  - **macOS** (`scripts/spikes/s2-3-check.sh`, with `s2-3-menubar.swift`, compiled once with `swiftc`), one step per check:
+    - The helper prints the display's size and scale. It finds the menu bar's status items through `CGWindowListCopyWindowInfo`: on-screen windows at the status-window level (layer 25), at the top of the display, at most 50 points tall and narrower than 400 points. The Window Server's own windows up there, at layer 2147483630, are not status items. They come and go between steps (in run 37153145013, two before the app started and none by the control build), so the count in the next step leaves them out. The helper's `items` listing in the log prints them too, each with its layer.
+    - It sets the light appearance through System Events and reads it back from `defaults read -g AppleInterfaceStyle`. Then it captures the whole display with `screencapture -x` before the app starts.
+    - It starts the app and waits up to 60 s for its status item. On macOS 26 Control Center owns every status item window, the app's too, so the owner's pid cannot pick it out. A new item goes to the left of the others, so the app's is the one that raises the count by one and sits left of the leftmost item from before. The helper waits until that item's rectangle has held for 1 s, since it changes size once its image is set.
+    - It captures the display in the light appearance, then in the dark one, reading each back. It saves crops: the menu bar's right half, and the icon eight times larger without smoothing.
+    - Presence: in the item's rectangle, the background is the median of its outermost ring of pixels. Ink is any pixel at least 48 of 255 away from it in some channel. The check passes when ink covers at least 3 % of the rectangle and the strongest contrast is at least 96. It runs on the light and the dark capture.
+    - Presence, negative control: the same check, at the same rectangle, on the capture taken before the app started, must fail.
+    - Tint: the core of the ink (pixels at 60 % or more of the strongest contrast) is compared with the core of a system item's, the rightmost other status item (the clock). In each appearance the icon must be monochrome: its core's saturation (the mean of max − min over its channels) at most 24, or at most 12 above the clock's own core where that allows more, since the menu bar's vibrancy may tint both. It must also be within 48 luma of the clock's text, and on the same side of the background. Its luma must also change by at least 100 between the appearances.
+    - Tint, negative control: the app is quit, and its status item must go with it. Then the same app is built again with `icon_as_template(false)` in `tray.rs`, which the script then puts back from a saved copy. It deletes the copy once `tray.rs` matches it. That build's icon goes through the same captures, and the tint check must fail, on the icon's tint only. The helper ends a failed check with one error line that lists its reasons. Each must be about the icon's luma against the clock's, its side of the background, no icon in the dark capture, or too small a change between the appearances, and at least one must be about the dark appearance or that change. Any other reason fails the control: no icon in the light capture, a reference item that shows nothing, an icon that is not monochrome, or a capture it cannot read.
+    - The last step quits the app, puts the appearance back, and checks that the tree is clean. If the control build was killed with its edit in place, that step also puts `tray.rs` back, but only while the file is exactly the saved copy with that one edit. Any other change to `tray.rs` is left alone.
+  - **Windows** (`scripts/spikes/s2-3-tray.ps1`, Windows PowerShell 5.1):
+    - Before the app starts, UI Automation must find no notification-area button named Navaja (`AutomationId` `NotifyItemIcon`). It must find other taskbar buttons, so that the check does not pass on nothing.
+    - The app starts. Windows 11 puts a new icon in the overflow, behind the chevron. The script waits for Explorer's record of the icon under `HKCU\Control Panel\NotifyIconSettings` and sets `IsPromoted = 1` there, as the Settings page does. Then UI Automation must find the button within 30 s. If it does not, the step prints the app's output.
+    - The record is the one whose `ExecutablePath` is this checkout's `target\debug\navaja.exe`. The comparison ignores case, and a known-folder GUID at the start of the path counts as its folder. Where two records match, the one that did not exist before the app started wins. The script saves the record's previous `IsPromoted` value, and the last step puts it back. Another Navaja's record is never touched.
+    - The script captures the display (`Graphics.CopyFromScreen`, the process DPI-aware), the taskbar's right end, and the icon eight times larger. It prints the display's DPI. It does not change the display's scale.
+    - Presence: the macOS rule, inside Navaja's button, 4 pixels in from each side. The button is as tall as the taskbar, and the inset leaves out the taskbar's 1-pixel top edge, a grey 48 levels from the background.
+    - Presence, negative control: the same check, on the same capture, at a stretch of the taskbar as large as the button where UI Automation lists nothing, must fail. The script takes the leftmost such stretch, ignoring elements half the taskbar's width or wider, which are containers. A capture from before the app starts cannot serve: there the chevron sits where the icon appears later.
+  - The run's artifact, `s2-3-<runner>`, is kept for 30 days. It holds every capture, the rectangles the checks measured (`*.rect`) and the app's output. Windows' `present` and `present-refuses` read only the capture and the rectangles, so they can run again on a downloaded artifact, with `S23_DIR` set to its folder. Runs up to 37153145013 uploaded only the `.png`, `.txt` and `.log` files.
+  - **By a person:** the Windows scales from 100 to 200 %, below.
 - **PASS if:** crisp at 100-200 % on Windows; the macOS template icon works
 - **FAIL then:** per-scale PNGs, or `with_inner_tray_icon` with an .ico
-- **Result:** pending. Nothing is recorded as passed.
-- **Numbers and evidence:** none yet.
-- **Decision:** none yet. The tray shipped before this spike, against the rule that a gating spike runs first, so the spike could run on a working tray. Its icons are placeholders, picked by one `include_bytes!` constant in `tray.rs`: `icons/tray/template.png` on macOS and `icons/tray/color-32.png` elsewhere. Final art is roadmap M2b, item 3.
+- **Result:** not finished (2026-10-03).
+  - macOS template icon: works on the macos-26 runner, in the light and the dark appearance, at its 1× scale. Retina (2×) was not tested.
+  - Windows: the icon shows in the notification area at the runner's 100 %. UI Automation lists its button, and a pixel check finds an icon drawn in it. No check measures crispness: whether the icon is crisp at 100-200 % needs a person.
+- **Numbers and evidence:** `spikes.yml` run [37150170804](https://github.com/joaovitorpina/Navaja/actions/runs/37150170804), on commit `78efc60`. Every step passed on both runners. Runs [37150853141](https://github.com/joaovitorpina/Navaja/actions/runs/37150853141) on `40707c0` and [37151163157](https://github.com/joaovitorpina/Navaja/actions/runs/37151163157) on `b6c57a9`, which changed only these docs, gave the same rectangles and icon measurements. The clock's differ a little from run to run, since its text changes: in those three runs its core was `#3b3b3b` to `#3c3c3c` in the light menu bar and `#cfcfcf` to `#d1d1d1` in the dark one.
+  - Run [37152739410](https://github.com/joaovitorpina/Navaja/actions/runs/37152739410), on `913ef25` (commit `dd2f566` merged with main), added the Windows pixel check and its negative control, and the stricter reading of the tint control. Every step passed on both runners again, with the same rectangles and icon measurements. The clock's core was `#3a3a3a` in the light menu bar and `#d1d1d1` in the dark one. Jobs: 2 min 34 s on macos-26, 2 min 40 s on windows-2025.
+  - Run [37153145013](https://github.com/joaovitorpina/Navaja/actions/runs/37153145013), on `18920bc`, which changed only these docs, gave the same again; the clock's core was `#3c3c3c` and `#d1d1d1`.
+  - Run [37161147668](https://github.com/joaovitorpina/Navaja/actions/runs/37161147668), on `e4cb742`, ran the scripts with the fixes from review: the control build's short-lived copy of `tray.rs`, the exact match and restore of Explorer's record, and the larger artifact. Every step passed on both runners. Jobs: 3 min 41 s on macos-26, 2 min 43 s on windows-2025.
+    - macOS: the clock was 148 points wide, 8 more than before, so every item sat 8 points further left, the app's at x = 769. The icon's measurements were the same. The clock's core was `#3e3e3e` in the light menu bar and `#cfcfcf` in the dark one. The tint control failed for the same four reasons.
+    - Windows: the button, the pixel check and the empty stretch were the same as in run 37152739410. Explorer's matching record was new, with no `IsPromoted` value, and the last step removed the value again. The artifact held the 4 captures, `icon.rect`, `empty.rect`, `navaja.out` and `navaja.err`.
+    - The commit that records this run changes only these docs.
+
+  | Runner | System | Display | Job |
+  |---|---|---|---|
+  | macos-26 | macOS 26.6.2 (25G83) | 1024 × 768 points, 1024 × 768 pixels: backing scale 1.0, not Retina. NSStatusBar reports 22 points; the status item windows are 30 points tall | 2 min 4 s |
+  | windows-2025 | Windows Server 2025 Datacenter, build 26100; session 2, interactive, with Explorer | 1024 × 768 pixels, AppliedDPI 96: 100 % | 3 min 27 s |
+
+  macOS, from the helper's measurements:
+
+  | Capture | Menu bar background | Icon: ink, glyph size | Icon core | Clock's text core |
+  |---|---|---|---|---|
+  | Before the app starts, at the icon's later rectangle | `#dadada` | none: 0 % ink, contrast 0 | — | — |
+  | Shipped build, light | `#dadada` | 10.3 % of a 34 × 30 pixel item, 13 × 13 pixels | `#2f2f2f`, saturation 0 | `#3b3b3b`, saturation 0 |
+  | Shipped build, dark | `#202020` | 10.3 %, 13 × 13 pixels | `#d9d9d9`, saturation 0 | `#d1d1d1`, saturation 0 |
+  | Not-template build, light | `#dadada` | 9.5 %, 13 × 12 pixels | `#111111` | `#3b3b3b` |
+  | Not-template build, dark | `#202020` | none: contrast 32, under the 48 that counts as ink | — | `#d1d1d1` |
+
+  - The appearance read back as Light, then Dark. The menu bar's background followed it, from `#dadada` to `#202020`.
+  - The app's item appeared at x = 777 points (769 in run 37161147668, with a wider clock), left of Spotlight, Control Center and the clock, which stayed where they were. It was gone within 10 s of quitting the app, for both builds.
+  - The tint check failed on the not-template build as it should, on the dark appearance: no ink in the dark capture (contrast 32), so no icon drawn. With no ink there is no core to measure, and the helper then reports a core of `#000000`, luma 0. Its three other reasons use that stand-in value, not a measurement: in the dark, the luma against the clock's 209 and the side of the background; and the change of 17 between the appearances. In run 37152739410 the control also read the helper's reasons: all four were about the icon's tint.
+  - What the captures show (looked at by eye, the crops at 8×): in the light menu bar the icon is a dark grey silhouette of the knife, the same grey as the clock and the other icons. In the dark one it is the same silhouette in light grey, again matching the clock. It is one flat tone, with no colour. At this 1× scale the 64-pixel glyph is drawn 13 pixels high. Its outline is clean, with one pixel of grey at the edges and no blur. The blades still show as three points at the top, but merge into one shape lower down. The not-template build's icon is black in both appearances, so in the dark menu bar it all but disappears.
+
+  Windows, at 100 % on the runner:
+  - Explorer recorded the icon with no `IsPromoted` value, which Windows 11 shows in the overflow. After the script set `IsPromoted = 1`, UI Automation found the button named "Navaja" at 797, 720, 32 × 48 pixels, between the chevron and the other icons.
+  - The 32-pixel PNG is drawn in about 11 × 12 pixels (the PNG has a transparent margin), on the taskbar's `#eeeeee`.
+  - The pixel check (run 37152739410): inside the button, 24 × 40 pixels, the background is `#eeeeee`. 48 pixels are ink, 5.0 % (it needs 3 %), in an 11 × 10 box, and the strongest contrast is 192 (it needs 96). The empty stretch the script picked, at 8, 720, left of the centred taskbar buttons, has no ink and contrast 0; its crop shows plain taskbar.
+  - The margin is not large. Run by hand on run 37151163157's capture, the same check gives the chevron's button 2.1 % ink, under the 3 %. The placeholder icon has about 1.7 times the minimum, mostly from its handle and pivot; its light blades are not ink.
+  - The handle (`#57606a`) and the orange pivot are solid. Their edges change colour within one or two pixels, more along the handle's slanted top.
+  - The blades are light grey in the source (`#e6e8eb` and `#d0d7de`). They come out within about 30 levels of the taskbar's grey, so they barely show. That is the placeholder art's colour, not scaling; the final art is roadmap M2b, item 3.
+
+  **Windows scales, by a person.** On Windows 11 (not Server), with a display that offers 125, 150, 175 and 200 %:
+  1. Build the app as shipped (`pnpm tauri build --debug --no-bundle`) and start `target\debug\navaja.exe`. If the icon is behind the chevron, turn Navaja on under Settings > Personalization > Taskbar > Other system tray icons.
+  2. For each of 100, 125, 150, 175 and 200 % (Settings > System > Display > Scale): quit Navaja from its tray menu, set the scale, start it again, and capture the notification area (PrtScn). At one scale, also change the scale while Navaja runs, since Windows may then rescale the icon it already has.
+  3. Open each capture in Paint, zoom to 800 % and look at the icon. Windows draws a small icon at 16 pixels at 100 %, 20 at 125 %, 24 at 150 %, 28 at 175 % and 32 at 200 %. Only 200 % uses the 32-pixel PNG one to one.
+  4. "Crisp" means the edges of the handle and pivot change colour within one or two pixels, as they do at 100 % on the runner: not smeared over three or more, and not blocky with doubled pixels. Compare with the 200 % capture.
+  5. Check it on the light and on the dark taskbar (Settings > Personalization > Colors).
+  6. Record a table here: scale, the icon's size in pixels, crisp or not, and a note. Attach the crops to the PR.
+  7. If any scale is not crisp, take the fallback: per-scale PNGs (16, 20, 24, 28 and 32 pixels), or `with_inner_tray_icon` with an .ico holding those five sizes. Either way, load the icon at the small-icon size for the display's DPI, `GetSystemMetricsForDpi(SM_CXSMICON, dpi)`. tray-icon's `Icon::from_path` and `from_resource` with no size load it with `LR_DEFAULTSIZE`, which picks the large-icon size (32 at 100 %), and Windows then scales that down again.
+
+  Optionally, on a Retina Mac, start the app and look at the icon at 2×, in both appearances: the runner only covers 1×.
+- **Decision:** none yet.
+  - The tray shipped before this spike, against the rule that a gating spike runs first, so the spike could run on a working tray.
+  - On macOS the template icon behaves as a template: the system tints it like its own items in both appearances, and a plain image does not pass the same check. No change is needed there.
+  - On Windows, the per-scale decision waits for the steps above. Final art is roadmap M2b, item 3.
+  - **The job's lifetime:** `spikes.yml`'s `s2-3` job runs once more on the final brand icons (roadmap M2b, item 3), and the result is recorded here. Then the job is deleted from `spikes.yml`.
 
 ## S2.6 WebdriverIO
 
@@ -254,3 +325,35 @@ Copy this for each spike and fill it in.
   - **macOS, Safe Browsing:** `WKPreferences.fraudulentWebsiteWarningEnabled = false`, public API, on by default. WebKit should then not start or ask the Safe Browsing service for the app. The VM sometimes runs the service without the app, so privacy.md could only say that Navaja does not start it.
   - **macOS, `webprivacyd`:** no public WKWebView switch is known to stop its list fetch. It needs investigation before anything is proposed; if nothing stops it, privacy.md discloses it.
   - Whatever is still captured after that goes into `privacy.md` exactly as seen (roadmap M6, item 6), including the WAM contact if it stays.
+
+## M2a exit check: copy stays out of Windows clipboard history
+
+Not a spike: one of M2a's exit criteria (roadmap M2a, Exit), checked the same way.
+
+- **Question:** does a copy made through Navaja stay out of Windows clipboard history?
+- **Method:** `clipboard.rs` copies through arboard with three formats Windows documents for this: `CanIncludeInClipboardHistory` and `CanUploadToCloudClipboard`, each a DWORD 0, and `ExcludeClipboardContentFromMonitorProcessing`. Job `exit-clipboard-history` in `spikes.yml`, on windows-2025, runs one step per check (`scripts/spikes/exit-clipboard-check.sh`, with `clipboard-history.ps1` in Windows PowerShell 5.1):
+  - The end-to-end build (`--features e2e --config src-tauri/e2e.conf.json`).
+  - Clipboard history on: `HKCU\Software\Microsoft\Clipboard\EnableClipboardHistory = 1`, then a restart of the per-user clipboard service (`cbdhsvc_*`). If `Clipboard.IsHistoryEnabled()` (WinRT) is still false, in this process and in a fresh one, the step also sets the `AllowClipboardHistory = 1` policy and restarts the service again. It sets the step output `enabled`, and fails only on an error.
+  - Control, when history is on: a random text copied the ordinary way (`Set-Clipboard`) must appear in `Clipboard.GetHistoryItemsAsync()` within 10 s.
+  - Navaja's copy: a spec written at run time, `app/e2e/spikes/exit-clipboard.e2e.ts`, opens the UUID tool, reads the UUID it generated and presses the output's Copy button, which goes through `copy_text`. That UUID is the canary. `Get-Clipboard` must then return it.
+  - Formats: the clipboard, still holding Navaja's copy, must carry the three formats above, with the two DWORDs 0 (Win32 `EnumClipboardFormats` and `GetClipboardData`).
+  - When history is on: the canary must still be on the clipboard, and 10 s later it must not be in the history. The clipboard is checked once, before that wait: history records an item when it is copied, so a second look at the clipboard would add nothing. Then the same canary, copied the ordinary way, must reach the history: the negative control for the lookup.
+  - Formats, negative control: the same canary copied the ordinary way must fail the formats check, which must name `CanIncludeInClipboardHistory` as missing.
+  - When Windows keeps history off, the summary marks the history row "off: inconclusive" and the three steps that need history "inconclusive", and the enable step leaves a warning on the run, so that the green job does not read as a pass. The spec is removed at the end.
+  - **Untested:** the three steps that need history (the control, absent, and its negative control), and the code that reads the history's items (`GetHistoryItemsAsync()`, then each item's `GetTextAsync()` through .NET's `AsTask`), have never run with history on, on CI or anywhere else. They fail closed: the absence check needs the history's status to be `Success`, and its negative control must find the same text once it is copied the ordinary way. If a runner ever turns history on, those steps will gate the job on code that has not been run before.
+- **PASS if:** an ordinary copy reaches clipboard history and Navaja's copy of a fresh value does not.
+- **Result:** inconclusive on CI (2026-10-03). Windows Server keeps clipboard history off, so the runner cannot answer the question. What it does show: Navaja's copy reaches the clipboard with all three exclusion formats.
+- **Evidence:** `spikes.yml` run [37150170804](https://github.com/joaovitorpina/Navaja/actions/runs/37150170804), on commit `78efc60`; the job passed in 4 min 6 s.
+  - The runner is Windows Server 2025 Datacenter, build 26100, session 2, interactive, with Explorer running. Neither value existed before. With `EnableClipboardHistory = 1`, then the policy as well, and the service restarted after each, `IsHistoryEnabled()` stayed false for 15 s each time, in this process and in a fresh one. `GetHistoryItemsAsync()` returned `ClipboardHistoryDisabled`. A [Microsoft Q&A answer](https://learn.microsoft.com/en-us/answers/questions/91159/clipboard-history-on-windows-server) from 2020 says Windows Server did not have clipboard history then; Server 2025 on the runner behaves the same.
+  - The Copy button copied the canary `9ca74a9d-315a-4698-8e21-233d18ed5f9a`, and `Get-Clipboard` returned it. The clipboard then held 7 formats: `CF_UNICODETEXT` (13), `CF_LOCALE` (16), `CF_TEXT` (1), `CF_OEMTEXT` (7), and `ExcludeClipboardContentFromMonitorProcessing`, `CanUploadToCloudClipboard` and `CanIncludeInClipboardHistory`, each `00-00-00-00`.
+  - The same text through `Set-Clipboard` held 6 formats (`DataObject`, `Ole Private Data` and the four text ones), none of the three, and the formats check failed on it, naming all three.
+  - Runs 37149634725 and 37150853141 gave the same results with their own canaries. Run 37148575144 found history off in the same way; its job failed, because the enable step then still failed when history stayed off.
+  - Run [37152739410](https://github.com/joaovitorpina/Navaja/actions/runs/37152739410), on `913ef25`, gave the same results with the canary `74b7f23d-3e38-4ed4-8bb8-5a90f1c81689`, in 3 min 24 s. Its summary step got `enabled=false`, for which it writes the history row as "off: inconclusive", and the job carries the enable step's warning.
+  - Run [37161147668](https://github.com/joaovitorpina/Navaja/actions/runs/37161147668), on `e4cb742`, gave the same results again with the canary `c20f0605-3573-4261-8d68-f1643319caee`, in 3 min 34 s. The three history steps were skipped, with `enabled=false`.
+- **By a person**, on Windows 11:
+  1. Turn on Settings > System > Clipboard > Clipboard history.
+  2. Control: copy a word in Notepad, press Win+V, and check that it is listed.
+  3. In Navaja, open the UUID generator and press Copy. Paste in Notepad: the UUID must appear. Press Win+V: the UUID must not be listed.
+  4. Select the UUID in the output and press Ctrl+C, which also goes through `copy_text`. Win+V must not list it either.
+  5. Record the Windows build and the result here.
+- **The job's lifetime:** `exit-clipboard-history` moves into `ci.yml` only if a GitHub-hosted runner ever has clipboard history, so that its history checks can gate. Otherwise it is deleted from `spikes.yml` once the check by a person above is recorded.
