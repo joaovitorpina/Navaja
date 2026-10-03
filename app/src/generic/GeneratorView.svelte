@@ -5,7 +5,7 @@
   import type { ToolError } from '$bindings/ToolError';
   import type { ToolMeta } from '$bindings/ToolMeta';
   import { t } from '$lib/i18n';
-  import { type Run, type ToolInput, type ToolOutput, runTool } from '$lib/ipc';
+  import { type Run, type ToolInput, type ToolOutput, isToolOutput, runTool } from '$lib/ipc';
   import { defaultValues } from './options';
   import OptionControl from './OptionControl.svelte';
   import OutputView from './OutputView.svelte';
@@ -20,8 +20,12 @@
   let current: Run | null = null;
 
   const action = $derived(meta.actions.find((a) => a.id === spec.action));
+  // Destructive actions need the confirmation dialog, which doesn't exist yet
+  // (Rust rejects such generators too), so they never run from here.
+  const blocked = $derived(action?.destructive ?? false);
 
   async function generate() {
+    if (blocked) return;
     void current?.cancel();
     // Option values are primitives, so a shallow copy is a plain snapshot.
     const run = runTool(meta.id, spec.action, { ...values });
@@ -30,11 +34,13 @@
     const result = await run.result;
     if (current !== run) return; // superseded by a newer run
     running = false;
-    if (result.ok) {
+    if (!result.ok) {
+      error = result.error;
+    } else if (isToolOutput(result.value)) {
       output = result.value;
       error = null;
     } else {
-      error = result.error;
+      error = { code: 'core.ipc', message: 'malformed tool output', details: null };
     }
   }
 
@@ -56,12 +62,23 @@
   {/each}
   <button
     type="submit"
-    class="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-canvas hover:opacity-90"
+    class="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-canvas hover:opacity-90 disabled:opacity-50"
     aria-busy={running}
+    disabled={blocked}
+    aria-describedby={blocked ? `confirm-${meta.id}` : undefined}
   >
     {action ? t(`tool.${meta.id}.action.${action.id}`, action.label) : spec.action}
   </button>
 </form>
+
+{#if blocked}
+  <p id="confirm-{meta.id}" class="mt-4 text-sm text-muted">
+    {t(
+      'shell.confirm_unavailable',
+      'This action needs a confirmation step that this version of Navaja doesn’t have yet.',
+    )}
+  </p>
+{/if}
 
 {#if error}
   <p role="alert" class="mt-4 text-sm text-danger">{t(`error.${error.code}`, error.message)}</p>

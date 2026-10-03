@@ -25,8 +25,20 @@ mod state;
 mod tray;
 mod window;
 
-/// Builds and runs the app until the last window closes or the user quits.
-pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// What `tests/privacy.rs` drives: the real panic hook, logger and run path.
+/// Not an API.
+#[doc(hidden)]
+pub mod testing {
+    pub use crate::commands::{RunEnvelope, execute};
+    pub use crate::crash::install as install_crash_hook;
+    pub use crate::logging::{LogGuard, init_with_directives as init_logging};
+    pub use crate::settings::SettingsStore;
+    pub use crate::state::AppState;
+}
+
+/// Builds and runs the app until the last window closes or the user quits,
+/// then releases what it holds and returns the exit code for `main`.
+pub fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let args = args::parse(std::env::args());
     // A GUI run as root breaks on Wayland and leaves root-owned files in the
     // user's config. Navaja never needs it.
@@ -42,7 +54,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     // First: no panic may reach the default hook, which prints the payload.
     crash::install(app_dir.clone());
-    let _logs = logging::init(app_dir.as_deref());
+    let logs = logging::init(app_dir.as_deref());
 
     // Tool metadata is validated by registry_test in CI; a failure here is a
     // build defect, reported once and fatal.
@@ -76,7 +88,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(tauri_plugin_wdio::init())
         .plugin(tauri_plugin_wdio_webdriver::init());
 
-    builder
+    // Tauri errors carry no user input, so they are logged in full. A setup
+    // error becomes Tauri's panic, whose message the panic hook withholds.
+    let app = builder
         .manage(Arc::clone(&state))
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
@@ -97,17 +111,35 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 tools = app.state::<Arc<state::AppState>>().registry.len(),
                 "starting"
             );
-            let window = window::create_main(app.handle(), initial_tool.as_deref())?;
+            let window = window::create_main(app.handle(), initial_tool.as_deref())
+                .inspect_err(|error| tracing::error!(%error, "creating the main window failed"))?;
+            // A new window already follows the OS theme.
             let theme = app.state::<Arc<state::AppState>>().settings.get().theme;
-            commands::apply_theme(&window, theme);
+            if theme != settings::Theme::System {
+                commands::apply_theme(&window, theme);
+            }
             // Some Linux desktops have no tray host; the app works without it.
             if let Err(error) = tray::create(app.handle(), &tray_tools) {
                 tracing::warn!(%error, "no tray icon");
             }
             Ok(())
         })
-        .run(tauri::generate_context!())?;
-    Ok(())
+        .build(tauri::generate_context!())
+        .inspect_err(|error| tracing::error!(%error, "starting the app failed"))?;
+
+    // Some quits end the process inside the event loop even with
+    // `run_return` (macOS's Quit menu item, a Windows logoff), but every quit
+    // emits `Exit` first, so the clean-up happens there.
+    let mut logs = Some(logs);
+    let code = app.run_return(move |_, event| {
+        if let tauri::RunEvent::Exit = event {
+            // On X11 the clipboard handle serves copied text until it drops.
+            state.clipboard.release();
+            // Flushes lines still queued for the log file.
+            drop(logs.take());
+        }
+    });
+    Ok(code)
 }
 
 /// A second `navaja` launch: show (or toggle) the running window and open

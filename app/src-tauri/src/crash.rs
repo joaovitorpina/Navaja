@@ -68,3 +68,35 @@ fn prune(dir: &Path) {
         let _ = std::fs::remove_file(old);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prune_keeps_the_newest_files() {
+        let dir = std::env::temp_dir().join(format!("navaja-crash-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Mixed widths: 999 is older than 1000 although it sorts after it as text.
+        let millis: Vec<u64> = (990..1002).collect();
+        for m in &millis {
+            std::fs::write(dir.join(format!("crash-{m}.txt")), "").unwrap();
+        }
+        std::fs::write(dir.join("notes.txt"), "").unwrap();
+        prune(&dir);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        let mut expected: Vec<String> = millis[millis.len() - KEEP..]
+            .iter()
+            .map(|m| format!("crash-{m}.txt"))
+            .collect();
+        expected.push("notes.txt".to_owned());
+        expected.sort();
+        assert_eq!(left, expected);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

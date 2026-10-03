@@ -2,7 +2,7 @@
 
 An offline, cross-platform developer toolbox for Windows, Linux and macOS. *Navaja* is Spanish for pocket knife.
 
-> **Status: pre-alpha.** The stack and architecture are decided. There is no code or release yet.
+> **Status: pre-alpha.** The stack and architecture are decided, and work on the app shell and the first tool (UUID) is under way. There is no release yet.
 
 Navaja holds two kinds of tools:
 

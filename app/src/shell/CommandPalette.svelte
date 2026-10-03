@@ -48,23 +48,27 @@
           placeholder={t('shell.palette.placeholder', 'Search tools…')}
         />
         <Command.List class="max-h-80 overflow-auto p-1">
-          <Command.Empty class="px-3 py-6 text-center text-sm text-muted">
-            {t('shell.nav.no_match', 'No tools match.')}
-          </Command.Empty>
-          {#each hits as hit (hit.id)}
-            {@const tool = byId.get(hit.id)}
-            {#if tool}
-              <Command.Item
-                value={tool.id}
-                onSelect={() => choose(tool.id)}
-                class="flex cursor-default items-center gap-3 rounded-md px-3 py-2 text-sm aria-selected:bg-subtle"
-              >
-                <ToolIcon svg={tool.icon} class="size-4 text-muted" />
-                <span class="flex-1">{t(`tool.${tool.id}.name`, tool.name)}</span>
-                <span class="text-xs text-muted">{categoryLabel.get(tool.category)}</span>
-              </Command.Item>
-            {/if}
-          {/each}
+          <!-- The viewport gives the input its aria-controls and aria-activedescendant. -->
+          <Command.Viewport>
+            <Command.Empty class="px-3 py-6 text-center text-sm text-muted">
+              {t('shell.nav.no_match', 'No tools match.')}
+            </Command.Empty>
+            {#each hits as hit (hit.id)}
+              {@const tool = byId.get(hit.id)}
+              {#if tool}
+                <!-- Selected: a tint plus the accent focus ring, which also survives forced colours. -->
+                <Command.Item
+                  value={tool.id}
+                  onSelect={() => choose(tool.id)}
+                  class="flex cursor-default items-center gap-3 rounded-md px-3 py-2 text-sm aria-selected:bg-subtle aria-selected:outline-2 aria-selected:-outline-offset-2 aria-selected:outline-accent"
+                >
+                  <ToolIcon svg={tool.icon} class="size-4 text-muted" />
+                  <span class="flex-1">{t(`tool.${tool.id}.name`, tool.name)}</span>
+                  <span class="text-xs text-muted">{categoryLabel.get(tool.category)}</span>
+                </Command.Item>
+              {/if}
+            {/each}
+          </Command.Viewport>
         </Command.List>
       </Command.Root>
     </Dialog.Content>

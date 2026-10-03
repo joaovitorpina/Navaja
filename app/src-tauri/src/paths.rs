@@ -6,10 +6,12 @@
 
 use std::path::PathBuf;
 
-/// Overrides the directory (tests, end-to-end runs, portable use).
+/// Overrides the directory in debug builds only (tests, end-to-end runs).
+#[cfg(any(debug_assertions, test))]
 const OVERRIDE: &str = "NAVAJA_APP_DIR";
 
 pub fn app_dir() -> Option<PathBuf> {
+    #[cfg(any(debug_assertions, test))]
     if let Some(dir) = std::env::var_os(OVERRIDE).filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(dir));
     }

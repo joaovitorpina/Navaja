@@ -6,7 +6,8 @@
   import { t } from '$lib/i18n';
   import { searchTools } from '$lib/ipc';
   import { href, router } from '$lib/router.svelte';
-  import { shortcutLabel } from './keys';
+  import { shortcutAria, shortcutLabel } from './keys';
+  import { toolGroups } from './order';
 
   let { catalog, onOpenPalette }: { catalog: Catalog; onOpenPalette: () => void } = $props();
 
@@ -27,14 +28,7 @@
   });
 
   const byId = $derived(new Map(catalog.tools.map((tool) => [tool.id, tool])));
-  const groups = $derived(
-    catalog.categories.map((category) => ({
-      category,
-      tools: catalog.tools
-        .filter((tool) => tool.category === category.id)
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    })),
-  );
+  const groups = $derived(toolGroups(catalog));
   const activeId = $derived(router.route.kind === 'tool' ? router.route.id : null);
 </script>
 
@@ -72,7 +66,7 @@
       type="button"
       class="rounded-md border border-line px-2 text-xs text-muted hover:bg-subtle"
       aria-label={t('shell.palette.open', 'Search all tools')}
-      aria-keyshortcuts="Control+K Meta+K"
+      aria-keyshortcuts={shortcutAria()}
       onclick={onOpenPalette}>{shortcutLabel()}</button
     >
   </div>
