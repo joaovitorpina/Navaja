@@ -77,7 +77,8 @@ pub struct ToolMeta {
     pub spec_version: u16,                 // 1
     pub id: ToolId,                        // [a-z][a-z0-9_]*, == folder; "<publisher>__<name>" reserved for extensions
     pub name: String, pub description: String,   // English fallbacks for i18n
-    pub category: Category,                // open newtype: ENCODERS, FORMATTERS, GENERATORS, SYSTEM
+    pub category: Category,                // open id newtype: ENCODERS, FORMATTERS, GENERATORS, SYSTEM;
+                                           // label and position are host-side (CategoryInfo)
     pub keywords: Vec<String>, pub icon: String, // allowlisted SVG, rendered via CSS mask (never {@html})
     pub capabilities: Vec<Capability>,     // open: "process.inspect", "process.kill", "container.engine"
     pub actions: Vec<ActionMeta>,          // { id, label, destructive }
@@ -105,8 +106,13 @@ register_tools! {
 }
 ```
 
-- **`Registry::new`** validates ids, spec references, categories and icons.
-- **`Registry::run`** wraps `invoke` in `catch_unwind` and returns `core.panicked` when a tool panics. In debug builds it also checks each output against its payload type.
+- **`Registry::new`** validates ids, spec references, categories and icons. It reports every problem of every tool, not just the first. The id `core` is reserved for host error codes.
+- **`Registry::categories()`** returns the categories in use, as `CategoryInfo { id, label, order }`. The labels and positions come from the host's built-in table; unknown ids sort last, by id.
+- **`Registry::run`** wraps `invoke` in `catch_unwind` and returns `core.panicked` when a tool panics.
+  - **Panic hook:** the panic payload is never returned. The app must also replace the default panic hook first thing in `main`: the default hook prints the payload, which may contain input, to stderr.
+  - **Debug checks:** with debug assertions (the default for `cargo test`), each output must round-trip exactly through its payload type. A tool may return only its own `<id>.*` codes plus `core.invalid_input`, `core.cancelled` and `core.panicked`.
+  - **Panic strategy:** a `compile_error!` stops the build if anyone switches it to `abort`.
+  - **Tests:** tool tests use `navaja_core::run_single`, which runs through the same checks.
 - **`search::rank`** orders matches by prefix, then word start, then substring, then subsequence.
 - **Payload types** (`KeyValueRow`, `Diagnostic`, `BinaryValue`) derive ts-rs. `TS_RS_LARGE_INT=number` is set so that `u64` does not become `bigint`.
 
@@ -115,7 +121,9 @@ register_tools! {
 - each id equals its folder name;
 - `ui/View.svelte` and `ui/i18n/` exist exactly for `Custom { view: id }`;
 - error codes match `<id>.<snake>`;
-- every declared action, called with a pre-cancelled `Ctx` and a sentinel input, returns `core.invalid_input` or `core.cancelled`, so no side effect runs;
+- every declared action, called with a pre-cancelled `Ctx` and a junk input, returns `core.invalid_input` or `core.cancelled` (tools parse with `typed()` and call `ctx.check()` before any side effect);
+- the generic views' inputs are accepted: defaults, every choice and both integer bounds;
+- every `ErrorCode::from_static` literal in a tool's folder is in the tool's namespace;
 - an undeclared action returns `core.unknown_action`.
 
 ## 4. Extensibility contract
@@ -340,6 +348,7 @@ Installs from a package manager show that manager's upgrade command instead of i
 - **Settings:** a typed TOML file in `APP_DIR`. Writes are atomic, and a corrupt file is set aside. Unix permissions are 0700 for the directory and 0600 for files.
 - **Logs:** written with tracing, rotated daily, 7 kept. They record only the tool id, action, duration and error code, never payloads.
 - **Crash files:** kept locally, and never contain the panic payload.
+- **Panic hook:** the app replaces the panic hook first thing in `main`. The hook records only the location and the thread, and it never reads the payload. It also never chains to the default hook, which would print the payload to stderr (journald on Linux).
 
 ## 9. Runtime extensions after v1, and why v1 does not block them
 

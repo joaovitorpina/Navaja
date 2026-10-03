@@ -1,0 +1,29 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommitTypeAll(build)", "helpers:pinGitHubActionDigests"],
+  "schedule": ["before 6am on monday"],
+  "timezone": "UTC",
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Give npm releases three days before proposing them",
+      "matchManagers": ["npm"],
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Tauri crates and npm packages move together (xtask check enforces parity)",
+      "groupName": "tauri",
+      "matchPackageNames": ["tauri", "tauri-build", "tauri-plugin-*", "@tauri-apps/*"]
+    },
+    {
+      "description": "WebDriver test stack moves together",
+      "groupName": "wdio",
+      "matchPackageNames": ["@wdio/*", "tauri-plugin-wdio*"]
+    },
+    {
+      "description": "TypeScript 7 is not supported by svelte-check yet (ADR 0001)",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7"
+    }
+  ]
+}
