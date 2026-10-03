@@ -12,4 +12,7 @@ disallowed-types = [
 disallowed-methods = [
   { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "no name resolution: no tool makes a network request" },
   { path = "std::process::Command::new", reason = "start processes only through navaja_core::sys::spawn_system" },
+  # Tauri's default `dynamic-acl` feature compiles this in. A capability added
+  # at run time bypasses acl.lock.json and `cargo xtask check`.
+  { path = "tauri::Manager::add_capability", reason = "capabilities come only from tauri.conf.json, which acl.lock.json snapshots (docs/architecture.md §5)" },
 ]

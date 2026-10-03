@@ -207,6 +207,11 @@ Rust never runs a destructive action from argv.
 - **Capability:** it grants only the app's own commands, with no `core:default` and no plugin permission.
   - **ACL snapshot:** `app/src-tauri/acl.lock.json` holds the resolved ACL of the release configuration: `tauri.conf.json`'s capabilities with the default features, not the e2e overlay. It lists every command the webview may call, with its windows, webviews, origins and scopes, plus denied commands and global scopes, for Linux, macOS and Windows.
   - **Updating it:** `cargo xtask acl` resolves it with Tauri's own code (tauri-utils, pinned to tauri's version) from what the app's build script writes, and rewrites the file. `cargo xtask check` resolves it again and fails, naming each command that differs, until the new file is committed. So a new grant is reviewed as a diff.
+  - **What it covers:** `tauri.conf.json` alone (the capabilities it names, and any inline ones), every capability file tauri-build finds under `capabilities/`, and the permission manifests of the app (from `build.rs`) and of every plugin it depends on with its default features. It does not cover the e2e overlay or the `TAURI_CONFIG` variable the Tauri CLI passes it in; only test builds use them.
+  - **What `cargo xtask check` refuses,** because the build would read it and the snapshot would not:
+    - a per-platform config beside `tauri.conf.json`: `tauri.<os>.conf.json`, `tauri.<os>.conf.json5` or `Tauri.<os>.toml`, for linux, macos, windows, android or ios. Tauri merges it over `tauri.conf.json` when it builds for that OS;
+    - a `generate_context!` call with arguments, such as a config path or `capabilities = [...]`, in any file under `app/src-tauri/src`, or a renamed import of the macro.
+  - **Runtime grants:** Tauri's default `dynamic-acl` feature compiles in `Manager::add_capability`, which adds a capability after start. `clippy.toml` bans it.
 - **Plugins never used:** http, fs, shell, dialog, clipboard-manager and store.
 - **Window:** one Rust builder creates it with:
   - incognito mode;
