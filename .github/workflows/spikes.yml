@@ -219,13 +219,12 @@ jobs:
             echo "| Probe removed, tree clean | $(result "$REMOVE") |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # S2.3: is the tray icon crisp, and does the macOS template icon work? The
-  # app as shipped (`tauri build --debug --no-bundle`, no e2e overlay) starts
-  # hidden, so the tray icon is all it shows. On macOS: the menu bar captured
-  # before the app starts and with it running, in the light and the dark
-  # appearance, then checks on the icon's pixels against a system item's
-  # (scripts/spikes/s2-3-check.sh), with a negative control on the capture
-  # taken before. On Windows: the icon promoted out of the overflow, found
+  # S2.3: is the tray icon crisp, and does the macOS template icon work? It
+  # runs the app as shipped (`tauri build --debug --no-bundle`, no e2e
+  # overlay). On macOS: the menu bar captured before the app starts and with
+  # it running, in the light and the dark appearance, then checks on the
+  # icon's pixels against a system item's (scripts/spikes/s2-3-check.sh),
+  # with a negative control on the capture taken before. On Windows: the icon promoted out of the overflow, found
   # through UI Automation and captured at the runner's own scale
   # (scripts/spikes/s2-3-tray.ps1). Other Windows scales need a person
   # (docs/spikes.md). The captures are the run's artifact.
@@ -277,7 +276,7 @@ jobs:
         if: ${{ !cancelled() && steps.helper.outcome == 'success' }}
         run: bash scripts/spikes/s2-3-check.sh baseline
 
-      - name: d. The app starts hidden and its status item appears (macOS)
+      - name: d. The app starts and its status item appears (macOS)
         id: launch
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.baseline.outcome == 'success' }}
         run: bash scripts/spikes/s2-3-check.sh launch
@@ -311,7 +310,7 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Windows' }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 before
 
-      - name: c. The app starts hidden and its notification-area icon appears (Windows)
+      - name: c. The app starts and its notification-area icon appears (Windows)
         id: win_launch
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.win_before.outcome == 'success' }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 launch
@@ -370,14 +369,14 @@ jobs:
             if [ "$RUNNER_OS" = macOS ]; then
               echo "| b. Menu bar helper compiles; display size and scale | $(result "$HELPER") |"
               echo "| c. Menu bar captured before the app starts (light) | $(result "$BASELINE") |"
-              echo "| d. App starts hidden; its status item appears | $(result "$LAUNCH") |"
+              echo "| d. App starts; its status item appears | $(result "$LAUNCH") |"
               echo "| e. Menu bar captured in light and dark appearance (read back) | $(result "$CAPTURE") |"
               echo "| f. Icon drawn in both captures | $(result "$PRESENT") |"
               echo "| f. Same check finds no icon before the app starts | $(result "$PRESENT_REFUSES") |"
               echo "| g. Monochrome; tinted like a system item in each appearance | $(result "$TINT") |"
             else
               echo "| b. No Navaja icon in the notification area before the app starts | $(result "$WIN_BEFORE") |"
-              echo "| c. App starts hidden; its icon appears in the notification area | $(result "$WIN_LAUNCH") |"
+              echo "| c. App starts; its icon appears in the notification area | $(result "$WIN_LAUNCH") |"
               echo "| d. Notification area captured at the runner's scale | $(result "$WIN_CAPTURE") |"
               echo "| Crisp at 100-200 % | needs a person (docs/spikes.md) |"
             fi

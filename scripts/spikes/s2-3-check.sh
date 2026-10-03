@@ -107,7 +107,8 @@ launch() {
     fail "a navaja process is already running; quit it first"
   fi
   # The app's settings and logs go to a folder of the spike's own (debug
-  # builds honour NAVAJA_APP_DIR). It starts hidden: only the tray icon shows.
+  # builds honour NAVAJA_APP_DIR). Its window shows once the front end is
+  # ready (window.rs); the checks look only at the menu bar's status items.
   mkdir -p "$DIR/app-dir"
   NAVAJA_APP_DIR="$DIR/app-dir" nohup "$APP" > "$DIR/navaja.log" 2>&1 &
   echo $! > "$DIR/navaja.pid"

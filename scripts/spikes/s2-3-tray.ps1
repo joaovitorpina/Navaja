@@ -72,9 +72,12 @@ function Get-TaskbarButtons {
   return @($taskbar.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttons))
 }
 
+# The notification-area icon, not the app's own taskbar button (the app
+# shows its window once the front end is ready, window.rs): Explorer names
+# the icon after its tooltip, "Navaja", and gives it this AutomationId.
 function Find-NavajaButton {
   foreach ($button in (Get-TaskbarButtons)) {
-    if ($button.Current.Name -like 'Navaja*') { return $button }
+    if ($button.Current.AutomationId -eq 'NotifyItemIcon' -and $button.Current.Name -like 'Navaja*') { return $button }
   }
   return $null
 }

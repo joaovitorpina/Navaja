@@ -88,42 +88,74 @@ function Show-Services {
   }
 }
 
+function Show-Keys {
+  foreach ($path in 'HKCU:\Software\Microsoft\Clipboard', 'HKLM:\SOFTWARE\Microsoft\Clipboard',
+    'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System') {
+    $item = Get-ItemProperty $path -ErrorAction SilentlyContinue
+    $values = if ($item) {
+      @($item.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' } | ForEach-Object { "$($_.Name) = $($_.Value)" }) -join ', '
+    } else { 'no key' }
+    Write-Output "${path}: $(if ($values) { $values } else { 'no values' })"
+  }
+}
+
+# The per-user instance (cbdhsvc_<id>) reads the setting when it starts.
+function Restart-ClipboardService {
+  foreach ($service in @(Get-Service -Name 'cbdhsvc_*' -ErrorAction SilentlyContinue)) {
+    try {
+      if ($service.Status -eq 'Running') {
+        Restart-Service -Name $service.Name -Force
+        Write-Output "Restarted $($service.Name)."
+      } else {
+        Start-Service -Name $service.Name
+        Write-Output "Started $($service.Name)."
+      }
+    } catch {
+      Write-Output "::warning::clipboard-history could not (re)start $($service.Name): $($_.Exception.Message)"
+    }
+  }
+  Show-Services
+}
+
+# Whether history is on, as this process and a fresh one each see it. It
+# returns only the answer; the line it prints goes to the host.
+function Test-Enabled {
+  $here = $Clipboard::IsHistoryEnabled()
+  $fresh = & powershell.exe -NoProfile -Command '[Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType = WindowsRuntime]::IsHistoryEnabled()'
+  Write-Host "Clipboard.IsHistoryEnabled(): $here here, $("$fresh".Trim()) in a fresh process."
+  return [bool]($here -and "$fresh".Trim() -eq 'True')
+}
+
+function Wait-Enabled([int] $For) {
+  $deadline = (Get-Date).AddSeconds($For)
+  while (-not (Test-Enabled)) {
+    if ((Get-Date) -gt $deadline) { return $false }
+    Start-Sleep -Seconds 1
+  }
+  return $true
+}
+
 switch ($Mode) {
   'enable' {
     Show-Session
-    $policy = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -ErrorAction SilentlyContinue
-    if ($policy -and ($policy.PSObject.Properties.Name -contains 'AllowClipboardHistory')) {
-      Write-Output "Policy AllowClipboardHistory = $($policy.AllowClipboardHistory)."
-    } else {
-      Write-Output 'Policy AllowClipboardHistory: not set.'
-    }
+    Show-Keys
     $key = 'HKCU:\Software\Microsoft\Clipboard'
     if (-not (Test-Path $key)) { $null = New-Item -Path $key -Force }
-    $before = (Get-ItemProperty $key).PSObject.Properties | Where-Object Name -eq 'EnableClipboardHistory'
-    Write-Output ("EnableClipboardHistory before: {0}." -f $(if ($before) { $before.Value } else { 'not set' }))
     Set-ItemProperty -Path $key -Name EnableClipboardHistory -Value 1 -Type DWord
-    Write-Output 'EnableClipboardHistory = 1.'
-    Show-Services
-    # The per-user instance (cbdhsvc_<id>) reads the setting when it starts.
-    foreach ($service in @(Get-Service -Name 'cbdhsvc_*' -ErrorAction SilentlyContinue)) {
-      try {
-        if ($service.Status -eq 'Running') {
-          Restart-Service -Name $service.Name -Force
-          Write-Output "Restarted $($service.Name)."
-        } else {
-          Start-Service -Name $service.Name
-          Write-Output "Started $($service.Name)."
-        }
-      } catch {
-        Write-Output "::warning::clipboard-history could not (re)start $($service.Name): $($_.Exception.Message)"
-      }
+    Write-Output 'Set HKCU\Software\Microsoft\Clipboard EnableClipboardHistory = 1.'
+    Restart-ClipboardService
+    if (-not (Wait-Enabled 15)) {
+      # Windows Server may keep history off unless the policy allows it.
+      $policy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
+      if (-not (Test-Path $policy)) { $null = New-Item -Path $policy -Force }
+      Set-ItemProperty -Path $policy -Name AllowClipboardHistory -Value 1 -Type DWord
+      Write-Output 'Still off; set the policy AllowClipboardHistory = 1 too.'
+      Restart-ClipboardService
+      $null = Wait-Enabled $Seconds
     }
-    Show-Services
-    $deadline = (Get-Date).AddSeconds($Seconds)
-    while (-not $Clipboard::IsHistoryEnabled() -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
-    Write-Output "Clipboard.IsHistoryEnabled(): $($Clipboard::IsHistoryEnabled())."
+    Show-Keys
     Show-History (Get-History)
-    if (-not $Clipboard::IsHistoryEnabled()) { Fail "enable: clipboard history is still off after $Seconds s" }
+    if (-not (Test-Enabled)) { Fail 'enable: clipboard history is still off' }
   }
 
   'status' {
