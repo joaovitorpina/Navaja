@@ -1,3 +1,8 @@
+[alias]
+xtask = "run --quiet --package xtask --"
+
 [env]
 # ts-rs: emit u64/i64 as `number`, not `bigint` (values stay below 2^53).
 TS_RS_LARGE_INT = "number"
+# ts-rs: generated bindings live with the front end; never edit them by hand.
+TS_RS_EXPORT_DIR = { value = "app/src/bindings", relative = true }

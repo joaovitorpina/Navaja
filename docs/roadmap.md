@@ -290,7 +290,7 @@ pnpm tauri build --debug --features e2e --config src-tauri/e2e.conf.json && pnpm
 - **On every PR:**
   - an egress canary: fetch, image, beacon, WebSocket, `window.open` and RTCPeerConnection, all blocked;
   - a Linux strace guard: any `connect` or `sendto` outside 127.0.0.1 fails the run;
-  - a canary input at `NAVAJA_LOG=trace`, plus a panicking tool, must not appear in logs or crash files.
+  - a canary input at `NAVAJA_LOG=trace`, plus a panicking tool, must not appear in logs, crash files or stderr.
 - **In M2a and M6:**
   - a whole-process-tree NIC capture on each OS (S2.7);
   - the webview data folder holds no input text;

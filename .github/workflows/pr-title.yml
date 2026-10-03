@@ -1,0 +1,27 @@
+name: pr-title
+
+# Squash merges use the PR title as the commit subject, and release-plz builds
+# the changelog from those subjects, so titles follow Conventional Commits.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  conventional:
+    name: conventional title
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Title follows Conventional Commits
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._-]+\))?!?: [^ ].*$'
+          if [[ "$TITLE" =~ $pattern ]]; then
+            echo "PR title follows Conventional Commits."
+          else
+            # The title is not echoed: it is untrusted input.
+            echo "::error::PR title must follow Conventional Commits, e.g. 'feat(uuid): add v7 option' or 'fix: handle empty input'."
+            exit 1
+          fi
