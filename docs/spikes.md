@@ -160,3 +160,68 @@ Copy this for each spike and fill it in.
 
   That run tested the suite as first submitted, before the PR #7 review fixes: the smoke spec's route reset, the stronger egress canary, the first-launch `--tool` spec, and the strace guard's signal handling and per-address check. It also still loaded WebdriverIO's front-end bridge (`VITE_NAVAJA_E2E=1`) and used the wider e2e overlay (`withGlobalTauri`, `core:default`), without the later harness changes (the window pin in `before()`, the msedgedriver patch, the env-gated WebDriver server). The Method above describes the setup from the next recorded run on. It is one run per OS, not ten.
 - **Decision:** none yet. S2.6 stays open until 10 runs per OS are recorded here.
+
+## S2.7 Egress
+
+- **Milestone / gates:** M2a, the offline claim (and again in M6, with the updater)
+- **Time box:** none set in the roadmap
+- **Question:** does any process of Navaja's tree send a packet off the machine, idle or in use, as a capture on the VM sees it?
+- **Method:** job `s2-7` in `.github/workflows/spikes.yml`, on GitHub-hosted windows-2025, ubuntu-24.04 and macos-26, which are VMs. The scripts are `scripts/spikes/s2-7-egress.sh`, `s2-7-egress.ps1` (Windows) and `s2-7-dns.mjs` (the DNS packets in a pcapng). The app is the e2e build (`--features e2e --config src-tauri/e2e.conf.json`, Tauri 2.12.1).
+  - **Two phases per OS**, each under its own capture. A capture starts before the app and stops once its last process has gone.
+    - **Idle:** the app starts as `@wdio/tauri-service` starts it: `--tool uuid`, a fresh `NAVAJA_APP_DIR`, `WDIO_EMBEDDED_SERVER` and port 4445. The script waits for the WebDriver server's `/status`, as the harness does, then leaves the app alone for 5 min. The window must be on screen 5 s after that and at the end: `xwininfo` on Linux, the window server's list on macOS, `MainWindowHandle` and `IsWindowVisible` on Windows. A screenshot is kept. Then the app is stopped (SIGTERM; `taskkill /T /F` on Windows).
+    - **In use:** `pnpm e2e`, the whole suite, egress canary included. On Linux it runs through `app/e2e/strace-guard.sh`, as `ci.yml` runs it.
+    - Nothing opens a URL or the logs folder (architecture §5).
+  - **Linux:** the app runs in a network namespace with a veth pair to the host. Its IPv4 subnet is masqueraded out of the runner's own uplink. It also has an IPv6 address and default route; the runner forwards no IPv6, but a packet sent there still crosses the veth. `/etc/netns/navaja-s27/` holds three files that `ip netns exec` mounts over `/etc`:
+    - `resolv.conf` with 8.8.8.8, so a lookup crosses the veth;
+    - `nsswitch.conf` with `hosts: files dns`, so glibc never hands a name to the host's systemd-resolved over its Unix socket, out of the capture's sight;
+    - `hosts` naming the machine, so a tool that looks the machine up (sudo, xauth) does not ask the resolver.
+
+    The app runs there as the runner's user, under `dbus-run-session` and `xvfb-run`; in use, so do pnpm and WebdriverIO, which talks to the app's WebDriver on 127.0.0.1. tcpdump captures the host end of the veth and the namespace's loopback. A finding is any packet the namespace sends on the veth other than ARP, ICMPv6 133 to 137 (router and neighbour discovery) and MLD, and any DNS packet on the loopback.
+  - **macOS:** `tcpdump -i pktap,all -P -s 512`, read back with `-k`. pktap tags each packet with its process (`proc`) and, where one process acts for another, that one too (`eproc`). A finding is a packet outside lo0 whose `proc` or `eproc` is `navaja` or `com.apple.WebKit*` (the Networking, WebContent and GPU services).
+  - **Windows:** audit policy "Filtering Platform Connection" (5156 allowed, 5157 blocked, 5158 binds) and "Process Creation" (4688, with command lines), the DNS client's Operational log, and pktmon on every NIC (`--pkt-size 512`). The tree is each `navaja.exe` started in the phase and its descendants, from 4688. A finding is a 5156 or 5157 from the tree to an address other than loopback, or a DNS-client query by a process of the tree. pktmon names no process, so its DNS packets only name the hosts: the query sent from a finding's local port, or the answer that returned its address.
+  - **On all three**, a DNS question for one of the egress canary's hosts (`*.navaja-canary.example.com`) is a finding, whichever process asks.
+  - **Controls.** Before the phases, a request to `https://github.com` goes through the same capture and the same check, which must report it:
+    - Linux: from the namespace, `getent ahosts` and curl (DNS to 8.8.8.8 and TCP to port 443 must be reported), a ping to the host end of the veth over IPv4 and IPv6 (ICMP and ICMPv6 echo, which the noise filter must not swallow), and a UDP packet to 127.0.0.53:53 (the loopback DNS check);
+    - macOS: curl after the DNS cache is flushed; its TCP packets must be tagged `curl`, and its DNS packets `mDNSResponder` acting for `curl`;
+    - Windows: `curl.exe`; a 5156 to port 443 and DNS-client events must carry its PID, and pktmon's DNS packets must name `github.com` for its connection.
+  - Each phase must also show the app's own WebDriver traffic on loopback: SYNs to 127.0.0.1:4445 on the namespace's loopback, lo0 packets tagged `navaja`, or 5156 events for `navaja.exe` on 127.0.0.1:4445. Otherwise an app that never ran where the capture looks would pass.
+  - The artifact `s2-7-<runner>` keeps the captures (cut to 512 bytes a packet on macOS and Windows, where they hold the whole runner's traffic), the exported events, the listings, the app's output, the screenshot and each phase's findings table, for 30 days.
+- **PASS if:** A VM NIC capture shows no packets from the process tree, idle or in use
+- **FAIL then:** Browser args or policies; anything left over is disclosed verbatim in privacy.md
+- **Result:** FAIL (2026-10-03).
+  - Linux passes, idle and in use.
+  - macOS passes idle and fails in use: WebKit looks up the navigation canary's host.
+  - Windows fails idle and in use: WebView2 contacts two Microsoft services at start-up and looks up `wpad`; in use it also looks up the navigation canary's host.
+  - Three runs agree: [37149157514](https://github.com/joaovitorpina/Navaja/actions/runs/37149157514) on `401ac63`, [37150117475](https://github.com/joaovitorpina/Navaja/actions/runs/37150117475) on `4a62c41`, and [37150936450](https://github.com/joaovitorpina/Navaja/actions/runs/37150936450) on `983eedd`. In each, every control passed and so did the suite, so the capture saw and named traffic, and the app ran as tested. The job fails on windows-2025 and macos-26 because of these findings, not because of the method.
+- **Numbers and evidence:** the run of record is [37150936450](https://github.com/joaovitorpina/Navaja/actions/runs/37150936450). Times are from the phase's start.
+
+  | Runner | Webview | Control | Idle (5 min) | In use (`pnpm e2e`) |
+  |---|---|---|---|---|
+  | ubuntu-24.04 | WebKitGTK, libwebkit2gtk-4.1-0 2.52.6 | pass | pass: 20 packets on the veth, all kernel noise (ARP 2, IPv6 router and neighbour discovery 18); no DNS on the loopback; 4 connections to the WebDriver | pass: no packet on the veth; no DNS on the loopback; 20 connections to the WebDriver and 1 to the dead proxy (127.0.0.1:9) |
+  | macos-26 (26.6.2) | WebKit (WebdriverIO reports 605.1.15) | pass | pass: none of the tree's packets outside lo0; 44 on lo0, tagged `navaja` | fail: 4 packets, below |
+  | windows-2025 | WebView2 Runtime 153.0.4234.48 | pass | fail: 13 WFP connection events and 16 DNS-client events, below | fail: 12 WFP connection events and 40 DNS-client events, below |
+
+  **macOS, in use.** `mDNSResponder`, tagged as acting for `navaja`, sent one A and one HTTPS (type 65) query for `navigate.navaja-canary.example.com` to the VM's resolver, 192.168.64.1, and got both answers back: 4 packets. Only the egress spec's navigation test uses that host. The lookup came at +14.6 s in the run of record, and at +10.9 s and +13.5 s in the other two. The suite still passed: the guard refused the navigation, but the name had already gone out.
+
+  **Windows, idle.** All from WebView2's network service (`msedgewebview2.exe --type=utility --utility-sub-type=network.mojom.NetworkService`), a child of the WebView2 browser process that `navaja.exe` starts:
+
+  | Host, from pktmon's DNS packets | Address | What | When |
+  |---|---|---|---|
+  | `config.edge.skype.com` | 52.123.250.178:443 | 2 TCP connections and 1 UDP flow to port 443 | +2.7 s, +3.9 s |
+  | `edge.microsoft.com` | 150.171.27.11:443 | 2 TCP connections | +62.6 s, +104.3 s |
+  | the two above | 168.63.129.16:53 (Azure DNS) | 8 DNS queries over UDP, A and HTTPS, sent by the network service itself, not through the Windows DNS client | +2.6 s for `config.edge.skype.com`; +62.6 s, +125.0 s and +211.8 s for `edge.microsoft.com` |
+  | `wpad` | - | 8 queries through the Windows DNS client (event 3006) | from +2.0 s |
+
+  The DNS client sends a `wpad` lookup on to Azure DNS as `wpad.<the VM's DNS suffix>`; pktmon saw 6 such queries in the phase, from all processes together. The tree also started 8 `unzip.mojom.Unzipper` utility processes. That they unpacked something `edge.microsoft.com` sent is an inference; the capture does not show it.
+
+  **Windows, in use.** The same network service again: 2 TCP connections to `config.edge.skype.com` (150.171.22.17:443) at +3.3 s and +4.3 s, after its A and HTTPS queries; 6 `wpad` lookups through the DNS client; and `navigate.navaja-canary.example.com` looked up at +12.0 s and +13.1 s. The test tries to leave twice, 1 s apart: through `location.href`, then through a link click. Those lookups were 8 queries the network service sent itself (A and HTTPS, 4 of each) and 4 through the DNS client, which put 1 A query on the wire. The suite passed here too.
+
+  The other two runs show the same hosts at the same times, at other addresses. Run 37149157514 had no pktmon yet, so it has addresses only: 52.123.225.98 at +2.2 s, 150.171.27.11 at +62.9 s and 150.171.28.11 at +125.5 s. Every packet appears twice in pktmon's pcapng; the counts above are of distinct packets.
+
+  What the two Microsoft hosts are for is not something the capture shows: it shows names, addresses, times and which process. They are commonly described as Edge's configuration and experiments service (`config.edge.skype.com`) and its component updater (`edge.microsoft.com`).
+- **Decision:** none yet. The fallback, browser arguments or policies, is not taken here: it needs sign-off, then S2.7 runs again. The proposal:
+  - **The dead proxy on Windows and macOS too.** On Linux it already keeps WebKitGTK's lookups on the machine, and Linux passed. `WebviewWindowBuilder::proxy_url` sets it on all three.
+    - Windows: wry 0.57.0 then adds `--proxy-server=http://127.0.0.1:9` to WebView2's arguments, after its defaults (`src/webview2/mod.rs`, `create_environment`). Microsoft's list of WebView2 browser flags says `proxy-server` is "A proxy server that overrides system settings" and "only affects HTTP and HTTPS requests". Overriding the system settings should end the `wpad` lookups, which come from proxy auto-detection. The browser does not resolve a host it sends to a proxy, so the start-up requests and the canary's host should stop at the closed port, as on Linux. To check: that the app's own `http://tauri.localhost` pages and IPC still load, and that wry adds the proxy only when the app passes no browser arguments of its own.
+    - macOS: Tauri's `macos-proxy` feature (wry's `mac-proxy`) sets `WKWebsiteDataStore.proxyConfigurations` to an HTTP CONNECT proxy (wry 0.57.0, `src/wkwebview/mod.rs`). It needs macOS 14 or later: the binary would then need `bundle.macOS.minimumSystemVersion` of 14.0 or more, which `tauri.conf.json` does not set today. With a proxy configured, Network.framework should hand the host name to the proxy instead of resolving it.
+  - **If anything is left on Windows**, the Chromium switches `--disable-background-networking` and `--disable-component-update` come next. They are Chromium's, and Microsoft's WebView2 list does not name them. Passing any browser argument means passing wry's defaults and `--proxy-server` by hand too (architecture §5).
+  - Whatever is still captured after that goes into `privacy.md` exactly as seen (roadmap M6, item 6).
