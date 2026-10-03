@@ -305,6 +305,8 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 
 **Secrets in fixtures** (`scripts/check-fixture-secrets.sh`):
 - gitleaks scans the tracked files under `tests/fixtures/` and `snapshots/` and every `*.snap`, with its built-in rules.
+- Fixtures and snapshots must be UTF-8 text, such as redacted dumps or JSON. gitleaks skips binary files, archives, UTF-16 text and symlinks without saying so, so the script fails on any of them before gitleaks runs. Git decides what is binary (`i/-text` in `git ls-files --eol`).
+- gitleaks also skips the paths its built-in config allowlists, such as images and fonts, `*.pdf` and `*.bin`, lockfiles, and anything under `node_modules/` or `vendor/`. A fixture must not be named like one.
 - With no such files it passes and says so. Otherwise it fails on a finding, or when gitleaks is missing or fails.
 - CI installs gitleaks 8.30.1 from its GitHub release and checks the archive's SHA-256 first.
 
