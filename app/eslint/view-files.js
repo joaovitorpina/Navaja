@@ -32,7 +32,7 @@ export const VIEW_ASSETS = ['css', 'svg', 'json', 'png', 'webp'];
  * Files Vite reads to resolve a view's imports, taking the nearest one above
  * each file, so one anywhere under tools/ can send an allowed import
  * elsewhere: package.json (its browser field maps one file to another) and
- * tsconfig.json (its jsxImportSource makes each .jsx and .tsx file import
+ * tsconfig.json (its jsxImportSource makes JSX in a .jsx or .tsx file import
  * `<source>/jsx-runtime`). Compared in lower case, as a build on Windows or
  * macOS finds them.
  */

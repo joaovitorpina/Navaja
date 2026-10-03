@@ -243,16 +243,30 @@ tester.run('view-imports', rule, {
       filename: TS,
       errors: [{ messageId: 'nonLiteral' }],
     },
-    // A JSX import source makes the build import <source>/jsx-runtime.
+    // JSX makes the build import react/jsx-runtime, and a JSX import source
+    // <source>/jsx-runtime.
+    {
+      code: 'export const el = <div />;\n',
+      filename: ui('x.tsx'),
+      errors: [{ messageId: 'jsx' }],
+    },
+    {
+      code: 'export const el = <>\n  <b>{true && <i />}</b>\n</>;\nexport const f = <p />;\n',
+      filename: ui('x.jsx'),
+      errors: [
+        { messageId: 'jsx', line: 1 },
+        { messageId: 'jsx', line: 4 },
+      ],
+    },
     {
       code: '/** @jsxImportSource .. */\nexport const el = <div />;\n',
       filename: ui('x.tsx'),
-      errors: [{ messageId: 'jsxImportSource' }],
+      errors: [{ messageId: 'jsxImportSource' }, { messageId: 'jsx' }],
     },
     {
       code: '// @jsxImportSource preact\nexport const el = <div />;\n',
       filename: ui('x.jsx'),
-      errors: [{ messageId: 'jsxImportSource' }],
+      errors: [{ messageId: 'jsxImportSource' }, { messageId: 'jsx' }],
     },
     {
       code: '/* @jsxRuntime automatic @jsxImportSource ./ui */\nexport const el = 1;\n',

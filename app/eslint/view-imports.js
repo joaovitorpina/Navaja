@@ -50,6 +50,9 @@ const VITEST_OBJECTS = new Set(['vi', 'vitest']);
 /** The only forms a test may name 'vitest' in: an import declaration, a type. */
 const STATIC_IMPORT = new Set(['ImportDeclaration', 'TSImportType']);
 
+/** The nodes a JSX element or fragment parses to. */
+const JSX = new Set(['JSXElement', 'JSXFragment']);
+
 const TEST_FILE = /\.(test|spec)\.ts$/;
 const BINDING = /^\$bindings(\/[A-Za-z0-9_-]+)+$/;
 
@@ -219,6 +222,10 @@ const rule = {
       jsxImportSource:
         'A custom view may not set @jsxImportSource: the build then imports ' +
         '<source>/jsx-runtime, which this check cannot see. It may import {{allowed}}. {{see}}',
+      jsx:
+        'A custom view may not use JSX: the build turns it into an import of a JSX runtime ' +
+        '(react/jsx-runtime by default), which this check cannot see. ' +
+        'It may import {{allowed}}. {{see}}',
       vitestImport:
         "A view's test imports vi and vitest by name and under those names " +
         "(import { vi } from 'vitest'), so this check can find the calls that take a module " +
@@ -273,6 +280,13 @@ const rule = {
             });
           }
         }
+      },
+      // In a .jsx or .tsx file, the build turns JSX into an import of a JSX
+      // runtime that no import in the code names. Once per outermost element.
+      /** @param {any} node */
+      'JSXElement, JSXFragment'(node) {
+        if (context.sourceCode.getAncestors(node).some((a) => JSX.has(a.type))) return;
+        context.report({ node, messageId: 'jsx', data: { allowed, see: SEE } });
       },
       // In a test, each read of vi or vitest names a member (vi.fn), so vi
       // never ends up under another name, where its calls would go unseen.
