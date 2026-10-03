@@ -38,6 +38,26 @@ describe('the files under tools/', () => {
     ).toEqual([]);
   });
 
+  it('never differ from tools/ or tools/<id>/ui/ only in case', () => {
+    expect(
+      refused(
+        file('Tools/demo/ui/View.svelte'),
+        file('TOOLS/demo/mod.rs'),
+        file('tools/demo/UI/View.svelte'),
+        file('tools/demo/Ui/x.es6'),
+        file('app/package.json'),
+        file('docs/tools.md'),
+        file('toolsx/demo/ui/x.es6'),
+        file('tools/demo/uix/x.es6'),
+      ),
+    ).toEqual([
+      'Tools/demo/ui/View.svelte',
+      'TOOLS/demo/mod.rs',
+      'tools/demo/UI/View.svelte',
+      'tools/demo/Ui/x.es6',
+    ]);
+  });
+
   it('are never links or submodules', () => {
     expect(
       refused(
@@ -126,7 +146,8 @@ describe('the files under tools/', () => {
       'A view folder (tools/<id>/ui/) holds only scripts ESLint lints ' +
         '(.js, .mjs, .cjs, .jsx, .ts, .mts, .cts, .tsx, .svelte) and assets ' +
         '(.css, .svg, .json, .png, .webp), with lower-case extensions and no node_modules ' +
-        'folder, and nothing under tools/ is a symbolic link, a submodule, ' +
+        'folder, no path differs from tools/ or tools/<id>/ui/ only in case, and nothing under tools/ ' +
+        'is a symbolic link, a submodule, ' +
         'a package.json or a tsconfig.json. See docs/architecture.md §4.',
     );
   });

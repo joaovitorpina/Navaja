@@ -3,10 +3,9 @@
 // So a view folder holds only files ESLint lints and a few assets. Nothing
 // under tools/ is a link, which ESLint and Prettier don't follow and Vite does,
 // a submodule, whose files git does not list here, or a file Vite reads to
-// resolve imports. `pnpm lint` runs this before ESLint, over the files git
-// tracks: what a PR can add.
+// resolve imports. `pnpm lint` runs this (through check-view-files.js) before
+// ESLint, over the files git tracks: what a PR can add.
 import { execFileSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -43,7 +42,8 @@ export const RESOLVER_FILES = ['package.json', 'tsconfig.json'];
 export const RULE =
   `A view folder (tools/<id>/ui/) holds only scripts ESLint lints (.${VIEW_EXTENSIONS.join(', .')}) ` +
   `and assets (.${VIEW_ASSETS.join(', .')}), with lower-case extensions and no node_modules ` +
-  'folder, and nothing under tools/ is a symbolic link, a submodule, ' +
+  'folder, no path differs from tools/ or tools/<id>/ui/ only in case, and nothing under tools/ ' +
+  'is a symbolic link, a submodule, ' +
   `${RESOLVER_FILES.map((name) => `a ${name}`).join(' or ')}. See docs/architecture.md §4.`;
 
 /**
@@ -64,13 +64,27 @@ export function parseIndex(output) {
 
 /**
  * One line for each entry that may not sit under tools/; none when all may.
- * @param {{ mode: string, path: string }[]} entries what git tracks under tools/
+ * @param {{ mode: string, path: string }[]} entries everything git tracks
  * @returns {string[]}
  */
 export function viewFileProblems(entries) {
   /** @type {string[]} */
   const problems = [];
   for (const { mode, path: file } of entries) {
+    const [top, , third] = file.split('/');
+    // On Windows and macOS, `Tools/x` or `tools/<id>/UI/x` lands in the
+    // same folder as `tools/x` or `tools/<id>/ui/x`, where Vite bundles it,
+    // while the checks here and ESLint's patterns match the case.
+    if (top !== 'tools') {
+      if (top?.toLowerCase() === 'tools') {
+        problems.push(`${file}: differs from tools/ only in case`);
+      }
+      continue;
+    }
+    if (third !== 'ui' && third?.toLowerCase() === 'ui') {
+      problems.push(`${file}: differs from tools/<id>/ui/ only in case`);
+      continue;
+    }
     if (mode === '120000') {
       problems.push(
         `${file}: a symbolic link, which ESLint and Prettier don't follow and Vite does`,
@@ -99,10 +113,14 @@ export function viewFileProblems(entries) {
   return problems;
 }
 
-/** Checks what git tracks under tools/ and exits non-zero on any problem. */
-function main() {
+/**
+ * Checks what git tracks and exits non-zero on any problem. The whole index,
+ * not a `tools` pathspec, so paths that differ from tools/ only in case are
+ * seen too.
+ */
+export function main() {
   const root = fileURLToPath(new URL('../../', import.meta.url));
-  const output = execFileSync('git', ['ls-files', '-s', '-z', '--', 'tools'], {
+  const output = execFileSync('git', ['ls-files', '-s', '-z'], {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -115,7 +133,3 @@ function main() {
     console.log('Every file under tools/ may stay there.');
   }
 }
-
-// Node runs the real path of the script it is given, so this holds when the
-// file is run (`pnpm lint`), not when a test imports it.
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) main();
