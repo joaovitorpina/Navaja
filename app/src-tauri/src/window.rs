@@ -189,9 +189,12 @@ pub fn reveal<R: Runtime>(window: &WebviewWindow<R>) -> tauri::Result<()> {
 }
 
 /// The front end has rendered (`shell_ready`): shows the window and opens
-/// what was asked for in the meantime.
+/// what was asked for in the meantime. Only the first time: after the
+/// fallback has shown the window, the user may have hidden it again.
 pub fn ready<R: Runtime>(window: &WebviewWindow<R>, state: &WindowState) -> tauri::Result<()> {
-    let request = state.mark_ready().unwrap_or_default();
+    let Some(request) = state.mark_ready() else {
+        return Ok(());
+    };
     reveal(window)?;
     navigate(window, &request)
 }
