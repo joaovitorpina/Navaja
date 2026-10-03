@@ -5,7 +5,7 @@
   import type { ToolError } from '$bindings/ToolError';
   import type { ToolMeta } from '$bindings/ToolMeta';
   import { t } from '$lib/i18n';
-  import { type Run, type ToolInput, type ToolOutput, runTool } from '$lib/ipc';
+  import { type Run, type ToolInput, type ToolOutput, isToolOutput, runTool } from '$lib/ipc';
   import { defaultValues } from './options';
   import OptionControl from './OptionControl.svelte';
   import OutputView from './OutputView.svelte';
@@ -34,11 +34,13 @@
     const result = await run.result;
     if (current !== run) return; // superseded by a newer run
     running = false;
-    if (result.ok) {
+    if (!result.ok) {
+      error = result.error;
+    } else if (isToolOutput(result.value)) {
       output = result.value;
       error = null;
     } else {
-      error = result.error;
+      error = { code: 'core.ipc', message: 'malformed tool output', details: null };
     }
   }
 

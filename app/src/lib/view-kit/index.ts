@@ -5,7 +5,7 @@ import type { ToolMeta } from '$bindings/ToolMeta';
 
 export { default as CopyButton } from '../CopyButton.svelte';
 export { default as ToolIcon } from '../ToolIcon.svelte';
-export { copySelection } from '../copy';
+export { OUTPUT_ATTRIBUTE } from '../copy';
 export { t } from '../i18n';
 export {
   copyText,

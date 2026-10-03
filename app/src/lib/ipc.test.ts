@@ -31,8 +31,14 @@ describe('decodeEnvelope', () => {
 
   it('turns any other shape into an explicit error', () => {
     const notJson = new TextEncoder().encode('{"ok": secret').buffer;
-    for (const raw of [[], {}, null, undefined, 'text', 42, { ok: 'x' }, { err: 'x' }, notJson]) {
+    for (const raw of [[], {}, null, undefined, 'text', 42, { err: 'x' }, notJson]) {
       expect(decodeEnvelope(raw)).toEqual(malformed);
+    }
+  });
+
+  it('passes any JSON value through for custom views', () => {
+    for (const value of ['x', 42, null, [1, 2], { rows: [] }]) {
+      expect(decodeEnvelope(envelopeBytes({ ok: value }))).toEqual({ ok: true, value });
     }
   });
 });

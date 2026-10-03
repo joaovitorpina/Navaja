@@ -111,7 +111,7 @@ register_tools! {
   - A `Generator` action may not be `destructive`: the generator view runs on one click, with no confirmation step.
 - **`Registry::categories()`** returns the categories in use, as `CategoryInfo { id, label, order }`. The labels and positions come from the host's built-in table; unknown ids sort last, by id.
 - **`Registry::run`** wraps `invoke` in `catch_unwind` and returns `core.panicked` when a tool panics.
-  - **Panic hook:** the panic payload is never returned. The app must also replace the default panic hook first thing in `main`: the default hook prints the payload, which may contain input, to stderr.
+  - **Panic hook:** the panic payload is never returned. The app must also replace the default panic hook before anything else can panic (first thing in `navaja_lib::run`, see §8): the default hook prints the payload, which may contain input, to stderr.
   - **Debug checks:** with debug assertions (the default for `cargo test`), each output must round-trip exactly through its payload type. A tool may return only its own `<id>.*` codes plus `core.invalid_input`, `core.cancelled` and `core.panicked`.
   - **Panic strategy:** a `compile_error!` stops the build if anyone switches it to `abort`.
   - **Tests:** tool tests use `navaja_core::run_single`, which runs through the same checks.
@@ -147,7 +147,7 @@ register_tools! {
 ## 5. App shell (crate `navaja`)
 
 **Commands.** Every command is declared in `AppManifest::commands` and granted individually.
-- **Threads:** commands that touch the OS or the disk (`run_tool`, `copy_text`, `settings_set`) run off the main thread. The rest are cheap (in memory, or one window call) and run inline on the main thread.
+- **Threads:** commands that touch the OS or the disk (`run_tool`, `copy_text`, `settings_set`) run off the main thread. The rest are cheap (in memory, or a few window calls) and run inline on the main thread.
 - **Panics:** `Registry::run`'s `catch_unwind` contains a tool panic, and `copy_text` wraps its clipboard call in its own.
 
 | Command | Notes |
@@ -182,7 +182,7 @@ Rust never runs a destructive action from argv.
   - no devtools in release builds.
 - **`navaja-guard` plugin:** adds a navigation allowlist and an all-frames script that removes `RTCPeerConnection` and `RTCDataChannel` and replaces the native context menu.
 - **WebView2 arguments:** any extra arguments must re-include wry's defaults.
-- **Clipboard:** `copy_text` writes through arboard and always sets the OS's exclusion markers; there is no opt-out. Output views also send a native copy (Ctrl/Cmd+C, the context menu) through it. What the markers achieve:
+- **Clipboard:** `copy_text` writes through arboard and always sets the OS's exclusion markers; there is no opt-out. A native copy (Ctrl/Cmd+C, the context menu) whose selection touches a region marked `data-output` goes through it too, wherever the selection starts; copies from text fields stay native, since they hold the user's own input. What the markers achieve:
   - **Windows:** the copy stays out of clipboard history (Win+V), cloud clipboard sync and clipboard monitors.
   - **Linux** (X11 and Wayland): `x-kde-passwordManagerHint: secret` keeps it out of Klipper and other history managers that honour the hint.
   - **macOS:** `org.nspasteboard.ConcealedType` keeps it out of history apps that follow nspasteboard.org. It still reaches Universal Clipboard on the user's own nearby devices; opting out with `currentHostOnly` is an M2b item.

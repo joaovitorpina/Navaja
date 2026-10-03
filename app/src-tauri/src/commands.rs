@@ -280,10 +280,10 @@ pub fn settings_set<R: Runtime>(
     window: WebviewWindow<R>,
     settings: Settings,
 ) -> Result<(), String> {
-    let theme = settings.theme;
-    state.settings.set(settings)?;
-    apply_theme(&window, theme);
-    Ok(())
+    // Async, so off the main thread: apply_theme may wait on it (Linux).
+    state
+        .settings
+        .set(settings, |saved| apply_theme(&window, saved.theme))
 }
 
 pub fn apply_theme<R: Runtime>(window: &WebviewWindow<R>, theme: Theme) {

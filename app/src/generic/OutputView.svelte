@@ -7,7 +7,6 @@
   import type { OutputSpec } from '$bindings/OutputSpec';
   import type { JsonValue } from '$bindings/serde_json/JsonValue';
   import CopyButton from '$lib/CopyButton.svelte';
-  import { copySelection } from '$lib/copy';
   import { t } from '$lib/i18n';
 
   let { toolId, spec, value }: { toolId: string; spec: OutputSpec; value: JsonValue | undefined } =
@@ -21,8 +20,8 @@
   });
 </script>
 
-<!-- Native copies go through Rust too, so they get the same exclusion markers. -->
-<section class="flex flex-col gap-2" aria-label={label} oncopy={copySelection}>
+<!-- data-output: native copies that touch this region go through Rust (lib/copy.ts). -->
+<section class="flex flex-col gap-2" aria-label={label} data-output>
   <h2 class="text-sm font-medium text-muted">{label}</h2>
   {#if value === null || value === undefined}
     <p class="text-sm text-muted">—</p>
@@ -59,7 +58,9 @@
               {#if row.note}<div class="font-sans text-xs text-muted">{row.note}</div>{/if}
             </td>
             <!-- Copies without revealing. -->
-            <td class="py-1.5 pl-2 text-right align-top"><CopyButton text={row.value} /></td>
+            <td class="py-1.5 pl-2 text-right align-top">
+              <CopyButton text={row.value} name={`${t('shell.copy', 'Copy')}: ${row.key}`} />
+            </td>
           </tr>
         {/each}
       </tbody>

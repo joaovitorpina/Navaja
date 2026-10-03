@@ -2,7 +2,12 @@
   import { copyText } from './ipc';
   import { t } from './i18n';
 
-  let { text, label = t('shell.copy', 'Copy') }: { text: string; label?: string } = $props();
+  // `name` is the accessible name when several buttons share one label.
+  let {
+    text,
+    label = t('shell.copy', 'Copy'),
+    name,
+  }: { text: string; label?: string; name?: string } = $props();
 
   let state = $state<'idle' | 'copied' | 'failed'>('idle');
 
@@ -20,6 +25,7 @@
 <button
   type="button"
   class="rounded-md border border-line bg-surface px-2.5 py-1 text-sm hover:bg-subtle"
+  aria-label={name}
   onclick={copy}
 >
   {#if state === 'copied'}{t('shell.copied', 'Copied')}{:else if state === 'failed'}{t(

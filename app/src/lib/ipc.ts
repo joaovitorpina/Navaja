@@ -10,9 +10,11 @@ import type { ToolError } from '$bindings/ToolError';
 import type { JsonValue } from '$bindings/serde_json/JsonValue';
 
 export type ToolInput = Record<string, JsonValue>;
+/** What generic views get: one value per declared output. */
 export type ToolOutput = Record<string, JsonValue>;
 
-export type RunResult = { ok: true; value: ToolOutput } | { ok: false; error: ToolError };
+/** A tool returns any JSON value; custom views decide its shape. */
+export type RunResult = { ok: true; value: JsonValue } | { ok: false; error: ToolError };
 
 export interface Run {
   runId: string;
@@ -79,8 +81,8 @@ export function decodeEnvelope(raw: unknown): RunResult {
     // Not the parser's message: it can quote part of the output.
     return ipcFailure(MALFORMED);
   }
-  if (isRecord(envelope) && isRecord(envelope.ok)) {
-    return { ok: true, value: envelope.ok as ToolOutput };
+  if (isRecord(envelope) && 'ok' in envelope && envelope.ok !== undefined) {
+    return { ok: true, value: envelope.ok as JsonValue };
   }
   if (isRecord(envelope) && isToolError(envelope.err)) return { ok: false, error: envelope.err };
   return ipcFailure(MALFORMED);
@@ -97,6 +99,11 @@ function isBytes(raw: unknown): raw is ArrayBuffer | ArrayBufferView {
     ArrayBuffer.isView(raw) ||
     Object.prototype.toString.call(raw) === '[object ArrayBuffer]'
   );
+}
+
+/** Generic views need an object keyed by output; Rust's registry checks that in debug builds. */
+export function isToolOutput(value: JsonValue): value is ToolOutput {
+  return isRecord(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

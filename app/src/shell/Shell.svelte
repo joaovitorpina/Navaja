@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import type { Catalog } from '$bindings/Catalog';
+  import { routeOutputCopies } from '$lib/copy';
   import { t } from '$lib/i18n';
   import { router } from '$lib/router.svelte';
   import AboutView from './AboutView.svelte';
@@ -18,6 +20,9 @@
   const tool = $derived(
     route.kind === 'tool' ? catalog.tools.find((candidate) => candidate.id === route.id) : undefined,
   );
+
+  // Native copies of tool output go through Rust (see lib/copy.ts).
+  onMount(() => routeOutputCopies());
 
   function onKeydown(event: KeyboardEvent) {
     if (isPaletteShortcut(event)) {

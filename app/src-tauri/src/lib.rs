@@ -87,13 +87,17 @@ pub fn run() -> Result<i32, Box<dyn std::error::Error>> {
         .build(tauri::generate_context!())
         .inspect_err(|error| tracing::error!(%error, "starting the app failed"))?;
 
-    // Unlike `run`, which exits the process from inside the event loop,
-    // `run_return` comes back, so the clean-up below happens.
-    let code = app.run_return(|_, _| {});
-    // On X11 the clipboard handle serves copied text until it drops.
-    state.clipboard.release();
-    drop(state);
-    // Flushes lines still queued for the log file.
-    drop(logs);
+    // Some quits end the process inside the event loop even with
+    // `run_return` (macOS's Quit menu item, a Windows logoff), but every quit
+    // emits `Exit` first, so the clean-up happens there.
+    let mut logs = Some(logs);
+    let code = app.run_return(move |_, event| {
+        if let tauri::RunEvent::Exit = event {
+            // On X11 the clipboard handle serves copied text until it drops.
+            state.clipboard.release();
+            // Flushes lines still queued for the log file.
+            drop(logs.take());
+        }
+    });
     Ok(code)
 }
