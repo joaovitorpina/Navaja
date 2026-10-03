@@ -396,6 +396,28 @@ mod tests {
         }
     }
 
+    /// Only refused URLs: an accepted one would start a browser.
+    #[test]
+    fn open_url_refuses_what_navaja_does_not_link_to() {
+        let repository = crate::opener::REPOSITORY;
+        for url in [
+            String::new(),
+            format!("{repository}/issues"),
+            format!("{repository}/raw/0123456789abcdef0123456789abcdef01234567/page.html"),
+            format!("{repository}/archive/0123456789abcdef0123456789abcdef01234567.zip"),
+            format!("{repository}#readme"),
+            repository.to_lowercase(),
+            "https://example.com/".to_owned(),
+            "file:///etc/passwd".to_owned(),
+        ] {
+            assert_eq!(
+                open_url(url.clone()),
+                Err("Navaja opens only its own links.".to_owned()),
+                "{url:?}"
+            );
+        }
+    }
+
     #[test]
     fn input_limits_count_string_bytes_and_nodes() {
         use serde_json::json;
