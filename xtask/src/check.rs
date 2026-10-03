@@ -1,4 +1,5 @@
-//! `cargo xtask check`: architecture rules that cargo-deny can't express.
+//! `cargo xtask check`: architecture rules that cargo-deny can't express,
+//! and the ACL snapshot (see acl.rs).
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
@@ -45,6 +46,8 @@ pub fn run() -> Result<()> {
     problems.extend(closure_problems(&metadata));
     problems.extend(parity_problems(&metadata, &root)?);
     problems.extend(config_problems(&root)?);
+    // Last: it builds the app crate's build script (cargo check).
+    problems.extend(crate::acl::problems(&root)?);
     report("xtask check", &problems)
 }
 
