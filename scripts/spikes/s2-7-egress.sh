@@ -293,7 +293,7 @@ ns_pids() {
 
 # Fails unless this process runs in the namespace (Linux).
 assert_in_namespace() {
-  ip -o -4 addr show dev "$NS_IF" 2> /dev/null | grep -qF "$NET4.2/" ||
+  ip -o -4 addr show dev "$NS_IF" 2> /dev/null | grep -F "$NET4.2/" > /dev/null ||
     fail "not inside the namespace $NS: no $NS_IF with $NET4.2 here"
 }
 
@@ -390,7 +390,7 @@ setup() {
     macos)
       command -v tcpdump > /dev/null || fail "setup: no tcpdump"
       # pktap needs Apple's tcpdump.
-      tcpdump --version 2>&1 | head -3
+      tcpdump --version 2>&1 | awk 'NR <= 3'
       sw_vers
       echo "macOS needs no setup: pktap is built in."
       ;;
@@ -451,7 +451,7 @@ linux_setup() {
   ns ip -6 route
   echo "resolv.conf: $(ns cat /etc/resolv.conf | tr '\n' ' ')"
   echo "nsswitch.conf: $(ns grep '^hosts:' /etc/nsswitch.conf)"
-  tcpdump --version 2>&1 | head -2
+  tcpdump --version 2>&1 | awk 'NR <= 2'
 }
 
 teardown() {
@@ -821,7 +821,9 @@ report() {
   fi
   if [ "$findings" -gt 0 ]; then
     echo "The first findings in full:"
-    cat "$@" | head -60
+    # Not cat into head: under pipefail, cat writing to the pipe head has
+    # closed fails the run.
+    awk 'NR <= 60' "$@"
     case $phase in
       control) return 0 ;;
       baseline) fail "baseline: $findings packet(s) counted as the app's while it was not running, so the attribution would blame it for the machine's own traffic; see the table above" ;;
@@ -1131,7 +1133,7 @@ expect() {
   local file=$1 what=$2 one two
   one=$(printf '%b' "$3")
   two=$(printf '%b' "$4")
-  grep -F -- "$one" "$file" | grep -qF -- "$two" ||
+  grep -F -- "$one" "$file" | grep -F -- "$two" > /dev/null ||
     fail "control: the check did not report $what, so the capture can't be trusted"
 }
 
@@ -1154,7 +1156,7 @@ control_macos() {
   expect "$tsv" "curl's TCP connection to port 443" "curl ($pid)" "\t443\ttcp\t"
   # pktap names the process a lookup was made for (eproc), not only
   # mDNSResponder, which sends it.
-  grep -F "($pid)" "$tsv" | grep -qE $'\t53\tUDP\t|\t53\ttcp\t' ||
+  grep -F "($pid)" "$tsv" | grep -E $'\t53\tUDP\t|\t53\ttcp\t' > /dev/null ||
     fail "control: no DNS packet attributed to curl ($pid); a lookup by the tree would go unseen, so the capture can't be trusted"
   echo "Control: pktap attributed curl's connection and its DNS lookup to curl."
 }
@@ -1277,13 +1279,13 @@ window_shown() {
     linux)
       ids=$(xwininfo -root -tree | awk '/"Navaja"/ { print $1 }')
       for id in $ids; do
-        if xwininfo -id "$id" | grep -q 'Map State: IsViewable'; then
+        if xwininfo -id "$id" | grep 'Map State: IsViewable' > /dev/null; then
           echo "Window ($when): $(xwininfo -id "$id" | grep -E 'xwininfo|Width|Height' | tr -s ' \n' ' ')"
           return 0
         fi
       done
       echo "No viewable Navaja window ($when). The windows:"
-      xwininfo -root -tree | head -40
+      xwininfo -root -tree | awk 'NR <= 40'
       return 1
       ;;
     macos)
@@ -1336,7 +1338,7 @@ idle_app() {
       cat "$log"
       fail "idle: the app exited during startup"
     }
-    curl -sf --max-time 5 "http://127.0.0.1:$PORT/status" 2> /dev/null | grep -qE '"ready": ?true' && break
+    curl -sf --max-time 5 "http://127.0.0.1:$PORT/status" 2> /dev/null | grep -E '"ready": ?true' > /dev/null && break
     [ "$i" -lt 120 ] || fail "idle: the WebDriver server did not report ready within 60 s"
     sleep 0.5
   done
