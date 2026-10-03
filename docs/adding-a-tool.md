@@ -101,7 +101,7 @@ Its tests (`*.test.ts` and `*.spec.ts` files in `ui/`, which Vitest runs) may al
 
 `pnpm lint` must pass. It checks the files in `ui/`, these imports and the Prettier formatting of `ui/`, CSS and JSON included (`pnpm format` fixes the formatting). A comment can't turn the check off, and `import.meta.glob`, a computed `import()`, JSX or a `@jsxImportSource` comment is an error. If a view needs something else from the shell, add it to `$lib/view-kit` in a `host-change` PR first.
 
-CSS is not checked: ESLint reads neither `<style>` blocks nor `.css` files. A view's CSS `@import` and `url()` must also stay inside `tools/<id>/ui/`, and review checks them.
+CSS is not checked: ESLint reads neither `<style>` blocks nor `.css` files. A view's CSS `@import` and `url()` must also stay inside `tools/<id>/ui/`, and so must Tailwind's `@reference`, `@plugin` and `@config`, which the app's Tailwind build reads. Review checks them. `@plugin` and `@config` load JavaScript and run it in Node at build time, so review reads that code too.
 
 ### Outputs
 

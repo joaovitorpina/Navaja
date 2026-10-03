@@ -19,9 +19,10 @@ export const VIEW_EXTENSIONS = ['js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', '
 
 /**
  * The other files a view may hold. Vite loads them as assets, not as scripts,
- * so none of them can import a script:
- * - css: the view's own styles (nothing checks what its imports and url()
- *   reach, §4);
+ * so only CSS can reach code, through Tailwind:
+ * - css: the view's own styles. Nothing checks what its `@import`, `url()`
+ *   and Tailwind's `@reference`, `@plugin` and `@config` reach, and the last
+ *   two load JavaScript that runs in Node at build time (§4);
  * - svg: icons, inline with `?raw` or as a URL;
  * - json: static data;
  * - png and webp: images.
