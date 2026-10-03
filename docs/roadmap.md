@@ -87,7 +87,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 ### M2b · Lifecycle, footprint, bundles (≈2.5 wk)
 
 1. **S2.4** and the StatusNotifier host check in `platform/linux.rs`, then close behaviour per OS through `ShellPlatform`.
-2. **`xtask measure`**, then **S2.5**. Implement the winning hide policy, delete the other path, and record the numbers in ADR 0002.
+2. **`xtask measure`**, then **S2.5**. Implement the winning hide policy, delete the other path, and record the numbers in ADR 0003.
 3. **Final brand SVGs** and `xtask icons`, which wraps `tauri icon` and also produces the macOS template tray icon.
 4. **`bundle.yml`:** a weekly, keyless build of the exact release matrix.
 5. **Stretch, the first thing to cut:** the global-shortcut recorder and `docs/wayland-shortcut.md`.
@@ -107,7 +107,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 - On GNOME and KDE Wayland, `--show`, `--toggle` and `--tool` raise and focus a window that is visible but unfocused.
 - On macOS, a second user's Navaja keeps its own single instance, and a socket owned by another user is refused.
 - On macOS, a copy does not appear on a Handoff-paired device.
-- ADR 0002 has numbers per OS.
+- ADR 0003 has numbers per OS.
 - `bundle.yml` is green for every format.
 - Screen readers pass: NVDA, VoiceOver and Orca.
 - 100-200 % scaling, light and dark themes, and the brand review all pass.
@@ -319,7 +319,7 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 | `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --no-bundle` → the same build with `--features e2e` and `e2e.conf.json` → WebdriverIO. Linux runs the suite under the strace guard, inside `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The job stops after 45 min, so a hung run fails instead of holding the runner for GitHub's 6 h. macOS also runs clippy, with the same bans and `-D warnings`, on the Intel slice of the universal build: `cargo clippy --workspace --all-targets --target x86_64-apple-darwin -- -D warnings`. That step keys on `runner.os` and fails if the runner is not arm64, since then nothing would lint the arm64 slice |
 | `advisories.yml` | Daily `cargo deny check advisories`. Opens an issue but never blocks a PR |
 | `bundle.yml` | Weekly, keyless build of the release matrix: NSIS and zip, universal DMG, deb, rpm and AppImage in `container: ubuntu:22.04` |
-| `spikes.yml` | Manual. macOS spike steps that need no human |
+| `spikes.yml` | Manual, and on a PR that changes it or `scripts/spikes/`. Spike steps that need no human. Job `s2-2` (S2.2), on windows-2025, ubuntu-24.04 and macos-26: a throwaway tool with a custom view (`scripts/spikes/s2-2-probe.sh`) through `cargo test -p navaja-tools`, `pnpm check` (and a type error in a .ts and a .svelte file it must refuse), `pnpm lint` (and forbidden imports in a .ts and a .svelte file, and a misformatted file, it must refuse), `pnpm test`, `pnpm build`, the end-to-end build plus the probe's own spec, an HMR check against the Vite dev server (`hmr-check.mjs`), and an HMR check in the app's webview (a dev build without `custom-protocol` that loads the dev server, plus a second spec that edits the view). Each check is its own step, and the run summary gets a PASS/FAIL table per OS |
 | `release.yml` + `release-build.yml` | Every push to main runs release-plz, which opens or updates the release PR. Merging that PR runs the build: tauri-action v1, then `verify-release`, attestations, `SHA256SUMS.minisig`, undraft, and bucket and tap updates. `release-build.yml` can also be run by hand on a tag |
 
 **CI hygiene:**

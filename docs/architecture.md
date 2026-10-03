@@ -47,7 +47,7 @@ Navaja/
 ├── xtask/                check · acl · tool-gate · bindings · licenses · icons · notices · capture-ports · measure · verify-release · manifests
 ├── assets/brand/         navaja.svg · tray-template.svg · tray-color.svg · GUIDELINES.md
 ├── packaging/            winget / scoop / homebrew templates · dryrun.json (scratch repo only)
-├── scripts/              check-eol.sh · check-identifiers.sh · check-fixture-secrets.sh (CI)
+├── scripts/              check-eol.sh · check-identifiers.sh · check-fixture-secrets.sh (CI) · spikes/ (spikes.yml)
 └── docs/                 adr/ · architecture.md · roadmap.md · spikes.md · adding-a-tool.md · install.md · privacy.md · wayland-shortcut.md · release.md
 ```
 
@@ -164,7 +164,7 @@ register_tools! {
   - **Not checked:** CSS. ESLint reads neither `<style>` blocks nor `.css` files, so nothing checks where a view's CSS leads. Review checks it instead:
     - `@import` and `url()` must stay inside `tools/<id>/ui/`, like an import;
     - so must Tailwind's `@reference`, `@plugin` and `@config`, which work in a view because the app builds CSS with `@tailwindcss/vite`. `@plugin` and `@config` load JavaScript and run it in Node at build time, so review reads the code they load too.
-  - **(S2.2)** If views outside `app/` turn out not to work, the fallback is `app/src/tools/<id>/`. That would be a brief deviation and needs sign-off.
+  - **(S2.2)** Views outside `app/` work on all three OSes, through the tsconfig, Vitest and Tailwind settings and the root ESLint and Prettier configs that [ADR 0002](adr/0002-views-outside-app.md) records. The `app/src/tools/<id>/` fallback was not needed.
 - **Tool preferences** never become shell `Settings` fields. `Settings.tools`, a TOML table per tool id, is reserved until a tool needs it.
 
 ## 5. App shell (crate `navaja`)
