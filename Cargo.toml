@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "app/src-tauri"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+repository = "https://github.com/joaovitorpina/Navaja"
+publish = false
+
+[workspace.dependencies]
+navaja-core = { path = "crates/navaja-core" }
+
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+tauri = "~2.12.1"
+tauri-build = "~2.7.1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+exit = "deny"
+print_stderr = "deny"
+print_stdout = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+# Keep unwinding: the tool registry wraps every tool call in catch_unwind
+# (docs/architecture.md §3), even though Tauri's size guide suggests "abort".
+panic = "unwind"
+codegen-units = 1
+lto = true

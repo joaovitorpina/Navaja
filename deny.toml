@@ -1,0 +1,64 @@
+# cargo-deny configuration (docs/roadmap.md §2, "Required gates").
+# Run: cargo deny check bans licenses sources   (advisories run daily, off the PR gate)
+
+[graph]
+targets = [
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+unmaintained = "workspace"
+yanked = "deny"
+
+[licenses]
+confidence-threshold = 0.93
+# The list covers crates that arrive in later milestones (updater, Docker).
+unused-allowed-license = "allow"
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "0BSD",
+  "CC0-1.0",
+  "BSL-1.0",
+  "Unicode-3.0",
+  "MPL-2.0",
+]
+
+[licenses.private]
+# Navaja's own crates are publish = false and MIT via the workspace.
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+# Only the opt-in updater may pull an HTTP client, and only navaja-docker may
+# talk to a container engine (docs/architecture.md §2, "Dependency rules").
+deny = [
+  { crate = "ureq", reason = "no HTTP clients outside the updater" },
+  { crate = "curl", reason = "no HTTP clients outside the updater" },
+  { crate = "isahc", reason = "no HTTP clients outside the updater" },
+  { crate = "attohttpc", reason = "no HTTP clients outside the updater" },
+  { crate = "surf", reason = "no HTTP clients outside the updater" },
+  { crate = "tauri-plugin-http", reason = "the webview gets no network access" },
+  { crate = "tauri-plugin-shell", reason = "the webview gets no shell access" },
+  { crate = "tauri-plugin-fs", reason = "the webview gets no filesystem access" },
+  { crate = "reqwest", wrappers = ["tauri-plugin-updater"], reason = "only the opt-in updater makes HTTP requests" },
+  { crate = "bollard", wrappers = ["navaja-docker"], reason = "only navaja-docker talks to the container engine" },
+  { crate = "hyper", wrappers = ["reqwest", "hyper-util", "hyper-rustls", "bollard", "hyperlocal", "hyper-named-pipe"], reason = "HTTP only via the updater or the local engine socket" },
+  { crate = "hyper-util", wrappers = ["reqwest", "hyper-rustls", "bollard", "hyperlocal", "hyper-named-pipe"], reason = "HTTP only via the updater or the local engine socket" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

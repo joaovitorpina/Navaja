@@ -1,0 +1,15 @@
+# Network and process bans (docs/architecture.md §2, "Dependency rules").
+# Tool logic never opens connections or resolves names, and processes start
+# only through navaja_core::sys::spawn_system. Code that genuinely needs an
+# exception opts out locally with #[expect(clippy::disallowed_…, reason = "…")].
+
+disallowed-types = [
+  { path = "std::net::TcpStream", reason = "no tool makes a network request" },
+  { path = "std::net::TcpListener", reason = "no tool listens on the network" },
+  { path = "std::net::UdpSocket", reason = "no tool makes a network request" },
+]
+
+disallowed-methods = [
+  { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "no name resolution: no tool makes a network request" },
+  { path = "std::process::Command::new", reason = "start processes only through navaja_core::sys::spawn_system" },
+]

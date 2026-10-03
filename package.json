@@ -1,0 +1,15 @@
+{
+  "name": "navaja",
+  "private": true,
+  "packageManager": "pnpm@11.28.3",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm --dir app tauri dev",
+    "build": "pnpm --dir app build",
+    "check": "pnpm --dir app check",
+    "test": "pnpm --dir app test",
+    "tauri": "pnpm --dir app tauri"
+  }
+}
