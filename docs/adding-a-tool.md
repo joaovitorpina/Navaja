@@ -85,6 +85,24 @@ mod tests;
 
 Prefer `Transform` or `Generator`. A custom view needs a reason in the PR. A `Generator` action can't be `destructive`; the registry rejects it, because the generator view has no confirmation step.
 
+### Writing a custom view
+
+The shell loads `tools/<id>/ui/View.svelte` and passes it `ViewProps` from `$lib/view-kit`. A view may import only (architecture §4):
+- its own files, through relative paths that stay inside `tools/<id>/ui/`;
+- `svelte` and its browser subpaths, but not `svelte/internal`, `svelte/compiler` or `svelte/server`;
+- `$lib/view-kit`, the shell's API for views: `t`, `runTool`, `copyText`, `CopyButton`, `ToolIcon`, `OUTPUT_ATTRIBUTE` and their types;
+- generated types from `$bindings/<name>`.
+
+Put `OUTPUT_ATTRIBUTE` (`data-output`) on every element that shows tool output, so the shell sends a native copy (Ctrl/Cmd+C or the context menu) whose selection touches it through Rust, like `copyText`, with the markers that keep it out of clipboard history (architecture §5, Clipboard). A copy from a text field stays native, so don't show output in one.
+
+Its tests (`*.test.ts` and `*.spec.ts` files in `ui/`, which Vitest runs) may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`. They import `vi` by that name (`import { vi } from 'vitest'`), use it only as `vi.<name>`, and call `vi.mock`, `vi.importActual` and Vitest's other calls that take a module directly, so the check can read the module each one takes.
+
+`ui/` holds only scripts ESLint lints (`.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.svelte`) and the assets `.css`, `.svg`, `.json`, `.png` and `.webp`, with lower-case extensions. It has no `node_modules` folder, and nothing in the tool folder is a symbolic link, a submodule, a `package.json` or a `tsconfig.json`. Paths keep the exact case of `tools/` and `ui/`. ESLint would never see any other file, but Vite would still bundle it, and Vite reads those two to resolve imports.
+
+`pnpm lint` must pass. It checks the files in `ui/`, these imports and the Prettier formatting of `ui/`, CSS and JSON included (`pnpm format` fixes the formatting). A comment can't turn the check off, and `import.meta.glob`, a computed `import()`, JSX or a `@jsxImportSource` comment is an error. If a view needs something else from the shell, add it to `$lib/view-kit` in a `host-change` PR first.
+
+CSS is not checked: ESLint reads neither `<style>` blocks nor `.css` files. A view's CSS `@import` and `url()` must also stay inside `tools/<id>/ui/`, and so must Tailwind's `@reference`, `@plugin` and `@config`, which the app's Tailwind build reads. Review checks them. `@plugin` and `@config` load JavaScript and run it in Node at build time, so review reads that code too.
+
 ### Outputs
 
 Each output in the spec has a `key` and a format. `invoke` returns one JSON object containing every declared key, with no extra keys. Use `null` when there is nothing to show. With debug assertions (the default for `cargo test`), the registry rejects any other shape with `core.invalid_output`; each value must round-trip exactly through its payload type.
@@ -120,6 +138,7 @@ cargo test -p navaja-tools            # your tests + the registry checks
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask check                     # dependency rules
 cargo xtask tool-gate origin/main     # what your PR touches
+pnpm lint && pnpm test                # custom views only: the import allowlist, Prettier, Vitest
 ```
 
 In tests, call your tool through `navaja_core::run_single(TOOL, "action", input)`, not `invoke`. That way the output and error-code checks apply, as in `tools/uuid/tests.rs`.

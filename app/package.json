@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings && tsc -p tsconfig.node.json && tsc -p e2e/tsconfig.json",
+    "lint": "cd .. && node app/eslint/check-view-files.js && eslint --config eslint.config.mjs --max-warnings 0 --no-error-on-unmatched-pattern app \"tools/*/ui/**\" && prettier --check --config prettier.config.mjs --ignore-unknown --no-error-on-unmatched-pattern app \"tools/*/ui/**\"",
+    "format": "cd .. && prettier --write --config prettier.config.mjs --ignore-unknown --no-error-on-unmatched-pattern app \"tools/*/ui/**\"",
     "test": "vitest run",
     "tauri": "tauri",
     "e2e": "wdio run e2e/wdio.conf.ts"
@@ -17,6 +19,7 @@
     "bits-ui": "^2.19.4"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "2.12.1",
@@ -29,11 +32,19 @@
     "@wdio/mocha-framework": "^9.32.0",
     "@wdio/spec-reporter": "^9.32.0",
     "@wdio/tauri-service": "^1.4.0",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-svelte": "^3.23.0",
+    "globals": "^17.13.0",
     "jsdom": "^30.1.1",
+    "prettier": "^3.9.9",
+    "prettier-plugin-svelte": "^4.1.1",
     "svelte": "^5.57.1",
     "svelte-check": "^4.7.6",
+    "svelte-eslint-parser": "^1.8.1",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.0",
     "vite": "~8.3.2",
     "vitest": "^5.0.3",
     "webdriverio": "^9.32.0"

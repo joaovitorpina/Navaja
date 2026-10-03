@@ -85,6 +85,9 @@ jobs:
       - name: svelte-check and tsc
         run: pnpm check
 
+      - name: Custom-view files, ESLint (with the import allowlist) and Prettier
+        run: pnpm lint
+
   web:
     name: web
     runs-on: ubuntu-24.04
