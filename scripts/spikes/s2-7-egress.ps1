@@ -17,6 +17,11 @@
 # A connection from the tree to an address other than loopback is a finding,
 # and so is a DNS query from it. So is a DNS query for one of the egress
 # canary's hosts, whichever process asks.
+#
+# pktmon, built into Windows, also captures the NICs' packets for each phase
+# (cut to 512 bytes). It names no process, but its DNS packets
+# (s2-7-dns.mjs) name the hosts behind the findings: WebView2's network
+# service sends DNS queries itself, which the DNS client's log never sees.
 param(
   [Parameter(Mandatory = $true, Position = 0)][string]$Mode,
   [Parameter(Position = 1)][string]$Phase = ''
@@ -86,6 +91,19 @@ function Read-Json([string]$Path) {
   return @(Get-Content -Raw -Path $Path | ConvertFrom-Json)
 }
 
+# The port of an "address:port" pair (IPv6 addresses hold colons too).
+function Get-Port([string]$Endpoint) {
+  return $Endpoint.Substring($Endpoint.LastIndexOf(':') + 1)
+}
+
+# Seconds from the phase's start, as "+12.3 s". ConvertFrom-Json may have
+# turned the ISO time into a DateTime already.
+function Format-Offset($Time, [datetime]$Start) {
+  $at = $Time
+  if ($at -isnot [datetime]) { $at = [datetime]::Parse([string]$Time, $null, [Globalization.DateTimeStyles]::RoundtripKind) }
+  return ('+{0:0.0} s' -f ($at.ToUniversalTime() - $Start.ToUniversalTime()).TotalSeconds)
+}
+
 function Test-PortOpen {
   $client = New-Object System.Net.Sockets.TcpClient
   try {
@@ -126,6 +144,7 @@ function Invoke-Setup {
 }
 
 function Invoke-Teardown {
+  pktmon stop 2>&1 | Out-Null
   Get-Process -Name navaja -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -eq $Binary } |
     Stop-Process -Force -ErrorAction SilentlyContinue
@@ -164,6 +183,29 @@ function Read-Events([hashtable]$Filter) {
     }
     [pscustomobject]$row
   }
+}
+
+# pktmon on every NIC, for one phase. A capture left by an earlier step is
+# stopped first; packet filters are cleared, so every packet is kept.
+function Start-Capture([string]$Name) {
+  pktmon stop 2>&1 | Out-Null
+  pktmon filter remove 2>&1 | Out-Null
+  pktmon start --capture --comp nics --pkt-size 512 --file-size 1024 --file-name "$Out\$Name.etl" | Out-Host
+  Assert-Exit 'pktmon start'
+}
+
+# Stops pktmon, converts its log to <name>.pcapng, and writes the DNS
+# messages in it to <name>-dns-packets.json.
+function Stop-Capture([string]$Name) {
+  pktmon stop | Out-Host
+  Assert-Exit 'pktmon stop'
+  pktmon etl2pcap "$Out\$Name.etl" --out "$Out\$Name.pcapng" | Out-Host
+  Assert-Exit 'pktmon etl2pcap'
+  Remove-Item "$Out\$Name.etl" -ErrorAction SilentlyContinue
+  & node scripts/spikes/s2-7-dns.mjs "$Out\$Name.pcapng" | Set-Content -Path "$Out\$Name-dns-packets.json" -Encoding utf8
+  Assert-Exit 's2-7-dns.mjs'
+  $messages = @(Read-Json "$Out\$Name-dns-packets.json")
+  Write-Host "${Name}: pktmon captured $((Get-Item "$Out\$Name.pcapng").Length) bytes; $($messages.Count) DNS messages over UDP in them."
 }
 
 # Writes <name>-security.json and <name>-dns.json: every event of the phase,
@@ -290,8 +332,44 @@ function Get-Report([string]$Name, [string[]]$RootImages, [string[]]$Images, [in
       }
     })
 
+  # Names from the capture: what each local port asked (a query's source
+  # port), and what each address answered for (a response's A or AAAA).
+  $asked = @{}
+  $answered = @{}
+  $packetsPath = "$Out\$Name-dns-packets.json"
+  if (Test-Path $packetsPath) {
+    foreach ($message in (Read-Json $packetsPath)) {
+      foreach ($question in @($message.questions)) {
+        if (-not $message.response) {
+          $key = "$($message.src):$($message.sport)"
+          if (-not $asked.ContainsKey($key)) { $asked[$key] = @() }
+          $asked[$key] += "$($question.name) $($question.type)"
+        }
+      }
+      if ($message.response) {
+        foreach ($answer in @($message.answers)) {
+          if ($answer.type -ne 'A' -and $answer.type -ne 'AAAA') { continue }
+          if (-not $answered.ContainsKey($answer.data)) { $answered[$answer.data] = @() }
+          $answered[$answer.data] += @($message.questions | ForEach-Object { $_.name })
+        }
+      }
+    }
+  }
+  foreach ($connection in $outside) {
+    $names = @()
+    if ($connection.Port -eq '53') {
+      $key = $connection.Local
+      if ($asked.ContainsKey($key)) { $names = $asked[$key] }
+    } elseif ($answered.ContainsKey($connection.Remote)) {
+      $names = $answered[$connection.Remote]
+    }
+    $connection | Add-Member -NotePropertyName Names -NotePropertyValue (@($names | Sort-Object -Unique) -join ', ')
+  }
+
   return [pscustomobject]@{
     Name = $Name
+    Start = (Read-Json "$Out\$Name-window.json")[0].Start
+    Captured = (Test-Path $packetsPath)
     Tree = $tree
     SecurityEvents = $security.Count
     ConnectionEvents = @($security | Where-Object { $_.Id -eq 5156 -or $_.Id -eq 5157 }).Count
@@ -307,6 +385,8 @@ function Get-Report([string]$Name, [string[]]$RootImages, [string[]]$Images, [in
 
 # The phase's table as Markdown, written to <name>-findings.md and printed.
 function Write-Report($Report) {
+  $start = $Report.Start
+  if ($start -isnot [datetime]) { $start = [datetime]::Parse([string]$start, $null, [Globalization.DateTimeStyles]::RoundtripKind) }
   $label = $env:MATRIX_OS
   if (-not $label) { $label = 'windows' }
   $lines = New-Object System.Collections.Generic.List[string]
@@ -339,20 +419,24 @@ function Write-Report($Report) {
     $lines.Add('No connection or DNS query from the process tree.')
   } else {
     if ($Report.Outside.Count -gt 0) {
-      $lines.Add('| Process | Event | Direction | Destination | Port | Protocol | Events | First (UTC) |')
-      $lines.Add('|---|---|---|---|---|---|---|---|')
+      $lines.Add('| Process | Event | Direction | Destination | Port | Protocol | Name, from the capture''s DNS packets | Events | First, from the phase''s start |')
+      $lines.Add('|---|---|---|---|---|---|---|---|---|')
       $Report.Outside | Group-Object Process, Event, Direction, Remote, Port, Protocol | ForEach-Object {
         $first = $_.Group[0]
-        $lines.Add("| $($first.Process) | $($first.Event) | $($first.Direction) | $($first.Remote) | $($first.Port) | $($first.Protocol) | $($_.Count) | $($first.Time) |")
+        $names = @($_.Group | ForEach-Object { $_.Names -split ', ' } | Where-Object { $_ } | Sort-Object -Unique) -join ', '
+        if (-not $names) { $names = '-' }
+        $earliest = ($_.Group | Sort-Object Time | Select-Object -First 1).Time
+        $lines.Add("| $($first.Process) | $($first.Event) | $($first.Direction) | $($first.Remote) | $($first.Port) | $($first.Protocol) | $names | $($_.Count) | $(Format-Offset $earliest $start) |")
       }
       $lines.Add('')
     }
     if ($Report.Queries.Count -gt 0) {
-      $lines.Add('| Process | DNS client event | Name | Type | Events | First (UTC) |')
+      $lines.Add('| Process | DNS client event | Name | Type | Events | First, from the phase''s start |')
       $lines.Add('|---|---|---|---|---|---|')
       $Report.Queries | Group-Object Process, Event, Name, Type | ForEach-Object {
         $first = $_.Group[0]
-        $lines.Add("| $($first.Process) | $($first.Event) | $($first.Name) | $($first.Type) | $($_.Count) | $($first.Time) |")
+        $earliest = ($_.Group | Sort-Object Time | Select-Object -First 1).Time
+        $lines.Add("| $($first.Process) | $($first.Event) | $($first.Name) | $($first.Type) | $($_.Count) | $(Format-Offset $earliest $start) |")
       }
       $lines.Add('')
     }
@@ -370,6 +454,7 @@ function Write-Report($Report) {
 function Invoke-Control {
   # A cold cache, so that curl's lookup reaches the DNS client's network path.
   Clear-DnsClientCache
+  Start-Capture 'control'
   $start = Get-Date
   Start-Sleep -Milliseconds 500
   $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
@@ -381,7 +466,9 @@ function Invoke-Control {
   if ($proc.ExitCode -ne 0) { Fail 'control: curl https://github.com failed' }
   # Events reach the logs a moment after the fact.
   Start-Sleep -Seconds 3
-  Export-Phase 'control' $start (Get-Date)
+  $end = Get-Date
+  Stop-Capture 'control'
+  Export-Phase 'control' $start $end
   $report = Get-Report 'control' @('curl.exe') @() @([int64]$proc.Id)
   Write-Report $report
   $tcp = @($report.Outside | Where-Object { $_.Port -eq '443' -and $_.Protocol -eq 'TCP' -and $_.Process -like "curl.exe ($($proc.Id))" })
@@ -392,7 +479,10 @@ function Invoke-Control {
   if ($lookups.Count -eq 0) {
     Fail "control: no DNS client event from curl.exe ($($proc.Id)) for github.com; a lookup by the tree would go unseen, so the logs can't be trusted"
   }
-  Write-Host 'Control: the logs attributed curl''s connection and its DNS query to curl.exe.'
+  if (@($tcp | Where-Object { $_.Names -like '*github.com*' }).Count -eq 0) {
+    Fail "control: pktmon's DNS packets do not name github.com for curl's connection; the names in the findings can't be trusted"
+  }
+  Write-Host 'Control: the logs attributed curl''s connection and its DNS query to curl.exe, and pktmon''s DNS packets named its host.'
 }
 
 # --- Phases -----------------------------------------------------------------------
@@ -473,6 +563,7 @@ function Invoke-Idle {
   if (Test-PortOpen) { Fail "idle: 127.0.0.1:$Port already accepts connections; stop whatever holds it" }
   $appDir = Join-Path ([IO.Path]::GetTempPath()) ('navaja-s2-7-' + [guid]::NewGuid())
   New-Item -ItemType Directory -Path $appDir | Out-Null
+  Start-Capture 'idle'
   $start = Get-Date
   Start-Sleep -Milliseconds 500
   # The harness's launch (wdio.conf.ts, @wdio/tauri-service's embedded
@@ -525,13 +616,16 @@ function Invoke-Idle {
   Get-Content "$Out\idle-app.out.log", "$Out\idle-app.err.log" -ErrorAction SilentlyContinue | ForEach-Object { "  | $_" } | Write-Host
   # A moment for anything still in flight, and for the logs.
   Start-Sleep -Seconds 3
-  Export-Phase 'idle' $start (Get-Date)
+  $end = Get-Date
+  Stop-Capture 'idle'
+  Export-Phase 'idle' $start $end
   if ($failure) { Fail "idle: $failure" }
   Write-Host 'Idle: done; the logs are checked in the next step.'
 }
 
 function Invoke-InUse {
   if (-not (Test-Path $Binary)) { Fail "in use: no $Binary; build it first (see s2-7-egress.sh)" }
+  Start-Capture 'in-use'
   $start = Get-Date
   Start-Sleep -Milliseconds 500
   & pnpm e2e
@@ -543,7 +637,9 @@ function Invoke-InUse {
     } | ForEach-Object { [int64]$_.ProcessId })
   if ($left.Count -gt 0) { Wait-Gone $left }
   Start-Sleep -Seconds 3
-  Export-Phase 'in-use' $start (Get-Date)
+  $end = Get-Date
+  Stop-Capture 'in-use'
+  Export-Phase 'in-use' $start $end
   if ($status -ne 0) { Fail "in use: the end-to-end suite failed (exit $status)" }
   Write-Host 'In use: the suite passed; the logs are checked in the next step.'
 }

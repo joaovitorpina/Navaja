@@ -487,10 +487,10 @@ finding_rows() {
   ' "$file"
 }
 
-# The DNS questions in a listing of DNS packets (tcpdump's long form), with
+# The DNS questions in DNS packets in tcpdump's long form (on stdin), with
 # a count each.
 questions() {
-  grep -oE '[A-Z0-9]+\? [^ ]+' "$1" | sort | uniq -c | sort -rn || true
+  grep -oE '[A-Z0-9]+\? [^ ]+' | sort | uniq -c | sort -rn || true
 }
 
 # check <phase>: lists what the phase's capture holds from the process tree,
@@ -513,6 +513,7 @@ check_linux() {
 
   # Everything, for the artifact; then each class.
   packets "$veth" '' "$OUT/$phase-veth.txt" -e -v
+  packets "$veth" '' "$OUT/$phase-veth-all.txt" -q
   packets "$veth" "$NOISE" "$OUT/$phase-veth-noise.txt" -q
   packets "$veth" "arp" "$OUT/$phase-veth-arp.txt" -q
   packets "$veth" "$ND" "$OUT/$phase-veth-nd.txt" -q
@@ -529,7 +530,7 @@ check_linux() {
   # The harness's and the phase's own connections to the app's WebDriver:
   # they show that the app ran in this namespace.
   webdriver=$(grep -cE "> (127\.0\.0\.1|::1)\.$PORT: " "$OUT/$phase-lo-syn.txt" || true)
-  total=$(lines "$OUT/$phase-veth.txt")
+  total=$(lines "$OUT/$phase-veth-all.txt")
   noise=$(lines "$OUT/$phase-veth-noise.txt")
   sent=$(lines "$OUT/$phase-veth-sent.txt")
   hostside=$(lines "$OUT/$phase-veth-host.txt")
@@ -556,7 +557,7 @@ check_linux() {
     if [ "$findings" -eq 0 ]; then
       echo "No packet from the process tree."
     else
-      echo "| Sent by | Destination | Port | Protocol | Packets | First, from the phase's start |"
+      echo "| Sent by | Remote end | Port | Protocol | Packets | First, from the phase's start |"
       echo "|---|---|---|---|---|---|"
       finding_rows "$start" "$tsv"
       dns_lines "$OUT/$phase-veth-sent-long.txt" "$OUT/$phase-lo-dns-long.txt"
@@ -627,7 +628,9 @@ mac_listing() {
 
 # macOS: keeps the packets outside lo0 whose process or delegated process
 # matches <want> (and, if given, has PID <pid>), as "<label>\t<line without
-# the metadata>". <mode> "lo0" keeps the ones on lo0 instead.
+# the metadata>". The label names the process and the direction; an
+# incoming packet's addresses are swapped, so that the line's destination is
+# always the remote end. <mode> "lo0" keeps the ones on lo0 instead.
 mac_select() {
   local listing=$1 want=$2 pid=$3 mode=${4:-outside}
   WANT=$want awk -v pid="$pid" -v mode="$mode" '
@@ -643,15 +646,27 @@ mac_select() {
       sub(/^(if|ifname) /, "", ifname)
       proc = ""
       eproc = ""
+      dir = ""
       for (i = 1; i <= n; i++) {
         if (part[i] ~ /^proc /) proc = substr(part[i], 6)
         else if (part[i] ~ /^eproc /) eproc = substr(part[i], 7)
+        else if (part[i] == "in" || part[i] == "out") dir = part[i]
       }
       if (!matches(proc) && !matches(eproc)) next
       lo = (ifname == "lo0")
       if ((mode == "lo0") != lo) next
       label = name(proc) " (" id(proc) ")"
       if (eproc != "" && eproc != proc) label = label " for " name(eproc) " (" id(eproc) ")"
+      if (dir != "") label = label ", " dir
+      if (dir == "in") {
+        m = split(rest, r, " ")
+        if (m >= 4 && r[3] == ">") {
+          # What follows "<family> <src> > <dst>:", from its leading space.
+          tail = substr(rest, length(r[1] r[2] r[3] r[4]) + 4)
+          sub(/:$/, "", r[4])
+          rest = r[1] " " r[4] " > " r[2] ":" tail
+        }
+      }
       print label "\t" $1 " " rest
     }
   ' "$listing"
@@ -695,7 +710,7 @@ check_macos() {
     if [ "$findings" -eq 0 ]; then
       echo "No packet from the process tree."
     else
-      echo "| Process | Destination | Port | Protocol | Packets | First, from the phase's start |"
+      echo "| Process | Remote end | Port | Protocol | Packets | First, from the phase's start |"
       echo "|---|---|---|---|---|---|"
       finding_rows "$start" "$tsv"
       dns_lines "$OUT/$phase-tree-dns.txt" "$OUT/$phase-canary.txt"
