@@ -24,8 +24,8 @@ package = "svelte-toolbelt"
 license = "Unknown"
 reason = "Bundled (through bits-ui); no license field; LICENSE file is the MIT text (checked)"
 
-# Test tooling (jsdom for Vitest, WebdriverIO for the end-to-end tests);
-# none of it is bundled into the app.
+# Dev tooling (jsdom for Vitest, WebdriverIO for end-to-end tests, ESLint
+# for lint); none of it is bundled into the app.
 
 [[exception]]
 package = "@csstools/color-helpers"
@@ -50,7 +50,7 @@ reason = "Test-only (WebdriverIO, through locate-app); attribution-only"
 [[exception]]
 package = "argparse"
 license = "Python-2.0"
-reason = "Test-only (js-yaml under mocha, WebdriverIO's runner); permissive PSF licence"
+reason = "Test-only (js-yaml under mocha, through @wdio/mocha-framework); permissive PSF licence"
 
 [[exception]]
 package = "css-value"
@@ -70,7 +70,7 @@ reason = "Test-only (glob, under @wdio/config); permissive, OSI-approved"
 [[exception]]
 package = "minimatch"
 license = "BlueOak-1.0.0"
-reason = "Test-only (readdir-glob under archiver, under WebdriverIO); permissive, OSI-approved"
+reason = "Lint and test only: eslint and @eslint/config-array (ESLint), @typescript-eslint/typescript-estree (typescript-eslint), readdir-glob (archiver, under WebdriverIO); permissive, OSI-approved"
 
 [[exception]]
 package = "minipass"
