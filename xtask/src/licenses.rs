@@ -5,9 +5,15 @@
 //! svelte runtime), and the rest runs on developer machines and in CI. The
 //! listing comes from `pnpm licenses list`, so it covers what is installed
 //! for this platform; run `pnpm install --frozen-lockfile` first.
+//!
+//! The licence itself is read from each installed package.json, not taken
+//! from pnpm: when a manifest declares none, or says `SEE LICENSE IN
+//! <file>`, pnpm reports whatever licence names it finds in the LICENSE
+//! file's text, so a proprietary licence that mentions MIT comes out as
+//! "MIT".
 
-use std::collections::{BTreeSet, HashSet};
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail};
@@ -25,14 +31,17 @@ const EXCEPTIONS: &str = "js-licenses.toml";
 /// whole install.
 const MANIFESTS: &[&str] = &["package.json", "app/package.json"];
 
-/// What pnpm reports for a package with no `license` field.
+/// The licence recorded for a package whose package.json declares none: no
+/// `license` or `licenses`, or an empty one. Its entry in js-licenses.toml
+/// names this, and its reason says what the LICENSE file actually grants.
+/// pnpm uses the same word when it finds no licence at all.
 const NO_LICENSE: &str = "Unknown";
 
 pub fn run() -> Result<()> {
     let root = root();
     let allowlist = Allowlist::from_deny_toml(&read(&root.join("deny.toml"))?)?;
     let exceptions = parse_exceptions(&read(&root.join(EXCEPTIONS))?)?;
-    let packages = parse_pnpm(&pnpm_licenses(&root)?)?;
+    let packages = read_manifests(&parse_pnpm(&pnpm_licenses(&root)?)?)?;
 
     let mut problems = exception_problems(&exceptions, &allowlist);
     for manifest in MANIFESTS {
@@ -121,8 +130,18 @@ fn run_pnpm(root: &Path, args: &[&str]) -> Result<Output> {
     bail!("pnpm is not on PATH (see packageManager in package.json)")
 }
 
-/// One entry of the listing: a package name, the installed versions that
-/// share a licence, and that licence as the package declares it.
+/// One entry of pnpm's listing: a package name, its installed versions,
+/// and the folders they are installed in. pnpm's licence for it is ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Listed {
+    name: String,
+    versions: Vec<String>,
+    paths: Vec<PathBuf>,
+}
+
+/// An installed package under one licence: its name, the versions whose
+/// package.json declares that licence, and the licence as declared, or
+/// NO_LICENSE.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Package {
     name: String,
@@ -142,10 +161,11 @@ impl Package {
 }
 
 /// `pnpm licenses list --json` prints an object keyed by licence, each
-/// holding the packages under it: `{ "MIT": [{ "name", "versions",
+/// holding the packages under it: `{ "MIT": [{ "name", "versions", "paths",
 /// "license", ... }] }`. Anything else, or an empty listing, is an error,
-/// so a pnpm change can't make the check pass on nothing.
-fn parse_pnpm(stdout: &str) -> Result<Vec<Package>> {
+/// so a pnpm change can't make the check pass on nothing. An entry without
+/// paths is an error too: its package.json could not be read.
+fn parse_pnpm(stdout: &str) -> Result<Vec<Listed>> {
     let excerpt: String = stdout.trim().chars().take(200).collect();
     let value: Value = serde_json::from_str(stdout)
         .with_context(|| format!("pnpm licenses list printed no JSON: {excerpt:?}"))?;
@@ -161,17 +181,23 @@ fn parse_pnpm(stdout: &str) -> Result<Vec<Package>> {
             let Some(name) = entry["name"].as_str() else {
                 bail!("pnpm licenses list: an entry under {key:?} has no name");
             };
-            let versions = entry["versions"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect();
-            packages.push(Package {
+            let strings = |field: &str| {
+                entry[field]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            };
+            let paths: Vec<PathBuf> = strings("paths").into_iter().map(PathBuf::from).collect();
+            if paths.is_empty() {
+                bail!("pnpm licenses list: {name} has no paths, so its package.json can't be read");
+            }
+            packages.push(Listed {
                 name: name.to_owned(),
-                versions,
-                license: entry["license"].as_str().unwrap_or(key).to_owned(),
+                versions: strings("versions"),
+                paths,
             });
         }
     }
@@ -180,6 +206,94 @@ fn parse_pnpm(stdout: &str) -> Result<Vec<Package>> {
     }
     packages.sort_by(|a, b| (&a.name, &a.versions).cmp(&(&b.name, &b.versions)));
     Ok(packages)
+}
+
+/// Reads the package.json in every folder pnpm lists and groups the
+/// versions by the licence they declare. Every version pnpm lists must turn
+/// up in one of them, so no version goes unread.
+fn read_manifests(listed: &[Listed]) -> Result<Vec<Package>> {
+    let mut groups: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for entry in listed {
+        let mut found: Vec<(String, String)> = Vec::new();
+        for dir in &entry.paths {
+            let path = dir.join("package.json");
+            let text = std::fs::read_to_string(&path).with_context(|| {
+                format!(
+                    "reading {}; is it installed? run `pnpm install --frozen-lockfile`",
+                    path.display()
+                )
+            })?;
+            let manifest: Value = serde_json::from_str(&text)
+                .with_context(|| format!("parsing {}", path.display()))?;
+            if manifest["name"].as_str() != Some(entry.name.as_str()) {
+                bail!("{} does not belong to {}", path.display(), entry.name);
+            }
+            let Some(version) = manifest["version"].as_str() else {
+                bail!("{} has no version", path.display());
+            };
+            let license = declared_license(&manifest).unwrap_or_else(|| NO_LICENSE.to_owned());
+            let pair = (version.to_owned(), license);
+            if !found.contains(&pair) {
+                found.push(pair);
+            }
+        }
+        for version in &entry.versions {
+            if !found.iter().any(|(v, _)| v == version) {
+                bail!(
+                    "pnpm lists {}@{version}, but no package.json in its paths has that version",
+                    entry.name
+                );
+            }
+        }
+        // In pnpm's order, which sorts by semver.
+        found.sort_by_key(|(v, _)| entry.versions.iter().position(|listed| listed == v));
+        for (version, license) in found {
+            let versions = groups.entry((entry.name.clone(), license)).or_default();
+            if !versions.contains(&version) {
+                versions.push(version);
+            }
+        }
+    }
+    Ok(groups
+        .into_iter()
+        .map(|((name, license), versions)| Package {
+            name,
+            versions,
+            license,
+        })
+        .collect())
+}
+
+/// The licence a package.json declares, read as pnpm's
+/// parseLicenseFromManifest reads it: `license`, else the legacy `licenses`;
+/// a string as it is, an object by its `type` (else its `name`), and a list
+/// as its entries joined with OR. `None` when it declares nothing. Unlike
+/// pnpm, nothing is ever read from a LICENSE file.
+fn declared_license(manifest: &Value) -> Option<String> {
+    license_field(&manifest["license"]).or_else(|| license_field(&manifest["licenses"]))
+}
+
+fn license_field(field: &Value) -> Option<String> {
+    let Some(entries) = field.as_array() else {
+        return license_type(field);
+    };
+    let types: Vec<String> = entries.iter().filter_map(license_type).collect();
+    match types.as_slice() {
+        [] => None,
+        [one] => Some(one.clone()),
+        _ => Some(format!("({})", types.join(" OR "))),
+    }
+}
+
+fn license_type(entry: &Value) -> Option<String> {
+    let text = match entry {
+        Value::String(text) => Some(text.as_str()),
+        Value::Object(object) => ["type", "name"]
+            .into_iter()
+            .find_map(|key| object.get(key)?.as_str().filter(|text| !text.is_empty())),
+        _ => None,
+    };
+    text.filter(|text| !text.is_empty()).map(str::to_owned)
 }
 
 /// deny.toml's `[licenses].allow`, each entry a single licence, optionally
@@ -226,7 +340,7 @@ impl Allowlist {
 #[serde(deny_unknown_fields)]
 struct Exception {
     package: String,
-    /// The licence exactly as pnpm reports it.
+    /// The licence exactly as the package.json declares it, or NO_LICENSE.
     license: String,
     reason: String,
 }
@@ -322,7 +436,7 @@ fn verdict(package: &Package, allowlist: &Allowlist, exceptions: &[Exception]) -
 /// Why a declared licence is not acceptable on its own, or `None` if it is.
 fn rejection(license: &str, allowlist: &Allowlist) -> Option<String> {
     let license = license.trim();
-    if license.is_empty() || license.eq_ignore_ascii_case(NO_LICENSE) {
+    if declares_none(license) {
         return Some("declares no licence".to_owned());
     }
     match Expr::parse(license) {
@@ -339,6 +453,17 @@ fn rejection(license: &str, allowlist: &Allowlist) -> Option<String> {
             Some(format!("not on the allowlist: {}", outside.join(", ")))
         }
     }
+}
+
+/// Empty, NO_LICENSE, or only a pointer to a file (`SEE LICENSE IN <file>`,
+/// npm's form for custom terms): no licence that can be judged here.
+fn declares_none(license: &str) -> bool {
+    let lower = license.trim().to_ascii_lowercase();
+    lower.is_empty()
+        || lower.eq_ignore_ascii_case(NO_LICENSE)
+        || ["see license in ", "see licence in "]
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
 }
 
 #[cfg(test)]
@@ -492,7 +617,10 @@ mod tests {
             ("", "declares no licence"),
             ("LicenseRef-Proprietary", "not on the allowlist"),
             ("UNLICENSED", "not on the allowlist"),
-            ("SEE LICENSE IN LICENSE.md", "not an SPDX expression"),
+            // A pointer to a file declares nothing that can be judged.
+            ("SEE LICENSE IN LICENSE.md", "declares no licence"),
+            ("see licence in COPYING", "declares no licence"),
+            ("SEE LICENSE", "not an SPDX expression"),
             ("MIT or ISC", "not an SPDX expression"),
         ] {
             match judge("p", license, &[]) {
@@ -554,29 +682,35 @@ mod tests {
     fn parses_the_pnpm_listing() {
         let stdout = r#"{
           "MIT": [
-            { "name": "svelte", "versions": ["5.57.1"], "license": "MIT", "paths": [] },
-            { "name": "@types/node", "versions": ["20.19.43", "24.19.1"], "license": "MIT" }
+            { "name": "svelte", "versions": ["5.57.1"], "license": "MIT", "paths": ["/nm/svelte"] },
+            { "name": "@types/node", "versions": ["20.19.43", "24.19.1"], "license": "MIT",
+              "paths": ["/nm/node@20", "/nm/node@24"] }
           ],
-          "Unknown": [ { "name": "css-value", "versions": ["0.0.1"] } ],
-          "(MIT OR CC0-1.0)": [ { "name": "type-fest", "versions": ["4.41.0"], "license": "(MIT OR CC0-1.0)" } ]
+          "Unknown": [ { "name": "css-value", "versions": ["0.0.1"], "paths": ["/nm/css-value"] } ]
         }"#;
-        let entry = |name: &str, versions: &[&str], license: &str| Package {
+        let entry = |name: &str, versions: &[&str], paths: &[&str]| Listed {
             name: name.to_owned(),
             versions: versions.iter().map(|v| (*v).to_owned()).collect(),
-            license: license.to_owned(),
+            paths: paths.iter().map(PathBuf::from).collect(),
         };
-        let packages = parse_pnpm(stdout).unwrap_or_else(|e| panic!("{e:#}"));
         assert_eq!(
-            packages,
+            parse_pnpm(stdout).unwrap_or_else(|e| panic!("{e:#}")),
             [
-                entry("@types/node", &["20.19.43", "24.19.1"], "MIT"),
-                // No `license` field: the licence it is listed under.
-                entry("css-value", &["0.0.1"], "Unknown"),
-                entry("svelte", &["5.57.1"], "MIT"),
-                entry("type-fest", &["4.41.0"], "(MIT OR CC0-1.0)"),
+                entry(
+                    "@types/node",
+                    &["20.19.43", "24.19.1"],
+                    &["/nm/node@20", "/nm/node@24"]
+                ),
+                entry("css-value", &["0.0.1"], &["/nm/css-value"]),
+                entry("svelte", &["5.57.1"], &["/nm/svelte"]),
             ]
         );
-        assert_eq!(packages[0].label(), "@types/node@20.19.43, 24.19.1");
+        let package = Package {
+            name: "@types/node".to_owned(),
+            versions: vec!["20.19.43".to_owned(), "24.19.1".to_owned()],
+            license: "MIT".to_owned(),
+        };
+        assert_eq!(package.label(), "@types/node@20.19.43, 24.19.1");
     }
 
     #[test]
@@ -588,10 +722,240 @@ mod tests {
             "{}",
             "[]",
             r#"{ "MIT": {} }"#,
-            r#"{ "MIT": [ { "versions": ["1.0.0"] } ] }"#,
+            r#"{ "MIT": [ { "versions": ["1.0.0"], "paths": ["/nm/x"] } ] }"#,
+            // No folder to read the package.json from.
+            r#"{ "MIT": [ { "name": "x", "versions": ["1.0.0"] } ] }"#,
+            r#"{ "MIT": [ { "name": "x", "versions": ["1.0.0"], "paths": [] } ] }"#,
         ] {
             assert!(parse_pnpm(stdout).is_err(), "{stdout:?}");
         }
+    }
+
+    #[test]
+    fn declared_licences_are_read_as_pnpm_reads_the_manifest() {
+        for (manifest, declared) in [
+            (json!({ "license": "MIT" }), Some("MIT")),
+            (
+                json!({ "license": "(MIT OR CC0-1.0)" }),
+                Some("(MIT OR CC0-1.0)"),
+            ),
+            (
+                json!({ "license": { "type": "ISC", "url": "u" } }),
+                Some("ISC"),
+            ),
+            (
+                json!({ "license": { "type": "", "name": "BSD-3-Clause" } }),
+                Some("BSD-3-Clause"),
+            ),
+            (json!({ "licenses": [{ "type": "MIT" }] }), Some("MIT")),
+            (
+                json!({ "licenses": [{ "type": "MIT" }, { "type": "Apache-2.0" }] }),
+                Some("(MIT OR Apache-2.0)"),
+            ),
+            (
+                json!({ "licenses": [{ "type": "MIT" }, "GPL-2.0-only", 7] }),
+                Some("(MIT OR GPL-2.0-only)"),
+            ),
+            // `license` wins over `licenses`; an empty one does not count.
+            (
+                json!({ "license": "ISC", "licenses": [{ "type": "MIT" }] }),
+                Some("ISC"),
+            ),
+            (
+                json!({ "license": "", "licenses": [{ "type": "MIT" }] }),
+                Some("MIT"),
+            ),
+            (
+                json!({ "license": "SEE LICENSE IN LICENSE.md" }),
+                Some("SEE LICENSE IN LICENSE.md"),
+            ),
+            (json!({}), None),
+            (json!({ "license": "" }), None),
+            (json!({ "license": {} }), None),
+            (json!({ "license": null, "licenses": [] }), None),
+            (json!({ "license": 1 }), None),
+        ] {
+            assert_eq!(
+                declared_license(&manifest).as_deref(),
+                declared,
+                "{manifest}"
+            );
+        }
+    }
+
+    /// A folder under the system temp dir, removed on drop.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "navaja-xtask-licenses-{name}-{}",
+                std::process::id()
+            ));
+            // Left over from an earlier run with the same process id.
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+            Self(dir)
+        }
+
+        /// Writes `<folder>/package.json` (and, if given, `<folder>/LICENSE`)
+        /// and returns the folder as pnpm would list it.
+        fn install(&self, folder: &str, manifest: &Value, license_file: Option<&str>) -> String {
+            let dir = self.0.join(folder);
+            std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+            let write = |name: &str, text: &str| {
+                std::fs::write(dir.join(name), text)
+                    .unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+            };
+            write("package.json", &manifest.to_string());
+            if let Some(text) = license_file {
+                write("LICENSE", text);
+            }
+            dir.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn licences_come_from_each_package_json_not_from_pnpm() {
+        let scratch = Scratch::new("manifests");
+        let install = |name: &str, version: &str, licence: Value, file: Option<&str>| {
+            let mut manifest = json!({ "name": name, "version": version });
+            if let (Some(fields), Some(object)) = (licence.as_object(), manifest.as_object_mut()) {
+                object.extend(fields.clone());
+            }
+            scratch.install(&format!("{name}@{version}"), &manifest, file)
+        };
+        let string = install("string", "1.0.0", json!({ "license": "MIT" }), None);
+        let object = install(
+            "object",
+            "1.0.0",
+            json!({ "license": { "type": "ISC" } }),
+            None,
+        );
+        let legacy = install(
+            "legacy",
+            "1.0.0",
+            json!({ "licenses": [{ "type": "MIT" }, { "type": "Apache-2.0" }] }),
+            None,
+        );
+        let absent = install("absent", "1.0.0", json!({}), None);
+        let pointer = install(
+            "pointer",
+            "1.0.0",
+            json!({ "license": "SEE LICENSE IN EULA.txt" }),
+            None,
+        );
+        // pnpm reads a LICENSE file when the manifest declares nothing, and
+        // reports every licence name it finds there: this one as "MIT".
+        let inferred = install(
+            "inferred",
+            "1.0.0",
+            json!({}),
+            Some("Proprietary. You may not use this as you would MIT code."),
+        );
+        // Two versions under one pnpm licence, declared apart.
+        let split_old = install("split", "1.0.0", json!({}), Some("MIT License"));
+        let split_new = install("split", "2.0.0", json!({ "license": "MIT" }), None);
+        let stdout = json!({
+            "MIT": [
+                { "name": "string", "versions": ["1.0.0"], "paths": [string], "license": "MIT" },
+                { "name": "inferred", "versions": ["1.0.0"], "paths": [inferred], "license": "MIT" },
+                { "name": "split", "versions": ["1.0.0", "2.0.0"], "paths": [split_old, split_new], "license": "MIT" }
+            ],
+            "ISC": [ { "name": "object", "versions": ["1.0.0"], "paths": [object], "license": "ISC" } ],
+            "(MIT OR Apache-2.0)": [
+                { "name": "legacy", "versions": ["1.0.0"], "paths": [legacy], "license": "(MIT OR Apache-2.0)" }
+            ],
+            "Unknown": [ { "name": "absent", "versions": ["1.0.0"], "paths": [absent] } ],
+            "SEE LICENSE IN EULA.txt": [
+                { "name": "pointer", "versions": ["1.0.0"], "paths": [pointer], "license": "SEE LICENSE IN EULA.txt" }
+            ]
+        })
+        .to_string();
+
+        let packages = read_manifests(&parse_pnpm(&stdout).unwrap_or_else(|e| panic!("{e:#}")))
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        let found: Vec<(&str, &str, String)> = packages
+            .iter()
+            .map(|p| (p.name.as_str(), p.license.as_str(), p.versions.join(",")))
+            .collect();
+        let row = |name, license, versions: &str| (name, license, versions.to_owned());
+        assert_eq!(
+            found,
+            [
+                row("absent", "Unknown", "1.0.0"),
+                row("inferred", "Unknown", "1.0.0"),
+                row("legacy", "(MIT OR Apache-2.0)", "1.0.0"),
+                row("object", "ISC", "1.0.0"),
+                row("pointer", "SEE LICENSE IN EULA.txt", "1.0.0"),
+                row("split", "MIT", "2.0.0"),
+                row("split", "Unknown", "1.0.0"),
+                row("string", "MIT", "1.0.0"),
+            ]
+        );
+
+        // What pnpm inferred never gets anything through.
+        let list = allowlist();
+        let verdicts: Vec<(&str, Verdict)> = packages
+            .iter()
+            .map(|p| (p.name.as_str(), verdict(p, &list, &[])))
+            .collect();
+        let no_licence = || Verdict::Rejected("declares no licence".to_owned());
+        assert_eq!(
+            verdicts,
+            [
+                ("absent", no_licence()),
+                ("inferred", no_licence()),
+                ("legacy", Verdict::Allowed),
+                ("object", Verdict::Allowed),
+                ("pointer", no_licence()),
+                ("split", Verdict::Allowed),
+                ("split", no_licence()),
+                ("string", Verdict::Allowed),
+            ]
+        );
+        let excepted = [exception("inferred", "MIT")];
+        assert_eq!(
+            verdict(&packages[1], &list, &excepted),
+            Verdict::Rejected(
+                "declares no licence; js-licenses.toml excepts it only under \"MIT\"".to_owned()
+            )
+        );
+        let excepted = [exception("inferred", NO_LICENSE)];
+        assert_eq!(verdict(&packages[1], &list, &excepted), Verdict::Excepted);
+    }
+
+    #[test]
+    fn every_listed_version_needs_its_package_json() {
+        let scratch = Scratch::new("missing");
+        let one = scratch.install("one", &json!({ "name": "one", "version": "1.0.0" }), None);
+        let listing = |name: &str, versions: &[&str], paths: &[&str]| {
+            json!({ "MIT": [ { "name": name, "versions": versions, "paths": paths } ] }).to_string()
+        };
+        let read = |stdout: String| {
+            let listed = parse_pnpm(&stdout).unwrap_or_else(|e| panic!("{e:#}"));
+            match read_manifests(&listed) {
+                Ok(packages) => panic!("{packages:?}"),
+                Err(error) => format!("{error:#}"),
+            }
+        };
+        let not_installed = scratch.0.join("gone").to_string_lossy().into_owned();
+        assert!(
+            read(listing("gone", &["1.0.0"], &[&not_installed]))
+                .contains("run `pnpm install --frozen-lockfile`")
+        );
+        assert!(
+            read(listing("one", &["1.0.0", "2.0.0"], &[&one])).contains(
+                "pnpm lists one@2.0.0, but no package.json in its paths has that version"
+            )
+        );
+        assert!(read(listing("other", &["1.0.0"], &[&one])).contains("does not belong to other"));
     }
 
     #[test]

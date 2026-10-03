@@ -2,17 +2,30 @@
 # `cargo xtask licenses` (docs/roadmap.md §2, "Workflows").
 #
 # The allowed licences are deny.toml's [licenses].allow, read from there so
-# the Rust and JS lists cannot drift. A package whose licence falls outside
+# the Rust and JS lists cannot drift. Each installed package's licence is
+# read from its own package.json (`license`, or the legacy `licenses`), not
+# from pnpm: when a manifest declares none, pnpm reports the licence names
+# it finds in the LICENSE file's text. A package whose licence falls outside
 # that list, or that declares none, needs an entry here:
 # - `package`: the npm package name;
-# - `license`: the licence exactly as `pnpm licenses list` reports it. If the
-#   package changes licence, the entry stops matching and the check fails
-#   until someone reviews it again;
-# - `reason`: one line on why it is acceptable.
+# - `license`: the licence exactly as its package.json declares it, or
+#   "Unknown" when it declares none. `SEE LICENSE IN <file>` declares none
+#   too, and is written as it stands. If the package changes licence, the
+#   entry stops matching and the check fails until someone reviews it again;
+# - `reason`: one line on why it is acceptable. For a package that declares
+#   no licence, read its LICENSE file first and say what it actually is.
 #
-# Prefer an entry here over widening deny.toml. Everything below is test
-# tooling (jsdom for Vitest, WebdriverIO for the end-to-end tests); none of
-# it is bundled into the app.
+# Prefer an entry here over widening deny.toml.
+
+# Bundled into the app.
+
+[[exception]]
+package = "svelte-toolbelt"
+license = "Unknown"
+reason = "Bundled (through bits-ui); no license field; LICENSE file is the MIT text (checked)"
+
+# Test tooling (jsdom for Vitest, WebdriverIO for the end-to-end tests);
+# none of it is bundled into the app.
 
 [[exception]]
 package = "@csstools/color-helpers"
@@ -42,7 +55,7 @@ reason = "Test-only (js-yaml under mocha, WebdriverIO's runner); permissive PSF 
 [[exception]]
 package = "css-value"
 license = "Unknown"
-reason = "Test-only (WebdriverIO); package.json has no licence field, its Readme grants MIT"
+reason = "Test-only (WebdriverIO); no license field and no LICENSE file; its Readme holds the MIT text (checked)"
 
 [[exception]]
 package = "isexe"

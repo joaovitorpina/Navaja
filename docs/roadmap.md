@@ -297,9 +297,10 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 
 **JS licences** (`cargo xtask licenses`):
 - It lists every installed npm package with `pnpm licenses list`, dev dependencies included, since the front end bundles some of them.
+- Each installed version's licence is read from its own `package.json` (`license`, or the legacy `licenses`), the way pnpm reads a manifest. pnpm's reported licence is not used: when a manifest declares none, or says `SEE LICENSE IN <file>`, pnpm reports the licence names it finds in the LICENSE file's text.
 - Each licence is read as an SPDX expression and checked against deny.toml's `[licenses].allow`, the same list cargo-deny uses for crates.
-- Anything else needs an entry in `js-licenses.toml`: the package, its licence exactly as pnpm reports it, and a one-line reason. A package that changes licence falls out of its entry.
-- A missing, custom or unparseable licence fails unless it has an entry. Every failing package is reported.
+- Anything else needs an entry in `js-licenses.toml`: the package, its licence exactly as its `package.json` declares it (`Unknown` when it declares none), and a one-line reason. A package that changes licence falls out of its entry.
+- A missing, custom or unparseable licence fails unless it has an entry, and so does `SEE LICENSE IN <file>`. Before adding an entry for a package that declares no licence, read its LICENSE file. Every failing package is reported.
 - It sees what is installed on the running OS, so another OS's native binaries (esbuild, Tailwind, Tauri CLI) are not listed.
 
 **Secrets in fixtures** (`scripts/check-fixture-secrets.sh`):
