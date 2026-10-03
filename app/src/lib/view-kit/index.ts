@@ -1,6 +1,7 @@
-// The shell API a custom view (tools/<id>/ui/) may use. Besides this module a
-// view imports only `./`, `svelte` and `$bindings/*` (docs/architecture.md §4),
-// so the shell can change behind these names without touching any tool.
+// The shell API a custom view (tools/<id>/ui/) may use, and the only app module
+// it may import, so the shell can change behind these names without touching
+// any tool. What else a view may import is in docs/architecture.md §4, and
+// app/eslint/view-imports.js enforces it.
 import type { ToolMeta } from '$bindings/ToolMeta';
 
 export { default as CopyButton } from '../CopyButton.svelte';
