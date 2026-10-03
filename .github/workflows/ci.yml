@@ -35,6 +35,28 @@ jobs:
       - name: Frozen identifiers are consistent
         run: bash scripts/check-identifiers.sh
 
+      # A pinned release, checked against its published SHA-256. Bump the
+      # version and the checksum together; the checksum is in
+      # gitleaks_<version>_checksums.txt on the release.
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          dir="$RUNNER_TEMP/gitleaks"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 --proto '=https' \
+            --output "$dir/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  $dir/$archive" | sha256sum --check --strict
+          tar -xzf "$dir/$archive" -C "$dir"
+          "$dir/gitleaks" version
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: gitleaks over fixtures and snapshots
+        run: bash scripts/check-fixture-secrets.sh
+
       - name: Install Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
 
