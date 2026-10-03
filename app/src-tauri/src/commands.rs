@@ -28,6 +28,8 @@ pub struct AppInfo {
     pub name: String,
     pub version: String,
     pub spec_version: u16,
+    /// Running as administrator or root, which Navaja never needs.
+    pub elevated: bool,
 }
 
 pub fn app_info_value() -> AppInfo {
@@ -35,6 +37,7 @@ pub fn app_info_value() -> AppInfo {
         name: "Navaja".to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         spec_version: navaja_core::SPEC_VERSION,
+        elevated: crate::platform::is_elevated(),
     }
 }
 
@@ -72,10 +75,14 @@ pub fn app_info() -> AppInfo {
 }
 
 /// Called by the front end once it has rendered, so the window never shows
-/// an empty frame. See `window::create_main` for the fallback.
+/// an empty frame. Also opens what a second launch or the tray asked for
+/// meanwhile. See `window::create_main` for the fallback.
 #[tauri::command]
-pub fn shell_ready<R: Runtime>(window: WebviewWindow<R>) -> Result<(), String> {
-    crate::window::reveal(&window).map_err(|error| error.to_string())
+pub fn shell_ready<R: Runtime>(
+    window: WebviewWindow<R>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    crate::window::ready(&window, &state.window).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

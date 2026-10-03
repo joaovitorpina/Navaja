@@ -1,5 +1,5 @@
-//! Shared app state: the tool registry, in-flight runs, settings and the
-//! clipboard.
+//! Shared app state: the tool registry, in-flight runs, settings, the
+//! clipboard and the main window's state.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,6 +9,7 @@ use navaja_core::{Registry, Services};
 
 use crate::clipboard::Clipboard;
 use crate::settings::SettingsStore;
+use crate::window::WindowState;
 
 /// Cancels kept for runs that haven't started yet; the oldest is dropped
 /// first.
@@ -19,6 +20,7 @@ pub struct AppState {
     pub services: Services,
     pub settings: SettingsStore,
     pub clipboard: Clipboard,
+    pub window: WindowState,
     runs: Mutex<Runs>,
 }
 
@@ -59,6 +61,7 @@ impl AppState {
             services: Services::new(),
             settings,
             clipboard: Clipboard::default(),
+            window: WindowState::default(),
             runs: Mutex::new(Runs::default()),
         }
     }

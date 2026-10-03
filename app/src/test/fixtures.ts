@@ -1,8 +1,10 @@
 // Test fixtures typed against the generated bindings, so a Rust-side change
 // to the wire format breaks these at type-check time.
+import type { AppInfo } from '$bindings/AppInfo';
 import type { Catalog } from '$bindings/Catalog';
 import type { RunEnvelope } from '$bindings/RunEnvelope';
 import type { SearchHit } from '$bindings/SearchHit';
+import type { Settings } from '$bindings/Settings';
 import type { ToolMeta } from '$bindings/ToolMeta';
 import { mockIPC } from '@tauri-apps/api/mocks';
 
@@ -93,6 +95,7 @@ export type RunAnswer = (
  * replaces any command's answer: throw (or reject) to make it fail.
  */
 export function mockApp(options: {
+  elevated?: boolean;
   runResult?: RunEnvelope | RunAnswer;
   search?: (query: string) => SearchHit[];
   commands?: Record<string, (args: Record<string, unknown>) => unknown>;
@@ -108,7 +111,14 @@ export function mockApp(options: {
       case 'list_tools':
         return catalog;
       case 'settings_get':
-        return { version: 1, theme: 'system' };
+        return { version: 1, theme: 'system' } satisfies Settings;
+      case 'app_info':
+        return {
+          name: 'Navaja',
+          version: '0.0.0',
+          specVersion: 1,
+          elevated: options.elevated ?? false,
+        } satisfies AppInfo;
       case 'search': {
         const query = String(args.query ?? '');
         return options.search ? options.search(query) : [];

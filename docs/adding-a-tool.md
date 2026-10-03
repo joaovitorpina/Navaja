@@ -129,6 +129,8 @@ Test the behaviour, not the plumbing:
 - every error code;
 - the property that matters, such as round trips (`decode(encode(x)) == x`) with proptest.
 
+To try the tool in the app, run `pnpm dev` from the repository root. Quit any other Navaja first, an installed one included. Navaja runs as a single instance, so a dev or debug build that finds another one running hands its arguments to it and exits with code 0, and you see the other app's window. End-to-end builds use their own identifier, so they are not affected.
+
 ## 6. What a tool PR may touch
 
 | Change | May touch | Never touches |

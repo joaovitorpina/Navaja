@@ -27,6 +27,8 @@ describe('shell', () => {
     expect(within(nav).getByRole('link', { name: 'UUID generator' })).toBeTruthy();
     await vi.waitFor(() => expect(calls.map((c) => c.cmd)).toContain('shell_ready'));
     expect(navShown).toBe(true);
+    // Not elevated: no banner.
+    expect(screen.queryByRole('status')).toBeNull();
   });
 
   it('shows the start failure before reporting ready', async () => {
@@ -166,6 +168,23 @@ describe('shell', () => {
       'UUID generator',
     ]);
     expect(calls.some((c) => c.cmd === 'search' && c.args.query === 'uid')).toBe(true);
+  });
+
+  it('warns when running elevated', async () => {
+    mockApp({ elevated: true });
+    render(App);
+    expect(await screen.findByRole('status')).toHaveProperty(
+      'textContent',
+      expect.stringContaining('running with administrator or root rights'),
+    );
+  });
+
+  it('opens the palette when the tray asks', async () => {
+    mockApp({});
+    render(App);
+    await screen.findByRole('navigation', { name: 'Tools' });
+    window.dispatchEvent(new Event('navaja:palette'));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
   });
 
   it('exposes the highlighted palette result to assistive technology', async () => {

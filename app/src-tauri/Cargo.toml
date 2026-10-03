@@ -31,16 +31,25 @@ navaja-core = { workspace = true }
 navaja-tools = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tauri = { workspace = true }
+tauri = { workspace = true, features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2.5.2"
 toml = "1.1.6"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
 ts-rs = { workspace = true, optional = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # Clipboard on Wayland through the data-control protocol (X11 works without it).
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
+# Checks for the tray's appindicator library, which tray-icon panics without.
+libloading = "0.7.4"
 
 [lints]
 workspace = true

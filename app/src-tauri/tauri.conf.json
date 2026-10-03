@@ -46,6 +46,10 @@
         "base-uri": "'none'",
         "form-action": "'none'"
       },
+      "headers": {
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), display-capture=(), usb=(), serial=(), hid=(), bluetooth=(), midi=(), payment=(), publickey-credentials-get=(), screen-wake-lock=(), clipboard-read=(), clipboard-write=()",
+        "X-Content-Type-Options": "nosniff"
+      },
       "dangerousDisableAssetCspModification": ["style-src"],
       "freezePrototype": true,
       "capabilities": ["main"]

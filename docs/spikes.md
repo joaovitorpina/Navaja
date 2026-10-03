@@ -61,3 +61,15 @@ Copy this for each spike and fill it in.
   - `app.css` names the view files in its `@source` glob; a glob ending in a directory finds no classes.
   - `$lib/view-kit` exists and is what views import from the shell. ToolHost types the glob against its `ViewProps`.
   - Still open before S2.2 can pass: HMR and the packaged app on Windows, the same checks on macOS and Linux in CI, and the ESLint import allowlist (tracked in roadmap M2a, item 7). Once it passes, this entry needs an ADR for the tsconfig and Vite settings, since the roadmap counts them as the first fallback.
+
+## S2.3 Tray icon
+
+- **Milestone / gates:** M2a, the tray icon format per OS
+- **Time box:** ½ d
+- **Question:** which icon files keep the tray icon crisp at every scale, and does the macOS template icon work?
+- **Method:** not run yet. It runs on the minimal tray from roadmap M2a, item 9: Windows 11 at 100, 125, 150 and 200 %, and macOS 26 with a light and a dark menu bar.
+- **PASS if:** crisp at 100-200 % on Windows; the macOS template icon works
+- **FAIL then:** per-scale PNGs, or `with_inner_tray_icon` with an .ico
+- **Result:** pending. Nothing is recorded as passed.
+- **Numbers and evidence:** none yet.
+- **Decision:** none yet. The tray shipped before this spike, against the rule that a gating spike runs first, so the spike could run on a working tray. Its icons are placeholders, picked by one `include_bytes!` constant in `tray.rs`: `icons/tray/template.png` on macOS and `icons/tray/color-32.png` elsewhere. Final art is roadmap M2b, item 3.

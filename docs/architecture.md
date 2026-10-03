@@ -11,7 +11,7 @@ This describes the v1 design accepted in [ADR 0001](adr/0001-stack.md): Tauri 2 
 - **The webview** renders data and sends intents. It has no network, filesystem, dialog or shell permission.
 - **Tools are pure and synchronous** (JSON in, JSON out). They never print, prompt, start a runtime, open a connection or receive a file path. In v1, text tools take pasted text; file input and output come after v1.
 - **Generic commands** serve every tool. `UiSpec` renders every text tool. Navigation, search and tray entries all come from `list_tools()`.
-- **OS-specific code sits behind traits**, one module per OS: `navaja_ports::Platform` and the app's `ShellPlatform`.
+- **OS-specific code sits behind traits**, one module per OS, or per OS family where Linux and macOS share the code: `navaja_ports::Platform` and the app's `ShellPlatform`.
 
 ## 2. Repository layout
 
@@ -40,7 +40,7 @@ Navaja/
 │   └── src-tauri/        crate navaja · features: default [docker], updater (M6), e2e
 │       ├── tauri.conf.json · tauri.release.conf.json (updater artifacts + pubkey) · e2e.conf.json
 │       ├── capabilities/main.json · acl.lock.json · nsis/hooks.nsh
-│       ├── src/          commands · state · paths · window · guard · tray · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{windows,linux,macos}.rs
+│       ├── src/          commands · state · paths · window · guard · tray · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{mod,unix,linux,windows}.rs
 │       └── tests/        privacy.rs (canary input kept out of logs and crash files)
 ├── xtask/                check · tool-gate · bindings · icons · notices · capture-ports · measure · verify-release · manifests
 ├── assets/brand/         navaja.svg · tray-template.svg · tray-color.svg · GUIDELINES.md
@@ -173,6 +173,10 @@ Rust never runs a destructive action from argv.
 
 - **CSP:** `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`.
   - It also sets `dangerousDisableAssetCspModification: ["style-src"]`. Without it, Tauri's style nonces would disable the `'unsafe-inline'` that CodeMirror needs.
+- **Response headers**, set in `security.headers` in `tauri.conf.json`:
+  - `Permissions-Policy` denies the camera, microphone, geolocation, display capture, USB, serial, HID, Bluetooth, MIDI, payment, WebAuthn (`publickey-credentials-get`), the screen wake lock, and clipboard read and write through the async Clipboard API;
+  - `X-Content-Type-Options: nosniff`.
+- **DNS prefetch:** `index.html` sets `x-dns-prefetch-control: off`, so the engine makes no speculative lookups for links.
 - **Capability:** it grants only the app's own commands, with no `core:default`, and the resolved ACL is snapshotted in `acl.lock.json`.
 - **Plugins never used:** http, fs, shell, dialog, clipboard-manager and store.
 - **Window:** one Rust builder creates it with:
@@ -180,7 +184,14 @@ Rust never runs a destructive action from argv.
   - new windows denied;
   - hidden until ready;
   - no devtools in release builds.
-- **`navaja-guard` plugin:** adds a navigation allowlist and an all-frames script that removes `RTCPeerConnection` and `RTCDataChannel` and replaces the native context menu.
+- **`navaja-guard` plugin:**
+  - **Navigation allowlist:** only this OS's app origin, `tauri://localhost` on macOS and Linux and `http://tauri.localhost` on Windows. The Vite dev server is allowed only when `tauri::is_dev()` is true. A blocked navigation is logged by its scheme, never its URL.
+  - **Init script** (`guard.js`), injected before any page script in each frame the engine covers. It removes `RTCPeerConnection`, `RTCDataChannel` and the other WebRTC constructors, whose ICE and STUN traffic the CSP does not govern. It also suppresses the native context menu (reload, inspect) outside text-entry fields. Inside them the native menu stays, for cut, copy and paste.
+  - **One layer, not a guarantee.** The script is a layer under the CSP, and a frame it never runs in keeps the constructors.
+    - WebView2 runs it in every frame, empty and `srcdoc` iframes included.
+    - WebKitGTK ships with WebRTC disabled (`enable-webrtc` defaults to false, and wry leaves it).
+    - On macOS, WebKit skips user scripts in an iframe's initial empty document, and `frame-src 'none'` keeps the iframe there. Script already running in the app origin may get the constructor back from such an iframe. The end-to-end egress canary checks this on macOS (roadmap M2a, item 10). If it fails, the follow-up turns peer connections off in the engine, through `WKPreferences`.
+  - **macOS text fields:** the native menu there also offers OS services: Look Up, Translate, Search With Google, Share and Services. They send the selected text only when the user picks one. `privacy.md` discloses them (roadmap M6, item 6).
 - **WebView2 arguments:** any extra arguments must re-include wry's defaults.
 - **Clipboard:** `copy_text` writes through arboard and always sets the OS's exclusion markers; there is no opt-out. A native copy (Ctrl/Cmd+C, the context menu) whose selection touches a region marked `data-output` goes through it too, wherever the selection starts; copies from text fields stay native, since they hold the user's own input. What the markers achieve:
   - **Windows:** the copy stays out of clipboard history (Win+V), cloud clipboard sync and clipboard monitors.
@@ -189,7 +200,7 @@ Rust never runs a destructive action from argv.
 
 **Plugins used:**
 - Tauri core `tray-icon`;
-- `single-instance`, registered first;
+- `single-instance`, registered first. Known issue: on macOS it hands off through a world-shared socket in `/tmp` with no peer check; the fix is roadmap M2b, item 9;
 - `window-state`;
 - `opener`;
 - `updater` (M6);
@@ -198,7 +209,7 @@ Rust never runs a destructive action from argv.
 Tests also load `tauri-plugin-wdio` and `tauri-plugin-wdio-webdriver`, behind the `e2e` feature and `e2e.conf.json`.
 
 **Lifecycle**, implemented through `ShellPlatform`:
-- **Startup:** the window stays hidden until `shell_ready`, and shows an error view after 5 s.
+- **Startup:** the window stays hidden until `shell_ready`, and shows an error view after 5 s. A second launch or a tray action that comes earlier waits for it: the requested tool is kept and opened once the shell is ready, so no blank window is shown.
 - **Close:**
   - Windows asks once whether to go to the tray or quit.
   - macOS hides the window. Dock reopen shows it, Cmd+Q quits, and the menu gains "Settings… ⌘,".
@@ -210,8 +221,14 @@ Tests also load `tauri-plugin-wdio` and `tauri-plugin-wdio-webdriver`, behind th
   - every tool with `meta.tray`;
   - Check for updates (M6, direct installs only);
   - Quit.
+- **Tray icon:**
+  - Windows: a left click toggles the window, and a right click opens the menu. The click takes focus from the window before it arrives, so the toggle treats the window as focused if it had focus in the last 500 ms.
+  - macOS: a template icon, tinted by the system; a click opens the menu.
+  - Linux: the menu only, since click events do not arrive. When no appindicator library loads, there is no tray: a warning is logged and the app runs without it.
 - **Single instance:** forwards `--toggle`, `--show` and `--tool <id>`.
-- **Elevated or root start:** shows a "not needed" banner. On Linux it requires `--allow-root`.
+  - It is keyed on the app identifier. A dev or debug launch while another Navaja runs, an installed one included, hands its arguments to that instance and exits with code 0. End-to-end builds use their own identifier, set in `e2e.conf.json`.
+  - **Wayland:** a second launch cannot yet raise a window that is visible but unfocused, because the launcher's activation token is not forwarded (roadmap M2b, item 8). Tray-menu actions cannot take focus there at all.
+- **Elevated or root start:** shows a "not needed" banner. On Linux and macOS, Navaja refuses to start as root unless given `--allow-root`.
 
 ## 6. Front end
 
