@@ -157,7 +157,7 @@ Copy this for each spike and fill it in.
 - **Result:** not finished (2026-10-03).
   - macOS template icon: works on the macos-26 runner, in the light and the dark appearance, at its 1× scale. Retina (2×) was not tested.
   - Windows: the icon shows in the notification area at the runner's 100 %. Whether it is crisp at 100-200 % needs a person.
-- **Numbers and evidence:** `spikes.yml` run [37150170804](https://github.com/joaovitorpina/Navaja/actions/runs/37150170804), on commit `78efc60`. Every step passed on both runners.
+- **Numbers and evidence:** `spikes.yml` run [37150170804](https://github.com/joaovitorpina/Navaja/actions/runs/37150170804), on commit `78efc60`. Every step passed on both runners. The next run, [37150853141](https://github.com/joaovitorpina/Navaja/actions/runs/37150853141) on `40707c0`, which changed only these docs, gave the same rectangles and measurements.
 
   | Runner | System | Display | Job |
   |---|---|---|---|
@@ -240,7 +240,7 @@ Not a spike: one of M2a's exit criteria (roadmap M2a, Exit), checked the same wa
   - The runner is Windows Server 2025 Datacenter, build 26100, session 2, interactive, with Explorer running. Neither value existed before. With `EnableClipboardHistory = 1`, then the policy as well, and the service restarted after each, `IsHistoryEnabled()` stayed false for 15 s each time, in this process and in a fresh one. `GetHistoryItemsAsync()` returned `ClipboardHistoryDisabled`. A [Microsoft Q&A answer](https://learn.microsoft.com/en-us/answers/questions/91159/clipboard-history-on-windows-server) from 2020 says Windows Server did not have clipboard history then; Server 2025 on the runner behaves the same.
   - The Copy button copied the canary `9ca74a9d-315a-4698-8e21-233d18ed5f9a`, and `Get-Clipboard` returned it. The clipboard then held 7 formats: `CF_UNICODETEXT` (13), `CF_LOCALE` (16), `CF_TEXT` (1), `CF_OEMTEXT` (7), and `ExcludeClipboardContentFromMonitorProcessing`, `CanUploadToCloudClipboard` and `CanIncludeInClipboardHistory`, each `00-00-00-00`.
   - The same text through `Set-Clipboard` held 6 formats (`DataObject`, `Ole Private Data` and the four text ones), none of the three, and the formats check failed on it, naming all three.
-  - Earlier runs on the same runner image gave the same results (run 37149634725, and run 37148575144 for the history alone).
+  - Runs 37149634725 and 37150853141 gave the same results with their own canaries, and run 37148575144 the same for the history alone.
 - **By a person**, on Windows 11:
   1. Turn on Settings > System > Clipboard > Clipboard history.
   2. Control: copy a word in Notepad, press Win+V, and check that it is listed.
