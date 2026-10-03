@@ -11,7 +11,13 @@
     "noEmit": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": {
+      "$lib": ["./src/lib"],
+      "$lib/*": ["./src/lib/*"],
+      "$bindings/*": ["./src/bindings/*"],
+      "@tools/*": ["../tools/*"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.svelte"]
 }

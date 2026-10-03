@@ -1,31 +1,82 @@
+@import 'tailwindcss';
+
+/* Custom views live with their tools; Tailwind must see their classes. */
+@source '../../tools/*/ui';
+
+/* `data-theme` (set from Settings) overrides the OS preference. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
 /* Palette tokens from assets/brand/GUIDELINES.md. */
 :root {
   --nv-steel-900: #1f2328;
   --nv-steel-600: #57606a;
   --nv-steel-200: #d0d7de;
+  --nv-steel-100: #eaeef2;
   --nv-steel-50: #f6f8fa;
+  --nv-surface: #ffffff;
   --nv-brass-500: #975a16;
   --nv-danger: #cf222e;
-
-  color-scheme: light dark;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, Cantarell, sans-serif;
-  color: var(--nv-steel-900);
-  background: var(--nv-steel-50);
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --nv-steel-900: #e6e8eb;
     --nv-steel-600: #9da5ae;
     --nv-steel-200: #30363d;
+    --nv-steel-100: #161b22;
     --nv-steel-50: #0d1117;
+    --nv-surface: #161b22;
     --nv-brass-500: #d69e2e;
     --nv-danger: #f85149;
+    color-scheme: dark;
   }
 }
 
+:root[data-theme='dark'] {
+  --nv-steel-900: #e6e8eb;
+  --nv-steel-600: #9da5ae;
+  --nv-steel-200: #30363d;
+  --nv-steel-100: #161b22;
+  --nv-steel-50: #0d1117;
+  --nv-surface: #161b22;
+  --nv-brass-500: #d69e2e;
+  --nv-danger: #f85149;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-fg: var(--nv-steel-900);
+  --color-muted: var(--nv-steel-600);
+  --color-line: var(--nv-steel-200);
+  --color-subtle: var(--nv-steel-100);
+  --color-canvas: var(--nv-steel-50);
+  --color-surface: var(--nv-surface);
+  --color-accent: var(--nv-brass-500);
+  --color-danger: var(--nv-danger);
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, Cantarell, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+
 html,
-body {
+body,
+#app {
   margin: 0;
   height: 100%;
+  background: var(--color-canvas);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+}
+
+/* A visible focus ring everywhere, in the accent colour. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
 }

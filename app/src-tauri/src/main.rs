@@ -1,6 +1,6 @@
 // No console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-fn main() -> Result<(), tauri::Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     navaja_lib::run()
 }
