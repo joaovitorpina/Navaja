@@ -16,7 +16,11 @@ describe('decodeEnvelope', () => {
   });
 
   it('decodes tool errors', () => {
-    const error = { code: 'uuid.count_out_of_range', message: 'Choose between 1 and 10,000 UUIDs.', details: null };
+    const error = {
+      code: 'uuid.count_out_of_range',
+      message: 'Choose between 1 and 10,000 UUIDs.',
+      details: null,
+    };
     expect(decodeEnvelope(envelopeBytes({ err: error }))).toEqual({ ok: false, error });
   });
 

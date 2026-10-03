@@ -5,7 +5,11 @@ import { router } from './lib/router.svelte';
 import { mockApp } from './test/fixtures';
 
 const countError = {
-  err: { code: 'uuid.count_out_of_range', message: 'Choose between 1 and 10,000 UUIDs.', details: null },
+  err: {
+    code: 'uuid.count_out_of_range',
+    message: 'Choose between 1 and 10,000 UUIDs.',
+    details: null,
+  },
 };
 
 describe('shell', () => {
@@ -164,9 +168,11 @@ describe('shell', () => {
     await fireEvent.input(filter, { target: { value: 'uid' } });
 
     const results = await screen.findByRole('list', { name: 'Matching tools' });
-    expect(within(results).getAllByRole('link').map((a) => a.textContent?.trim())).toEqual([
-      'UUID generator',
-    ]);
+    expect(
+      within(results)
+        .getAllByRole('link')
+        .map((a) => a.textContent?.trim()),
+    ).toEqual(['UUID generator']);
     expect(calls.some((c) => c.cmd === 'search' && c.args.query === 'uid')).toBe(true);
   });
 
@@ -205,7 +211,9 @@ describe('shell', () => {
       expect.stringContaining('UUID generator'),
     ]);
 
-    await vi.waitFor(() => expect(input.getAttribute('aria-activedescendant')).toBe(options[0]?.id));
+    await vi.waitFor(() =>
+      expect(input.getAttribute('aria-activedescendant')).toBe(options[0]?.id),
+    );
     const controls = input.getAttribute('aria-controls');
     expect(controls).toBeTruthy();
     expect(document.getElementById(controls ?? '')?.contains(options[0] ?? null)).toBe(true);
