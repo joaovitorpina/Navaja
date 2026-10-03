@@ -229,7 +229,9 @@ jobs:
   #   started, and the tint check on a build whose icon is not a template.
   # - Windows (scripts/spikes/s2-3-tray.ps1): the icon promoted out of the
   #   overflow, found through UI Automation and captured at the runner's own
-  #   scale. Other scales need a person (docs/spikes.md).
+  #   scale, then a check that its button has an icon drawn in it. Its
+  #   negative control is the same check on an empty stretch of the taskbar.
+  #   Other scales need a person (docs/spikes.md).
   # The captures are the run's artifact.
   s2-3:
     name: S2.3 tray icon (${{ matrix.os }})
@@ -324,7 +326,7 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Windows' }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 before
 
-      - name: c. The app starts and its notification-area icon appears (Windows)
+      - name: c. The app starts; UI Automation finds its notification-area button (Windows)
         id: win_launch
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.win_before.outcome == 'success' }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 launch
@@ -333,6 +335,16 @@ jobs:
         id: win_capture
         if: ${{ !cancelled() && steps.win_launch.outcome == 'success' }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 capture
+
+      - name: e. An icon is drawn in that button (Windows)
+        id: win_present
+        if: ${{ !cancelled() && steps.win_capture.outcome == 'success' }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 present
+
+      - name: e. The same check finds no icon on an empty stretch of the taskbar (Windows)
+        id: win_present_refuses
+        if: ${{ !cancelled() && steps.win_capture.outcome == 'success' }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 present-refuses
 
       - name: Quit the app (Windows)
         if: ${{ always() && runner.os == 'Windows' }}
@@ -379,6 +391,8 @@ jobs:
           WIN_BEFORE: ${{ steps.win_before.outcome }}
           WIN_LAUNCH: ${{ steps.win_launch.outcome }}
           WIN_CAPTURE: ${{ steps.win_capture.outcome }}
+          WIN_PRESENT: ${{ steps.win_present.outcome }}
+          WIN_PRESENT_REFUSES: ${{ steps.win_present_refuses.outcome }}
           CLEAN: ${{ steps.clean.outcome }}
         run: |
           result() {
@@ -407,8 +421,10 @@ jobs:
               echo "| h. Tint check fails on that icon | $(result "$TINT_REFUSES") |"
             else
               echo "| b. No Navaja icon in the notification area before the app starts | $(result "$WIN_BEFORE") |"
-              echo "| c. App starts; its icon appears in the notification area | $(result "$WIN_LAUNCH") |"
+              echo "| c. App starts; UI Automation finds its notification-area button | $(result "$WIN_LAUNCH") |"
               echo "| d. Notification area captured at the runner's scale | $(result "$WIN_CAPTURE") |"
+              echo "| e. An icon is drawn in that button | $(result "$WIN_PRESENT") |"
+              echo "| e. Same check finds no icon on an empty stretch of the taskbar | $(result "$WIN_PRESENT_REFUSES") |"
               echo "| Crisp at 100-200 % | needs a person (docs/spikes.md) |"
             fi
             echo "| Tree clean | $(result "$CLEAN") |"
@@ -422,8 +438,9 @@ jobs:
   # must reach it (the control), Navaja's must not, and the same UUID
   # copied the ordinary way must (the lookup's negative control). Windows
   # Server keeps history off, so on windows-2025 those three steps are
-  # skipped and the summary says the runner cannot answer. Scripts:
-  # scripts/spikes/exit-clipboard-check.sh and clipboard-history.ps1.
+  # skipped, the job stays green with a warning, and the summary says the
+  # runner cannot answer. Those three steps have never run with history on.
+  # Scripts: scripts/spikes/exit-clipboard-check.sh and clipboard-history.ps1.
   exit-clipboard-history:
     name: Exit check, copy stays out of clipboard history (windows-2025)
     runs-on: windows-2025
@@ -458,7 +475,8 @@ jobs:
         run: pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
 
       # Sets the step output `enabled`. It fails only on an error, not when
-      # Windows keeps history off.
+      # Windows keeps history off; then it leaves a warning on the run, so
+      # that the green job does not read as the exit check passing.
       - name: b. Turn on clipboard history for the runner's user
         id: enable
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/clipboard-history.ps1 enable
@@ -528,6 +546,17 @@ jobs:
               *) echo "$1" ;;
             esac
           }
+          # The enable step passes when Windows keeps history off, so its
+          # outcome alone would read PASS for history that is not on.
+          enabled() {
+            if [ "$ENABLE" != success ]; then
+              result "$ENABLE"
+            elif [ "$ENABLED" = true ]; then
+              echo PASS
+            else
+              echo 'off: inconclusive (this Windows keeps clipboard history off)'
+            fi
+          }
           # The steps that need clipboard history, where Windows keeps it off.
           history() {
             if [ "$ENABLE" = success ] && [ "$ENABLED" != true ]; then
@@ -542,7 +571,7 @@ jobs:
             echo '| Check | Result |'
             echo '|---|---|'
             echo "| a. End-to-end build | $(result "$BUILD") |"
-            echo "| b. Clipboard history turned on (\`enabled=${ENABLED:-?}\`) | $(result "$ENABLE") |"
+            echo "| b. Clipboard history turned on (\`enabled=${ENABLED:-?}\`) | $(enabled) |"
             echo "| c. Control: an ordinary copy reaches the history | $(history "$CONTROL") |"
             echo "| d. Navaja's Copy button puts a fresh UUID on the clipboard | $(result "$COPY") |"
             echo "| e. Navaja's copy carries the exclusion formats | $(result "$FORMATS") |"

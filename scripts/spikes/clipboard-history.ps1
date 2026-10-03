@@ -10,7 +10,8 @@
 #                  restarts the per-user clipboard service; if the API still says it is off,
 #                  sets the AllowClipboardHistory policy too. Prints "History: on" or
 #                  "History: off" and, on CI, writes enabled=true|false to $GITHUB_OUTPUT.
-#                  It fails only on an error, not when history stays off.
+#                  It fails only on an error, not when history stays off; then it prints a
+#                  ::warning:: annotation.
 #   status         whether history is on, and what it holds
 #   put            puts -Text on the clipboard the ordinary way, with no exclusion formats
 #   clipboard-is   fails unless the clipboard holds -Text
@@ -23,6 +24,13 @@
 #
 # `enable` changes this user's settings and, if needed, a machine policy; it
 # is meant for CI runners.
+#
+# Untested: the history-has and history-lacks modes, and the part of
+# Get-History that reads each item's text (GetTextAsync through AsTask),
+# have never run with history on. Windows Server, the only Windows CI runs
+# on, answers GetHistoryItemsAsync with ClipboardHistoryDisabled and no
+# items. Both modes fail closed: history-lacks needs the status Success, and
+# history-has is its control (exit-clipboard-check.sh, `detects`).
 param(
   [Parameter(Mandatory = $true, Position = 0)]
   [ValidateSet('enable', 'status', 'put', 'clipboard-is', 'formats', 'history-has', 'history-lacks')]
@@ -229,6 +237,9 @@ switch ($Mode) {
       Write-Output 'History: on.'
     } else {
       Write-Output 'History: off. This Windows does not turn clipboard history on, so it cannot show whether a copy stays out of it.'
+      # The step still passes; the warning keeps a green job from reading
+      # as the exit check passing.
+      Write-Output '::warning::clipboard-history: this Windows keeps clipboard history off, so this run cannot show whether a copy stays out of it. The exit check is inconclusive here; the history steps did not run.'
     }
   }
 

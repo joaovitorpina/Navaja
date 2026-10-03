@@ -15,7 +15,7 @@
 #   bash scripts/spikes/s2-3-check.sh present-refuses  # negative control: the same check fails on the baseline
 #   bash scripts/spikes/s2-3-check.sh tint             # monochrome, and a system item's colour in each appearance
 #   bash scripts/spikes/s2-3-check.sh control-build    # quits the app; builds it again with the icon not a template
-#   bash scripts/spikes/s2-3-check.sh tint-refuses     # negative control: `tint` fails on that build's icon
+#   bash scripts/spikes/s2-3-check.sh tint-refuses     # negative control: `tint` fails on that build's icon, on its tint
 #   bash scripts/spikes/s2-3-check.sh stop             # quits the apps; puts the appearance back
 #
 # The modes share a folder, $S23_DIR (default: navaja-s2-3 under
@@ -255,6 +255,41 @@ control_build() {
   echo "Built $CONTROL_APP: the same app, with its tray icon not a template."
 }
 
+# Whether `tint`'s output (file $1) shows it failed for the reason the
+# negative control is about: the icon does not take the system's colour.
+# The helper ends a failed check with one line,
+#   ::error::S2.3 tint: <reason>; <reason>; ...
+# and every reason must be about the icon's tint: its luma against the
+# reference item's, its side of the background, no icon drawn in the dark
+# appearance, or too small a change between the appearances. At least one
+# must be about the dark appearance or that change. Any other reason (no
+# icon in the light capture, a reference item that shows nothing, an icon
+# that is not monochrome) or any other error means the check failed for
+# something else, and so does an output without that line.
+tint_refused_for_tint() {
+  local errors reasons reason dark=0
+  errors=$(grep -F '::error::' "$1" || true)
+  case $errors in
+    '::error::S2.3 tint: '*) ;;
+    *) return 1 ;;
+  esac
+  # One error line only.
+  [ "$(printf '%s\n' "$errors" | wc -l | tr -d ' ')" -eq 1 ] || return 1
+  reasons=${errors#'::error::S2.3 tint: '}
+  # Split on "; " with expansions only, which bash 3.2 has too.
+  while [ -n "$reasons" ]; do
+    reason=${reasons%%; *}
+    if [ "$reason" = "$reasons" ]; then reasons=''; else reasons=${reasons#*; }; fi
+    case $reason in
+      'dark: no icon drawn' | "the icon's luma changes by "*) dark=1 ;;
+      "dark: the icon's luma "* | 'dark: the icon is '*' than the menu bar, the reference '*) dark=1 ;;
+      "light: the icon's luma "* | 'light: the icon is '*' than the menu bar, the reference '*) ;;
+      *) return 1 ;;
+    esac
+  done
+  [ "$dark" -eq 1 ]
+}
+
 # The negative control for `tint`: the same icon, drawn as a plain image,
 # stays black in the dark appearance, and the check must say so.
 tint_refuses() {
@@ -271,11 +306,12 @@ tint_refuses() {
   # shellcheck disable=SC2086
   "$HELPER" tint "$DIR/control-light.png" "$DIR/control-dark.png" $icon $reference \
     > "$DIR/tint-refuses.log" 2>&1 || status=$?
+  # Behind a prefix: the output holds an error on purpose.
   sed 's/^/  | /' "$DIR/tint-refuses.log"
   [ "$status" -ne 0 ] || fail "tint-refuses: the check passed an icon that is not a template"
-  grep -qF 'dark:' "$DIR/tint-refuses.log" ||
-    fail "tint-refuses: the check failed, but not on the dark appearance"
-  echo "The tint check refuses the icon drawn as a plain image."
+  tint_refused_for_tint "$DIR/tint-refuses.log" ||
+    fail "tint-refuses: the check failed, but not only on the icon's tint, or not on the dark appearance"
+  echo "The tint check refuses the icon drawn as a plain image, on its tint in the dark appearance."
 }
 
 stop() {

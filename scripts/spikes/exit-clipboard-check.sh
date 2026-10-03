@@ -18,9 +18,10 @@
 #   bash scripts/spikes/exit-clipboard-check.sh clean            # removes the spec `copy` writes
 #
 # control, absent and detects need clipboard history, which Windows Server
-# does not turn on (`clipboard-history.ps1 enable` says so); copy, formats
-# and formats-refuses do not. `detects` and `formats-refuses` replace the
-# clipboard's contents, so they run last.
+# does not turn on (`clipboard-history.ps1 enable` says so), so they have
+# never run: they are untested. copy, formats and formats-refuses do not
+# need it. `detects` and `formats-refuses` replace the clipboard's
+# contents, so they run last.
 #
 # The modes share a folder, $EXIT_CLIPBOARD_DIR (default:
 # navaja-exit-clipboard under $RUNNER_TEMP, or under the OS's temporary
