@@ -241,3 +241,100 @@ describe('shell', () => {
     expect(await screen.findByText('No such tool.')).toBeTruthy();
   });
 });
+
+const fails = (message: string) => () => {
+  throw new Error(message);
+};
+
+const commandsCalled = (calls: { cmd: string }[], ...names: string[]) =>
+  calls.filter((c) => names.includes(c.cmd)).map((c) => c.cmd);
+
+describe('repository link, logs and quit', () => {
+  it('opens the repository from About through open_url', async () => {
+    const calls = mockApp({});
+    router.go({ kind: 'about' });
+    render(App);
+
+    const repository = await screen.findByRole('button', {
+      name: 'github.com/joaovitorpina/Navaja',
+    });
+    // A button, not a link: the page holds no external href to follow.
+    expect(document.querySelector('a[href*="://"]')).toBeNull();
+    await fireEvent.click(repository);
+
+    await vi.waitFor(() =>
+      expect(calls.filter((c) => c.cmd === 'open_url').map((c) => c.args)).toEqual([
+        { url: 'https://github.com/joaovitorpina/Navaja' },
+      ]),
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('says so, without the URL, when the browser cannot be opened', async () => {
+    mockApp({ commands: { open_url: fails('Could not open the web browser.') } });
+    router.go({ kind: 'about' });
+    render(App);
+
+    await fireEvent.click(
+      await screen.findByRole('button', { name: 'github.com/joaovitorpina/Navaja' }),
+    );
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent?.trim()).toBe('Navaja could not open your web browser.');
+  });
+
+  it('opens the logs folder from Settings', async () => {
+    const calls = mockApp({});
+    router.go({ kind: 'settings' });
+    render(App);
+
+    expect(await screen.findByText(/seven daily log files/)).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Open logs folder' }));
+
+    await vi.waitFor(() => expect(commandsCalled(calls, 'open_logs')).toEqual(['open_logs']));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('says so when the logs folder cannot be opened', async () => {
+    mockApp({ commands: { open_logs: fails('Could not open the file manager.') } });
+    router.go({ kind: 'settings' });
+    render(App);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open logs folder' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent?.trim()).toBe('Navaja could not open its logs folder.');
+  });
+
+  it('offers the logs folder and quitting when the tools could not be loaded', async () => {
+    const calls = mockApp({ commands: { list_tools: fails('registry unavailable') } });
+    render(App);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open logs folder' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Quit Navaja' }));
+
+    await vi.waitFor(() =>
+      expect(commandsCalled(calls, 'open_logs', 'quit')).toEqual(['open_logs', 'quit']),
+    );
+    // Only the start failure itself is reported.
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+  });
+
+  it('says so when the failure view cannot open the logs or quit', async () => {
+    mockApp({
+      commands: {
+        list_tools: fails('registry unavailable'),
+        open_logs: fails('Could not open the file manager.'),
+        quit: fails('ipc unavailable'),
+      },
+    });
+    render(App);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open logs folder' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Quit Navaja' }));
+
+    expect(await screen.findByText('Navaja could not open its logs folder.')).toBeTruthy();
+    expect(await screen.findByText('Navaja could not quit.')).toBeTruthy();
+    expect(screen.getAllByRole('alert')).toHaveLength(3);
+  });
+});
