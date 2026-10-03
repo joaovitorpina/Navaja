@@ -28,9 +28,10 @@ jobs:
   # S2.2: can a custom view live in tools/<id>/ui/, outside app/? A throwaway
   # tool with a custom view (scripts/spikes/s2-2-probe.sh) goes through every
   # check the roadmap's PASS names, each in its own step. svelte-check, ESLint
-  # and Prettier each also get a negative control: files in the view folder
-  # they must refuse. A failed check doesn't stop the ones after it, and the
-  # last step writes a PASS/FAIL table to the run's summary.
+  # and Prettier each also get a negative control, files in the view folder
+  # they must refuse, and HMR is checked at the dev server and in the app's
+  # own webview. A failed check doesn't stop the ones after it, and the last
+  # step writes a PASS/FAIL table to the run's summary.
   s2-2:
     name: S2.2 views outside app/ (${{ matrix.os }})
     strategy:
@@ -136,10 +137,24 @@ jobs:
         if: ${{ !cancelled() && steps.packaged_build.outcome == 'success' }}
         run: bash scripts/spikes/s2-2-check.sh packaged
 
-      - name: h. Vite hot-reloads the view and its import (HMR)
+      - name: h. Vite hot-reloads the view and its import (HMR, dev server)
         id: hmr
         if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
         run: node scripts/spikes/hmr-check.mjs
+
+      # The same app and e2e overlay as g, but built by cargo without Tauri's
+      # custom-protocol feature (`tauri build` always adds it): tauri::is_dev()
+      # is true, so the app loads build.devUrl, the Vite dev server on 1420.
+      # It replaces g's binary in target/debug, so it comes after g.
+      - name: h2. Build the app in dev mode (no custom-protocol)
+        id: hmr_app_build
+        if: ${{ !cancelled() && steps.probe.outcome == 'success' }}
+        run: TAURI_CONFIG="$(cat app/src-tauri/e2e.conf.json)" cargo build -p navaja --features e2e
+
+      - name: h2. HMR in the app's webview
+        id: hmr_app
+        if: ${{ !cancelled() && steps.hmr_app_build.outcome == 'success' }}
+        run: bash scripts/spikes/s2-2-check.sh hmr-app
 
       # Also proves that `remove` puts tools/lib.rs back on every OS.
       - name: Remove the probe; the tree is clean again
@@ -170,6 +185,8 @@ jobs:
           PACKAGED_BUILD: ${{ steps.packaged_build.outcome }}
           PACKAGED: ${{ steps.packaged.outcome }}
           HMR: ${{ steps.hmr.outcome }}
+          HMR_APP_BUILD: ${{ steps.hmr_app_build.outcome }}
+          HMR_APP: ${{ steps.hmr_app.outcome }}
           REMOVE: ${{ steps.remove.outcome }}
         run: |
           result() {
@@ -196,6 +213,8 @@ jobs:
             echo "| f. Build: own chunk, Tailwind class in the CSS (\`pnpm build\`) | $(result "$BUILD") |"
             echo "| g. Packaged app builds (\`tauri build --features e2e\`) | $(result "$PACKAGED_BUILD") |"
             echo "| g. Packaged app shows the view and the answer from Rust | $(result "$PACKAGED") |"
-            echo "| h. HMR for the view and its import | $(result "$HMR") |"
+            echo "| h. HMR for the view and its import, at the dev server | $(result "$HMR") |"
+            echo "| h2. Dev build (\`cargo build --features e2e\`, no custom-protocol) | $(result "$HMR_APP_BUILD") |"
+            echo "| h2. HMR in the app's webview | $(result "$HMR_APP") |"
             echo "| Probe removed, tree clean | $(result "$REMOVE") |"
           } >> "$GITHUB_STEP_SUMMARY"

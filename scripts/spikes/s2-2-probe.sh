@@ -5,7 +5,7 @@
 # hot-reloaded and packaged like code in app/src. It never commits anything.
 #
 # Usage, from anywhere in the repository:
-#   bash scripts/spikes/s2-2-probe.sh create       # the probe, its line in tools/lib.rs, its end-to-end spec
+#   bash scripts/spikes/s2-2-probe.sh create       # the probe, its line in tools/lib.rs, its two end-to-end specs
 #   bash scripts/spikes/s2-2-probe.sh forbid       # adds a .ts and a .svelte file with an import the allowlist refuses
 #   bash scripts/spikes/s2-2-probe.sh unforbid     # removes them again
 #   bash scripts/spikes/s2-2-probe.sh typecheck    # adds a .ts and a .svelte file with a type error each
@@ -26,8 +26,14 @@
 # The view uses one Tailwind class that nothing else in the repository uses,
 # tracking-[0.4242em], so the build check can look for it in the emitted CSS.
 #
-# The end-to-end spec goes to app/e2e/spikes/. `pnpm e2e` runs only
-# app/e2e/specs/, so the spec runs only when named with --spec.
+# The end-to-end specs go to app/e2e/spikes/. `pnpm e2e` runs only
+# app/e2e/specs/, so each runs only when named with --spec:
+# - s2-2-probe.e2e.ts, in the packaged app: the label, the answer from Rust
+#   and the class's letter spacing;
+# - s2-2-hmr.e2e.ts, in a debug build without Tauri's custom-protocol
+#   feature, which loads the front end from the Vite dev server: it edits
+#   label.ts and View.svelte and waits for the page to show each edit
+#   without a reload.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -37,6 +43,7 @@ LINE='    probe,'
 PROBE=tools/probe
 SPEC_DIR=app/e2e/spikes
 SPEC="$SPEC_DIR/s2-2-probe.e2e.ts"
+HMR_SPEC="$SPEC_DIR/s2-2-hmr.e2e.ts"
 FORBIDDEN="$PROBE/ui/forbidden.ts"
 FORBIDDEN_VIEW="$PROBE/ui/Forbidden.svelte"
 TYPED="$PROBE/ui/typed.ts"
@@ -280,8 +287,133 @@ describe('S2.2 probe', () => {
 });
 EOF
 
+  cat > "$HMR_SPEC" <<'EOF'
+// Spike S2.2 (docs/spikes.md): hot reload of the probe's view in the app's
+// own webview. scripts/spikes/s2-2-probe.sh writes this file outside specs/,
+// so `pnpm e2e` skips it; `s2-2-check.sh hmr-app` runs it alone, with app/'s
+// Vite dev server on port 1420 and a debug build without Tauri's
+// custom-protocol feature, which loads the front end from that server
+// (build.devUrl) instead of embedding it.
+//
+// The spec edits the view's files itself, from Node, and puts them back
+// afterwards. Before each edit it marks the page's window object, which a
+// reload replaces: a mark that is still there once the edit shows means the
+// edit arrived through HMR, not through a reload.
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { $, browser, expect } from '@wdio/globals';
+
+const ui = fileURLToPath(new URL('../../../tools/probe/ui/', import.meta.url));
+const LABEL_FILE = join(ui, 'label.ts');
+const VIEW_FILE = join(ui, 'View.svelte');
+const LABEL = 'Probe view from tools/probe/ui';
+/** How long each edit may take to show, in ms. */
+const TIMEOUT = Number(process.env.HMR_CHECK_TIMEOUT_MS) || 20_000;
+
+/** What the spec keeps on the page's window object. */
+type Probed = Window & { s22Mark?: string; s22Seen?: number };
+
+/** Each edited file's original contents, put back in after(). */
+const originals = new Map<string, string>();
+
+/** Rewrites `file` through `change` and returns when, by the clock both sides share. */
+function edit(file: string, change: (text: string) => string): number {
+  const text = readFileSync(file, 'utf8');
+  if (!originals.has(file)) originals.set(file, text);
+  const changed = change(text);
+  if (changed === text) throw new Error(`the edit leaves ${file} as it was`);
+  writeFileSync(file, changed);
+  return Date.now();
+}
+
+/**
+ * Marks the page with `mark`, and has it note the time at which an element
+ * matching `selector` first shows `text`.
+ */
+async function prepare(mark: string, selector: string, text: string): Promise<void> {
+  await browser.execute(
+    (mark, selector, text) => {
+      const page = window as Probed;
+      page.s22Mark = mark;
+      page.s22Seen = undefined;
+      const observer = new MutationObserver(() => {
+        if (document.querySelector(selector)?.textContent !== text) return;
+        page.s22Seen = Date.now();
+        observer.disconnect();
+      });
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    },
+    mark,
+    selector,
+    text,
+  );
+}
+
+/** Waits for the page to show the edit; returns its mark and when the edit showed. */
+async function shown(selector: string, text: string) {
+  await browser.waitUntil(
+    async () => {
+      const element = $(selector);
+      return (await element.isExisting()) && (await element.getText()) === text;
+    },
+    { timeout: TIMEOUT, interval: 50, timeoutMsg: `${selector} did not show "${text}"` },
+  );
+  return browser.execute(() => {
+    const page = window as Probed;
+    return { mark: page.s22Mark, seen: page.s22Seen };
+  });
+}
+
+describe('S2.2 HMR in the webview', () => {
+  after(() => {
+    for (const [file, text] of originals) writeFileSync(file, text);
+  });
+
+  it('loads the front end from the Vite dev server and opens the probe view', async () => {
+    await $('h1').waitForExist({ timeout: 30_000 });
+    expect(await browser.execute(() => window.location.origin)).toBe('http://localhost:1420');
+    await browser.execute(() => {
+      window.location.hash = '#/tool/probe';
+    });
+    await expect($('[data-testid="probe-label"]')).toHaveText(LABEL, { wait: 30_000 });
+    await expect($('[data-testid="probe-answer"]')).toHaveText('Answer from Rust');
+  });
+
+  it('shows an edit to label.ts, which the view imports, without a reload', async () => {
+    const selector = '[data-testid="probe-label"]';
+    const mark = `label-${Date.now()}`;
+    const text = `Probe label, hot-reloaded ${Date.now()}`;
+    await prepare(mark, selector, text);
+    const wrote = edit(LABEL_FILE, (code) => code.replace(`'${LABEL}'`, `'${text}'`));
+    const page = await shown(selector, text);
+    expect(page.mark).toBe(mark);
+    console.log(`S2.2 HMR label.ts: shown ${(page.seen ?? NaN) - wrote} ms after the write.`);
+  });
+
+  it('shows an edit to View.svelte without a reload, and the view still reaches Rust', async () => {
+    const selector = '[data-testid="probe-hmr"]';
+    const mark = `view-${Date.now()}`;
+    const text = `Probe view, hot-reloaded ${Date.now()}`;
+    await prepare(mark, selector, text);
+    const wrote = edit(VIEW_FILE, (code) =>
+      code.replace('</section>', `  <p data-testid="probe-hmr">${text}</p>\n</section>`),
+    );
+    const page = await shown(selector, text);
+    expect(page.mark).toBe(mark);
+    console.log(`S2.2 HMR View.svelte: shown ${(page.seen ?? NaN) - wrote} ms after the write.`);
+    // The new view mounted and ran its action through Rust again; the
+    // label.ts edit is still in it.
+    await expect($('[data-testid="probe-answer"]')).toHaveText('Answer from Rust');
+    await expect($('[data-testid="probe-label"]')).toHaveText(
+      expect.stringContaining('hot-reloaded'),
+    );
+  });
+});
+EOF
+
   register
-  echo "Probe written: $PROBE/, $SPEC, and 'probe,' in $LIB."
+  echo "Probe written: $PROBE/, $SPEC, $HMR_SPEC, and 'probe,' in $LIB."
 }
 
 forbid() {
@@ -354,7 +486,7 @@ unmisformat() {
 }
 
 remove() {
-  rm -rf "$PROBE" "$SPEC"
+  rm -rf "$PROBE" "$SPEC" "$HMR_SPEC"
   # The folder only if the probe's spec was all it held.
   rmdir "$SPEC_DIR" 2> /dev/null || true
   unregister

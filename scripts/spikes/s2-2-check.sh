@@ -13,6 +13,7 @@
 #   bash scripts/spikes/s2-2-check.sh vitest             # pnpm test, with the probe's View.test.ts among the passes
 #   bash scripts/spikes/s2-2-check.sh build              # pnpm build: the view in a chunk of its own, its class in the CSS
 #   bash scripts/spikes/s2-2-check.sh packaged           # the probe's end-to-end spec, after the e2e build
+#   bash scripts/spikes/s2-2-check.sh hmr-app            # Vite on port 1420, then the HMR spec in a dev build
 #
 # The *-refuses checks add their files to the probe and remove them again on
 # exit, pass or fail. They print what they ran with a prefix: the output holds
@@ -21,8 +22,13 @@
 #
 # `packaged` needs the end-to-end build first:
 #   pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
-# On Linux it runs inside dbus-run-session and xvfb-run, as ci.yml does, but
-# without the strace network guard, which runs the whole suite only.
+# `hmr-app` needs a debug build without Tauri's custom-protocol feature, which
+# `tauri build` always turns on, so plain cargo, with the same e2e overlay:
+#   TAURI_CONFIG="$(cat app/src-tauri/e2e.conf.json)" cargo build -p navaja --features e2e
+# Both builds write target/debug/navaja, so each check runs on the build made
+# just before it. On Linux both run inside dbus-run-session and xvfb-run, as
+# ci.yml does, but without the strace network guard, which runs the whole
+# suite only.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -31,7 +37,11 @@ cd "$(git rev-parse --show-toplevel)"
 # uses (s2-2-probe.sh), as Tailwind writes its selector.
 SELECTOR='.tracking-\[0\.4242em\]'
 SPEC=app/e2e/spikes/s2-2-probe.e2e.ts
+HMR_SPEC=app/e2e/spikes/s2-2-hmr.e2e.ts
 PROBE_UI=tools/probe/ui
+# build.devUrl in app/src-tauri/tauri.conf.json, where a dev build loads the
+# front end from.
+DEV_URL=http://localhost:1420/
 
 fail() {
   echo "::error::S2.2 $*"
@@ -50,6 +60,7 @@ native_tmp() {
 # one. The commands run last registered first, then the folder goes.
 TMP=$(native_tmp)
 CLEANUP=''
+VITE_PID=''
 on_exit() {
   CLEANUP="$1"$'\n'"$CLEANUP"
 }
@@ -208,6 +219,57 @@ packaged() {
   e2e "$(native_path "$SPEC")"
 }
 
+stop_vite() {
+  [ -n "$VITE_PID" ] || return 0
+  kill "$VITE_PID" 2> /dev/null || true
+  wait "$VITE_PID" 2> /dev/null || true
+  VITE_PID=''
+}
+
+# Hot reload in the app's own webview, beyond the dev server alone
+# (hmr-check.mjs). A build without Tauri's custom-protocol feature runs with
+# tauri::is_dev() true: it loads build.devUrl, the guard allows the dev
+# server, and on Linux the window gets no dead proxy (window.rs). The spec
+# edits the view's files and puts them back; this script's exit does too, in
+# case the spec never got that far.
+hmr_app() {
+  local exe=target/debug/navaja status=0 i
+  [ -f "$HMR_SPEC" ] || fail "hmr-app: no $HMR_SPEC; run s2-2-probe.sh create first"
+  case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) exe=$exe.exe ;; esac
+  [ -f "$exe" ] || fail "hmr-app: no $exe; build it first (see the top of $0)"
+  # The app would load whatever answers there.
+  if curl -sf -o /dev/null "$DEV_URL"; then
+    fail "hmr-app: something already answers on $DEV_URL; stop it first"
+  fi
+
+  cp "$PROBE_UI/label.ts" "$PROBE_UI/View.svelte" "$TMP/"
+  on_exit 'cp "$TMP/label.ts" "$TMP/View.svelte" "$PROBE_UI/"'
+
+  # app/'s own Vite, as `pnpm dev` starts it: port 1420 and strictPort from
+  # vite.config.ts. Node runs it directly, so that stopping this one process
+  # stops the server. NO_COLOR keeps its log readable.
+  (cd app && NO_COLOR=1 exec node node_modules/vite/bin/vite.js) > "$TMP/vite.log" 2>&1 &
+  VITE_PID=$!
+  on_exit stop_vite
+  for ((i = 0; ; i++)); do
+    if ! kill -0 "$VITE_PID" 2> /dev/null; then
+      show "$TMP/vite.log"
+      fail "hmr-app: Vite exited before it answered on $DEV_URL"
+    fi
+    curl -sf -o /dev/null "$DEV_URL" && break
+    [ "$i" -lt 120 ] || fail "hmr-app: Vite did not answer on $DEV_URL within 60 s"
+    sleep 0.5
+  done
+  echo "Vite answers on $DEV_URL."
+
+  NAVAJA_E2E_BINARY=$(native_path "$exe") e2e "$(native_path "$HMR_SPEC")" || status=$?
+  stop_vite
+  echo "Vite's output:"
+  show "$TMP/vite.log"
+  [ "$status" -eq 0 ] || fail "hmr-app: the HMR spec failed (exit $status)"
+  echo "The app's webview showed both edits without a reload."
+}
+
 case "${1:-}" in
   registry) registry ;;
   typecheck-refuses) typecheck_refuses ;;
@@ -216,8 +278,9 @@ case "${1:-}" in
   vitest) vitest ;;
   build) build ;;
   packaged) packaged ;;
+  hmr-app) hmr_app ;;
   *)
-    echo "usage: $0 registry|typecheck-refuses|lint-refuses|prettier-refuses|vitest|build|packaged" >&2
+    echo "usage: $0 registry|typecheck-refuses|lint-refuses|prettier-refuses|vitest|build|packaged|hmr-app" >&2
     exit 2
     ;;
 esac
