@@ -2,14 +2,16 @@
   import { t } from '$lib/i18n';
   import { openLogs } from '$lib/ipc';
 
-  let failed = $state(false);
+  // Failed tries in a row. Each failure renders a new alert node, so a
+  // screen reader announces a repeated failure again.
+  let failures = $state(0);
 
   async function open() {
     try {
       await openLogs();
-      failed = false;
+      failures = 0;
     } catch {
-      failed = true;
+      failures += 1;
     }
   }
 </script>
@@ -20,9 +22,11 @@
     class="rounded-md border border-line bg-surface px-2.5 py-1 hover:bg-subtle"
     onclick={open}>{t('shell.logs.open', 'Open logs folder')}</button
   >
-  {#if failed}
-    <p role="alert" class="text-danger">
-      {t('shell.logs.open_failed', 'Navaja could not open its logs folder.')}
-    </p>
+  {#if failures > 0}
+    {#key failures}
+      <p role="alert" class="text-danger">
+        {t('shell.logs.open_failed', 'Navaja could not open its logs folder.')}
+      </p>
+    {/key}
   {/if}
 </div>

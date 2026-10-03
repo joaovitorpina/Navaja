@@ -6,7 +6,9 @@
   import { REPOSITORY_URL } from '$lib/links';
 
   let info = $state<AppInfo | null>(null);
-  let openFailed = $state(false);
+  // Failed tries in a row; each failure renders a new alert node, so a
+  // screen reader announces a repeated failure again.
+  let openFailures = $state(0);
 
   // Shown without the scheme. A button, not a link: the page holds no
   // external href that a click, middle-click or prefetch could follow.
@@ -19,9 +21,9 @@
   async function openRepo() {
     try {
       await openRepository();
-      openFailed = false;
+      openFailures = 0;
     } catch {
-      openFailed = true;
+      openFailures += 1;
     }
   }
 </script>
@@ -49,9 +51,11 @@
       >{t('shell.about.repository_hint', 'Opens in your web browser.')}</span
     >
   </p>
-  {#if openFailed}
-    <p role="alert" class="text-sm text-danger">
-      {t('shell.about.repository_failed', 'Navaja could not open your web browser.')}
-    </p>
+  {#if openFailures > 0}
+    {#key openFailures}
+      <p role="alert" class="text-sm text-danger">
+        {t('shell.about.repository_failed', 'Navaja could not open your web browser.')}
+      </p>
+    {/key}
   {/if}
 </div>

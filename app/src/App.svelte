@@ -11,7 +11,9 @@
   let catalog = $state.raw<Catalog | null>(null);
   let info = $state.raw<AppInfo | null>(null);
   let failed = $state<string | null>(null);
-  let quitFailed = $state(false);
+  // Failed tries in a row; each failure renders a new alert node, so a
+  // screen reader announces a repeated failure again.
+  let quitFailures = $state(0);
 
   onMount(async () => {
     try {
@@ -35,7 +37,7 @@
     try {
       await quitApp();
     } catch {
-      quitFailed = true;
+      quitFailures += 1;
     }
   }
 </script>
@@ -57,10 +59,12 @@
       class="rounded-md border border-line bg-surface px-2.5 py-1 text-sm hover:bg-subtle"
       onclick={quit}>{t('shell.quit', 'Quit Navaja')}</button
     >
-    {#if quitFailed}
-      <p role="alert" class="text-sm text-danger">
-        {t('shell.quit_failed', 'Navaja could not quit.')}
-      </p>
+    {#if quitFailures > 0}
+      {#key quitFailures}
+        <p role="alert" class="text-sm text-danger">
+          {t('shell.quit_failed', 'Navaja could not quit.')}
+        </p>
+      {/key}
     {/if}
   </main>
 {/if}
