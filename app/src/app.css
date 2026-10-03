@@ -1,10 +1,21 @@
 @import 'tailwindcss';
 
-/* Custom views live with their tools; Tailwind must see their classes. */
-@source '../../tools/*/ui';
+/* Custom views live with their tools; Tailwind must see their classes. The
+   glob names files: one ending in a directory matched nothing (S2.2). */
+@source '../../tools/*/ui/**/*.{svelte,ts}';
 
-/* `data-theme` (set from Settings) overrides the OS preference. */
-@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+/* `data-theme` (set from Settings) overrides the OS preference; without it
+   (Theme = system) `dark:` follows the OS, like the tokens below. */
+@custom-variant dark {
+  &:where([data-theme='dark'], [data-theme='dark'] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme='light']), :root:not([data-theme='light']) *) {
+      @slot;
+    }
+  }
+}
 
 /* Palette tokens from assets/brand/GUIDELINES.md. */
 :root {
@@ -24,7 +35,7 @@
     --nv-steel-900: #e6e8eb;
     --nv-steel-600: #9da5ae;
     --nv-steel-200: #30363d;
-    --nv-steel-100: #161b22;
+    --nv-steel-100: #21262d;
     --nv-steel-50: #0d1117;
     --nv-surface: #161b22;
     --nv-brass-500: #d69e2e;
@@ -37,7 +48,7 @@
   --nv-steel-900: #e6e8eb;
   --nv-steel-600: #9da5ae;
   --nv-steel-200: #30363d;
-  --nv-steel-100: #161b22;
+  --nv-steel-100: #21262d;
   --nv-steel-50: #0d1117;
   --nv-surface: #161b22;
   --nv-brass-500: #d69e2e;

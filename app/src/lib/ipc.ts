@@ -4,7 +4,6 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import type { AppInfo } from '$bindings/AppInfo';
 import type { Catalog } from '$bindings/Catalog';
 import type { Progress } from '$bindings/Progress';
-import type { RunEnvelope } from '$bindings/RunEnvelope';
 import type { SearchHit } from '$bindings/SearchHit';
 import type { Settings } from '$bindings/Settings';
 import type { ToolError } from '$bindings/ToolError';
@@ -31,9 +30,13 @@ export const listTools = (): Promise<Catalog> => invoke<Catalog>('list_tools');
 export const searchTools = (query: string): Promise<SearchHit[]> =>
   invoke<SearchHit[]>('search', { query });
 
-/** Copies through Rust; sensitive copies stay out of clipboard history and sync. */
-export const copyText = (text: string, sensitive = true): Promise<void> =>
-  invoke<void>('copy_text', { text, sensitive });
+/**
+ * Copies through Rust, which always adds the OS's exclusion markers: on Windows
+ * the copy stays out of clipboard history, cloud sync and clipboard monitors;
+ * on macOS, out of history apps that honour the marker; on Linux, out of
+ * Klipper-style clipboard managers.
+ */
+export const copyText = (text: string): Promise<void> => invoke<void>('copy_text', { text });
 
 export const getSettings = (): Promise<Settings> => invoke<Settings>('settings_get');
 
@@ -50,7 +53,7 @@ export function runTool(
   const runId = crypto.randomUUID();
   const progress = new Channel<Progress>();
   if (onProgress) progress.onmessage = onProgress;
-  const result = invoke<ArrayBuffer | RunEnvelope>('run_tool', {
+  const result = invoke<unknown>('run_tool', {
     tool,
     action,
     runId,
@@ -60,13 +63,31 @@ export function runTool(
   return { runId, result, cancel: () => invoke<boolean>('cancel_run', { runId }) };
 }
 
-/** `run_tool` answers with raw JSON bytes (an ArrayBuffer); mocks may answer with objects. */
-export function decodeEnvelope(raw: ArrayBuffer | ArrayBufferView | RunEnvelope): RunResult {
-  const envelope: RunEnvelope = isBytes(raw)
-    ? (JSON.parse(new TextDecoder().decode(raw)) as RunEnvelope)
-    : raw;
-  if ('ok' in envelope) return { ok: true, value: envelope.ok as ToolOutput };
-  return { ok: false, error: envelope.err };
+const MALFORMED = 'malformed run_tool response';
+
+/**
+ * `run_tool` answers with raw JSON bytes: an ArrayBuffer, or an array of
+ * numbers when Tauri falls back to postMessage IPC. Mocks may answer with
+ * objects. Anything else becomes a `core.ipc` error, never a silent failure.
+ */
+export function decodeEnvelope(raw: unknown): RunResult {
+  let envelope: unknown = raw;
+  try {
+    if (Array.isArray(raw)) envelope = parseBytes(Uint8Array.from(raw as number[]));
+    else if (isBytes(raw)) envelope = parseBytes(raw);
+  } catch {
+    // Not the parser's message: it can quote part of the output.
+    return ipcFailure(MALFORMED);
+  }
+  if (isRecord(envelope) && isRecord(envelope.ok)) {
+    return { ok: true, value: envelope.ok as ToolOutput };
+  }
+  if (isRecord(envelope) && isToolError(envelope.err)) return { ok: false, error: envelope.err };
+  return ipcFailure(MALFORMED);
+}
+
+function parseBytes(bytes: ArrayBuffer | ArrayBufferView): unknown {
+  return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 /** Realm-independent: buffers can come from another JS realm (iframes, test runners). */
@@ -76,6 +97,14 @@ function isBytes(raw: unknown): raw is ArrayBuffer | ArrayBufferView {
     ArrayBuffer.isView(raw) ||
     Object.prototype.toString.call(raw) === '[object ArrayBuffer]'
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isToolError(value: unknown): value is ToolError {
+  return isRecord(value) && typeof value.code === 'string' && typeof value.message === 'string';
 }
 
 function ipcFailure(error: unknown): RunResult {

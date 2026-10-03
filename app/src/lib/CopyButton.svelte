@@ -2,17 +2,13 @@
   import { copyText } from './ipc';
   import { t } from './i18n';
 
-  let {
-    text,
-    label = t('shell.copy', 'Copy'),
-    sensitive = true,
-  }: { text: string; label?: string; sensitive?: boolean } = $props();
+  let { text, label = t('shell.copy', 'Copy') }: { text: string; label?: string } = $props();
 
   let state = $state<'idle' | 'copied' | 'failed'>('idle');
 
   async function copy() {
     try {
-      await copyText(text, sensitive);
+      await copyText(text);
       state = 'copied';
     } catch {
       state = 'failed';

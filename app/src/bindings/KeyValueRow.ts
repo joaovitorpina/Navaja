@@ -2,7 +2,7 @@
 
 export type KeyValueRow = { key: string, value: string, note?: string, 
 /**
- * Masked in the UI until revealed; copied through the sensitive path.
+ * Masked in the UI until revealed; its Copy button copies it unrevealed.
  * Always explicit, so a forgotten flag can't silently unmask a value.
  */
 secret: boolean, };

@@ -20,7 +20,15 @@ const DEFAULT_FILTER: &str = "warn,navaja_lib=info,navaja_core=info,navaja_tools
 pub fn init(app_dir: Option<&Path>) -> LogGuard {
     let filter =
         EnvFilter::try_from_env(FILTER_ENV).unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
+    init_with(app_dir, filter)
+}
 
+/// `init` with explicit `EnvFilter` directives instead of `NAVAJA_LOG`.
+pub fn init_with_directives(app_dir: Option<&Path>, directives: &str) -> LogGuard {
+    init_with(app_dir, EnvFilter::new(directives))
+}
+
+fn init_with(app_dir: Option<&Path>, filter: EnvFilter) -> LogGuard {
     let file = app_dir.and_then(|dir| {
         let logs = dir.join("logs");
         crate::paths::ensure_private_dir(&logs).ok()?;

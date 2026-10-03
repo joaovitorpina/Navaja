@@ -38,7 +38,7 @@
     >
       {#each control.choices as choice (choice.value)}
         <option value={choice.value}>
-          {t(`tool.${toolId}.option.${option.key}.${choice.value}`, choice.label)}
+          {t(`tool.${toolId}.option.${option.key}.choice.${choice.value}`, choice.label)}
         </option>
       {/each}
     </select>
@@ -46,11 +46,14 @@
 {:else if control.kind === 'integer'}
   <label class="flex flex-col gap-1 text-sm" for={id}>
     <span class="text-muted">{label}</span>
+    <!-- Required: a blank or non-numeric field is invalid and blocks the form,
+         instead of silently sending the last number it held. -->
     <input
       {id}
       type="number"
       inputmode="numeric"
-      class="w-32 rounded-md border border-muted bg-surface px-2 py-1.5"
+      class="w-32 rounded-md border border-muted bg-surface px-2 py-1.5 user-invalid:border-danger"
+      required
       min={control.min}
       max={control.max}
       step="1"

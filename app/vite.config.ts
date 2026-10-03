@@ -18,6 +18,11 @@ export default defineConfig({
     },
     // Svelte 5 components must resolve to their browser build under Vitest.
     conditions: process.env.VITEST ? ['browser'] : undefined,
+    // Custom-view tests live in tools/<id>/ui, outside app/, where pnpm
+    // installs nothing: resolve their test packages from app/.
+    dedupe: process.env.VITEST
+      ? ['@tauri-apps/api', '@testing-library/svelte', 'vitest']
+      : undefined,
   },
   clearScreen: false,
   server: {
@@ -33,7 +38,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', '../tools/*/ui/**/*.test.ts'],
     setupFiles: ['src/test-setup.ts'],
   },
 });

@@ -381,10 +381,28 @@ fn rejects_malformed_metadata_with_a_specific_problem() {
         ),
         ("generator action", Box::new(|m| m.ui = generator("nope"))),
         (
-            "run_on_open",
+            "generator action `go` cannot be destructive",
             Box::new(|m| {
                 m.ui = generator("go");
                 m.actions[0] = ActionMeta::new("go", "Go").destructive();
+            }),
+        ),
+        (
+            "generator action `go` cannot be destructive",
+            Box::new(|m| {
+                m.ui = generator("go");
+                if let UiSpec::Generator(spec) = &mut m.ui {
+                    spec.run_on_open = false;
+                }
+                m.actions[0] = ActionMeta::new("go", "Go").destructive();
+            }),
+        ),
+        (
+            "action `a",
+            Box::new(|m| {
+                let long = "a".repeat(ActionMeta::MAX_ID_LEN + 1);
+                m.actions[0] = ActionMeta::new(&long, "Go");
+                m.ui = transform(&[&long]);
             }),
         ),
         (
