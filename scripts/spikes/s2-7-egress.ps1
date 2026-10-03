@@ -11,17 +11,29 @@
 # - "Process Creation" auditing (4688) logs each process started, with its
 #   parent, so the process tree comes from the log, not from polling;
 # - the DNS client's Operational log records each name a process asks the
-#   DNS client for, with that process's ID.
+#   DNS client for, with that process's ID;
+# - the BITS client's Operational log records each download job, with the
+#   process that created it and its URLs: BITS downloads for that process
+#   from its own service.
 # The process tree is every navaja.exe started in the phase and every process
 # it starts, at any depth: WebView2's msedgewebview2.exe processes included.
 # A connection from the tree to an address other than loopback is a finding,
-# and so is a DNS query from it. So is a DNS query for one of the egress
-# canary's hosts, whichever process asks.
+# and so are a DNS query from it and a BITS job it created. So is a DNS query
+# for one of the egress canary's hosts, whichever process asks.
+#
+# Other services can act for the tree without any log naming it: WAM's
+# account broker and its sign-in service, for one. So a baseline, 5 min
+# without the app, gives each process outside the tree an identity (its
+# image, plus the services it hosts or the COM server it is), and each later
+# phase lists the connections from identities that made none in the
+# baseline. That list is for a person to review, and fails nothing: the
+# runner's own scheduled tasks and services come and go.
 #
 # pktmon, built into Windows, also captures the NICs' packets for each phase
 # (cut to 512 bytes). It names no process, but its DNS packets
 # (s2-7-dns.mjs) name the hosts behind the findings: WebView2's network
 # service sends DNS queries itself, which the DNS client's log never sees.
+# The copy kept for the artifact holds only the headers of other packets.
 param(
   [Parameter(Mandatory = $true, Position = 0)][string]$Mode,
   [Parameter(Position = 1)][string]$Phase = ''
@@ -49,10 +61,14 @@ $IdleSeconds = 300
 if ($env:S2_7_IDLE_SECONDS) { $IdleSeconds = [int]$env:S2_7_IDLE_SECONDS }
 # Part of every host the egress canary asks for (app/e2e/specs/egress.e2e.ts).
 $Canary = 'navaja-canary'
+# The images of the tree, and the one it starts from.
+$TreeImages = @('navaja.exe', 'msedgewebview2.exe')
+$RootImages = @('navaja.exe')
 # Audit subcategories, by GUID so that a localized Windows reads them too.
 $AuditConnection = '{0CCE9226-69AE-11D9-BED3-505054503030}' # Filtering Platform Connection
 $AuditProcess = '{0CCE922B-69AE-11D9-BED3-505054503030}'    # Process Creation
 $DnsLog = 'Microsoft-Windows-DNS-Client/Operational'
+$BitsLog = 'Microsoft-Windows-Bits-Client/Operational'
 $AuditKey = 'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System\Audit'
 
 function Fail([string]$Message) {
@@ -96,11 +112,15 @@ function Get-Port([string]$Endpoint) {
   return $Endpoint.Substring($Endpoint.LastIndexOf(':') + 1)
 }
 
+function ConvertTo-Time($Time) {
+  if ($Time -is [datetime]) { return $Time }
+  return [datetime]::Parse([string]$Time, $null, [Globalization.DateTimeStyles]::RoundtripKind)
+}
+
 # Seconds from the phase's start, as "+12.3 s". ConvertFrom-Json may have
 # turned the ISO time into a DateTime already.
 function Format-Offset($Time, [datetime]$Start) {
-  $at = $Time
-  if ($at -isnot [datetime]) { $at = [datetime]::Parse([string]$Time, $null, [Globalization.DateTimeStyles]::RoundtripKind) }
+  $at = ConvertTo-Time $Time
   return ('+{0:0.0} s' -f ($at.ToUniversalTime() - $Start.ToUniversalTime()).TotalSeconds)
 }
 
@@ -135,8 +155,10 @@ function Invoke-Setup {
   Assert-Exit 'wevtutil (Security log size)'
   wevtutil sl $DnsLog /e:true /ms:268435456
   Assert-Exit 'wevtutil (DNS client log)'
+  wevtutil sl $BitsLog /e:true /ms:67108864
+  Assert-Exit 'wevtutil (BITS client log)'
   auditpol /get "/subcategory:$AuditConnection,$AuditProcess"
-  Write-Host "DNS client log: $((Get-WinEvent -ListLog $DnsLog).IsEnabled)"
+  Write-Host "DNS client log: $((Get-WinEvent -ListLog $DnsLog).IsEnabled); BITS client log: $((Get-WinEvent -ListLog $BitsLog).IsEnabled)"
   $webview = Get-ItemProperty -ErrorAction SilentlyContinue `
     'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
   if ($webview) { Write-Host "WebView2 Runtime: $($webview.pv)" }
@@ -158,16 +180,46 @@ function Invoke-Teardown {
   wevtutil sl $DnsLog /e:false
   auditpol /get "/subcategory:$AuditConnection,$AuditProcess"
   Write-Host 'Audit policy restored; DNS client log off.'
+  Hide-CommandLines
   # A native command's exit status must not become this script's.
   exit 0
+}
+
+# The exported 4688 events keep a command line only for the tree's images,
+# and the service or COM server name of the others: the rest belongs to the
+# runner, and the artifact can be downloaded by anyone who can see the run.
+function Hide-CommandLines {
+  foreach ($file in @(Get-ChildItem -Path $Out -Filter '*-security.json' -ErrorAction SilentlyContinue)) {
+    $events = @(Read-Json $file.FullName)
+    $hidden = 0
+    foreach ($entry in $events) {
+      if ($entry.Id -ne 4688) { continue }
+      $image = (Split-Path -Leaf (Get-Field $entry 'NewProcessName')).ToLowerInvariant()
+      if ($TreeImages -contains $image) { continue }
+      $line = Get-Field $entry 'CommandLine'
+      $kept = ''
+      if ($line -match '\s-s\s+(\S+)') { $kept = " -s $($Matches[1])" }
+      elseif ($line -match '-ServerName:(\S+)') { $kept = " -ServerName:$($Matches[1])" }
+      $entry | Add-Member -Force -NotePropertyName CommandLine -NotePropertyValue "(hidden)$kept"
+      $hidden++
+    }
+    Save-Json $file.FullName $events
+    Write-Host "$($file.Name): command lines of $hidden processes outside the tree hidden for the artifact."
+  }
 }
 
 # --- Exporting a phase's events ---------------------------------------------------
 
 # Events as flat objects: time (UTC), ID, the process that logged it, and the
-# named EventData fields.
+# named EventData fields. A log that can't be read fails the run; only "no
+# events" is empty.
 function Read-Events([hashtable]$Filter) {
-  $records = @(Get-WinEvent -FilterHashtable $Filter -ErrorAction SilentlyContinue)
+  try {
+    $records = @(Get-WinEvent -FilterHashtable $Filter -ErrorAction Stop)
+  } catch {
+    if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') { return }
+    Fail "reading the $($Filter.LogName) log failed: $_"
+  }
   foreach ($record in $records) {
     $row = [ordered]@{
       Time = $record.TimeCreated.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
@@ -185,6 +237,47 @@ function Read-Events([hashtable]$Filter) {
   }
 }
 
+# Fails if the log's oldest event is newer than the phase's start: it
+# wrapped, so events of the phase are missing. An empty log lost nothing.
+function Assert-LogCovers([string]$Name, [string]$Log, [datetime]$Start) {
+  try {
+    $oldest = Get-WinEvent -LogName $Log -Oldest -MaxEvents 1 -ErrorAction Stop
+  } catch {
+    if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') { return }
+    Fail "${Name}: reading the $Log log failed: $_"
+  }
+  if ($oldest.TimeCreated -gt $Start) {
+    Fail "${Name}: the $Log log starts after the phase did; it wrapped, so events are missing"
+  }
+}
+
+# A lookup of a name of this script's own at the end of each phase. The DNS
+# client's log must hold it, or it stopped recording during the phase, and
+# the tree's queries could be missing for that reason alone.
+function Send-DnsMarker([string]$Name) {
+  $marker = "s27-end-of-$Name.example.com"
+  try { [System.Net.Dns]::GetHostAddresses($marker) | Out-Null } catch { }
+  return $marker
+}
+
+# The processes running now, with the services each one hosts, into
+# <name>-processes-<when>.json: the identities of processes outside the tree.
+function Save-Snapshot([string]$Name, [string]$When) {
+  $services = @{}
+  foreach ($service in @(Get-CimInstance Win32_Service | Where-Object { $_.ProcessId -gt 0 })) {
+    $key = [int64]$service.ProcessId
+    if (-not $services.ContainsKey($key)) { $services[$key] = @() }
+    $services[$key] += $service.Name
+  }
+  $list = @(Get-CimInstance Win32_Process | ForEach-Object {
+      $key = [int64]$_.ProcessId
+      $hosted = ''
+      if ($services.ContainsKey($key)) { $hosted = (@($services[$key] | Sort-Object) -join ',') }
+      [pscustomobject]@{ ProcessId = $key; Name = $_.Name; Services = $hosted }
+    })
+  Save-Json "$Out\$Name-processes-$When.json" $list
+}
+
 # pktmon on every NIC, for one phase. A capture left by an earlier step is
 # stopped first; packet filters are cleared, so every packet is kept.
 function Start-Capture([string]$Name) {
@@ -194,66 +287,84 @@ function Start-Capture([string]$Name) {
   Assert-Exit 'pktmon start'
 }
 
-# Stops pktmon, converts its log to <name>.pcapng, and writes the DNS
-# messages in it to <name>-dns-packets.json.
+# Stops pktmon, converts its log to a pcapng, and writes the DNS messages in
+# it to <name>-dns-packets.json. <name>.pcapng keeps only the headers of the
+# other packets.
 function Stop-Capture([string]$Name) {
   pktmon stop | Out-Host
   Assert-Exit 'pktmon stop'
-  pktmon etl2pcap "$Out\$Name.etl" --out "$Out\$Name.pcapng" | Out-Host
+  pktmon etl2pcap "$Out\$Name.etl" --out "$Out\$Name.full.pcapng" | Out-Host
   Assert-Exit 'pktmon etl2pcap'
   Remove-Item "$Out\$Name.etl" -ErrorAction SilentlyContinue
-  & node scripts/spikes/s2-7-dns.mjs "$Out\$Name.pcapng" | Set-Content -Path "$Out\$Name-dns-packets.json" -Encoding utf8
+  & node scripts/spikes/s2-7-dns.mjs "$Out\$Name.full.pcapng" --strip "$Out\$Name.pcapng" |
+    Set-Content -Path "$Out\$Name-dns-packets.json" -Encoding utf8
   Assert-Exit 's2-7-dns.mjs'
+  $full = (Get-Item "$Out\$Name.full.pcapng").Length
+  Remove-Item "$Out\$Name.full.pcapng"
   $messages = @(Read-Json "$Out\$Name-dns-packets.json")
-  Write-Host "${Name}: pktmon captured $((Get-Item "$Out\$Name.pcapng").Length) bytes; $($messages.Count) DNS messages over UDP in them."
+  Write-Host ("${Name}: pktmon captured $full bytes; $($messages.Count) DNS messages over UDP in them. " +
+    "The copy kept, headers only but for DNS: $((Get-Item "$Out\$Name.pcapng").Length) bytes.")
 }
 
-# Writes <name>-security.json and <name>-dns.json: every event of the phase,
-# from any process, so that a person can check what the analysis kept.
-function Export-Phase([string]$Name, [datetime]$Start, [datetime]$End) {
-  $oldest = Get-WinEvent -LogName Security -Oldest -MaxEvents 1
-  if ($oldest.TimeCreated -gt $Start) {
-    Fail "${Name}: the Security log starts after the phase did; it wrapped, so events are missing"
-  }
+# Writes <name>-security.json, -dns.json and -bits.json: every event of the
+# phase, from any process, so that a person can check what the analysis kept.
+function Export-Phase([string]$Name, [datetime]$Start, [datetime]$End, [string]$Marker) {
+  Assert-LogCovers $Name 'Security' $Start
+  Assert-LogCovers $Name $DnsLog $Start
+  Assert-LogCovers $Name $BitsLog $Start
   $security = @(Read-Events @{ LogName = 'Security'; Id = 4688, 5156, 5157, 5158, 5159; StartTime = $Start; EndTime = $End })
   $dns = @(Read-Events @{ LogName = $DnsLog; StartTime = $Start; EndTime = $End })
+  $bits = @(Read-Events @{ LogName = $BitsLog; StartTime = $Start; EndTime = $End })
   $window = [ordered]@{
     Start = $Start.ToUniversalTime().ToString('o')
     End = $End.ToUniversalTime().ToString('o')
+    Marker = $Marker
   }
   Save-Json "$Out\$Name-window.json" $window
   Save-Json "$Out\$Name-security.json" $security
   Save-Json "$Out\$Name-dns.json" $dns
-  Write-Host ("${Name}: exported $($security.Count) security events (4688, 5156-5159) and " +
-    "$($dns.Count) DNS client events, $($window.Start) to $($window.End).")
+  Save-Json "$Out\$Name-bits.json" $bits
+  Write-Host ("${Name}: exported $($security.Count) security events (4688, 5156-5159), " +
+    "$($dns.Count) DNS client events and $($bits.Count) BITS client events, $($window.Start) to $($window.End).")
+  if ($dns.Count -eq 0) {
+    Fail "${Name}: the DNS client log holds no event from the phase, though the runner looks names up all the time; it is not recording"
+  }
+  if (@($dns | Where-Object { (Get-Field $_ 'QueryName') -like "$Marker*" }).Count -eq 0) {
+    Fail "${Name}: the DNS client log does not hold this script's lookup of $Marker at the phase's end; it stopped recording, so the tree's queries could be missing"
+  }
 }
 
 # --- Analysis ---------------------------------------------------------------------
 
-# The tree, from 4688: each process whose image is one of $RootImages (and,
-# if $RootPids is given, whose PID is in it), and each process started by one
-# already in the tree, at any depth. Keyed by PID.
-function Get-Tree($Security, [string[]]$RootImages, [int64[]]$RootPids) {
-  $created = @(foreach ($entry in $Security) {
+# The processes started in the phase, from 4688.
+function Get-Created($Security) {
+  return @(foreach ($entry in $Security) {
       if ($entry.Id -ne 4688) { continue }
       [pscustomobject]@{
         ProcessId = ConvertTo-ProcessId (Get-Field $entry 'NewProcessId')
         Parent = ConvertTo-ProcessId (Get-Field $entry 'ProcessId')
+        ParentImage = Split-Path -Leaf (Get-Field $entry 'ParentProcessName')
         Image = Get-Field $entry 'NewProcessName'
         CommandLine = Get-Field $entry 'CommandLine'
         Time = $entry.Time
       }
     })
+}
+
+# The tree, from 4688: each process whose image is one of $Roots (and,
+# if $RootPids is given, whose PID is in it), and each process started by one
+# already in the tree, at any depth. Keyed by PID.
+function Get-Tree($Created, [string[]]$Roots, [int64[]]$RootPids) {
   $tree = @{}
-  foreach ($process in $created) {
+  foreach ($process in $Created) {
     $image = Split-Path -Leaf $process.Image
-    if ($RootImages -notcontains $image.ToLowerInvariant()) { continue }
+    if ($Roots -notcontains $image.ToLowerInvariant()) { continue }
     if ($RootPids -and $RootPids -notcontains $process.ProcessId) { continue }
     $tree[$process.ProcessId] = $process
   }
   do {
     $added = 0
-    foreach ($process in $created) {
+    foreach ($process in $Created) {
       if (-not $tree.ContainsKey($process.ProcessId) -and $tree.ContainsKey($process.Parent)) {
         $tree[$process.ProcessId] = $process
         $added++
@@ -261,6 +372,87 @@ function Get-Tree($Security, [string[]]$RootImages, [int64[]]$RootPids) {
     }
   } while ($added -gt 0)
   return $tree
+}
+
+# The name a process outside the tree keeps across phases: its image, plus
+# the services it hosts or the COM server it is ("svchost.exe [BITS]",
+# "backgroundtaskhost.exe [BackgroundTaskHost.WebAccountProvider]").
+function Format-Identity([string]$Image, [string]$Services, [string]$CommandLine) {
+  $name = [IO.Path]::GetFileName($Image).ToLowerInvariant()
+  if ($Services) { return "$name [$Services]" }
+  if ($CommandLine -match '\s-s\s+(\S+)') { return "$name [$($Matches[1])]" }
+  if ($CommandLine -match '-ServerName:(\S+)') { return "$name [$($Matches[1])]" }
+  return $name
+}
+
+# PID -> identity, from the phase's snapshots and its 4688 events: the
+# snapshot at the start, the processes started since, the snapshot at the
+# end, each overriding the one before (a PID can be reused).
+function Get-Identities([string]$Name, $Created) {
+  $identity = @{}
+  foreach ($when in @('start', 'end')) {
+    $path = "$Out\$Name-processes-$when.json"
+    if (Test-Path $path) {
+      foreach ($process in (Read-Json $path)) {
+        $identity[[int64]$process.ProcessId] = Format-Identity $process.Name $process.Services ''
+      }
+    }
+    if ($when -eq 'start') {
+      foreach ($process in $Created) {
+        $identity[$process.ProcessId] = Format-Identity $process.Image '' $process.CommandLine
+      }
+    }
+  }
+  return $identity
+}
+
+# The BITS jobs that the tree created (event 3, or 16403 for a file added
+# to a job), plus $KnownJobs, the tree's jobs from earlier phases, with what
+# BITS transferred for each (59 started, 60 stopped, 61 failed; their "Id" is
+# the job's).
+function Get-BitsJobs($Bits, $Tree, [string[]]$KnownJobs) {
+  $jobs = [ordered]@{}
+  foreach ($entry in $Bits) {
+    if ($entry.Id -ne 3 -and $entry.Id -ne 16403) { continue }
+    $creator = ConvertTo-ProcessId (Get-Field $entry 'processId')
+    if (-not $Tree.ContainsKey($creator)) { continue }
+    $job = (Get-Field $entry 'jobId').ToLowerInvariant()
+    if (-not $jobs.Contains($job)) {
+      $jobs[$job] = [pscustomobject]@{
+        Job = $job
+        Title = Get-Field $entry 'jobTitle'
+        Creator = "$((Split-Path -Leaf $Tree[$creator].Image).ToLowerInvariant()) ($creator)"
+        Time = $entry.Time
+        Urls = @()
+        Transferred = [int64]0
+        Events = 0
+      }
+    }
+    $remote = Get-Field $entry 'RemoteName'
+    if ($remote -and $jobs[$job].Urls -notcontains $remote) { $jobs[$job].Urls += $remote }
+  }
+  foreach ($job in $KnownJobs) {
+    if (-not $job -or $jobs.Contains($job)) { continue }
+    $jobs[$job] = [pscustomobject]@{
+      Job = $job; Title = ''; Creator = 'the tree, in an earlier phase'; Time = $null
+      Urls = @(); Transferred = [int64]0; Events = 0
+    }
+  }
+  foreach ($entry in $Bits) {
+    if (@(59, 60, 61) -notcontains $entry.Id) { continue }
+    $job = (Get-Field $entry 'Id').ToLowerInvariant()
+    if (-not $jobs.Contains($job)) { continue }
+    $record = $jobs[$job]
+    $record.Events++
+    if (-not $record.Title) { $record.Title = Get-Field $entry 'name' }
+    if ($null -eq $record.Time) { $record.Time = $entry.Time }
+    $url = Get-Field $entry 'url'
+    if ($url -and $record.Urls -notcontains $url) { $record.Urls += $url }
+    $bytes = Get-Field $entry 'bytesTransferred'
+    if ($bytes -match '^\d+$' -and [int64]$bytes -gt $record.Transferred) { $record.Transferred = [int64]$bytes }
+  }
+  # A job only known from an earlier phase counts here if BITS worked on it.
+  return @($jobs.Values | Where-Object { $_.Creator -ne 'the tree, in an earlier phase' -or $_.Events -gt 0 })
 }
 
 function Get-Protocol([string]$Number) {
@@ -281,28 +473,42 @@ function Get-Direction([string]$Value) {
   }
 }
 
-# What a phase's logs hold from the tree.
-function Get-Report([string]$Name, [string[]]$RootImages, [string[]]$Images, [int64[]]$RootPids) {
-  $security = Read-Json "$Out\$Name-security.json"
-  $dns = Read-Json "$Out\$Name-dns.json"
-  $tree = Get-Tree $security $RootImages $RootPids
+# What a phase's logs hold from the tree, and, given the baseline's
+# identities, what they hold from other processes that the baseline lacks.
+function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]]$RootPids,
+  [string[]]$KnownJobs = @(), $BaselineIdentities = $null) {
+  $security = @(Read-Json "$Out\$Name-security.json")
+  $dns = @(Read-Json "$Out\$Name-dns.json")
+  $bits = @(Read-Json "$Out\$Name-bits.json")
+  $created = Get-Created $security
+  $tree = Get-Tree $created $Roots $RootPids
+  $identities = Get-Identities $Name $created
 
-  $connections = @(foreach ($entry in $security) {
-      if ($entry.Id -ne 5156 -and $entry.Id -ne 5157) { continue }
-      $processId = ConvertTo-ProcessId (Get-Field $entry 'ProcessID')
-      $image = (Split-Path -Leaf (Get-Field $entry 'Application')).ToLowerInvariant()
-      if (-not $tree.ContainsKey($processId) -and $Images -notcontains $image) { continue }
-      [pscustomobject]@{
-        Time = $entry.Time
-        Event = $entry.Id
-        Process = "$image ($processId)"
-        Direction = Get-Direction (Get-Field $entry 'Direction')
-        Local = "$(Get-Field $entry 'SourceAddress'):$(Get-Field $entry 'SourcePort')"
-        Remote = Get-Field $entry 'DestAddress'
-        Port = Get-Field $entry 'DestPort'
-        Protocol = Get-Protocol (Get-Field $entry 'Protocol')
-      }
-    })
+  $connections = @()
+  $others = @()
+  foreach ($entry in $security) {
+    if ($entry.Id -ne 5156 -and $entry.Id -ne 5157) { continue }
+    $processId = ConvertTo-ProcessId (Get-Field $entry 'ProcessID')
+    $image = (Split-Path -Leaf (Get-Field $entry 'Application')).ToLowerInvariant()
+    $connection = [pscustomobject]@{
+      Time = $entry.Time
+      Event = $entry.Id
+      Process = "$image ($processId)"
+      Identity = $image
+      Direction = Get-Direction (Get-Field $entry 'Direction')
+      Local = "$(Get-Field $entry 'SourceAddress'):$(Get-Field $entry 'SourcePort')"
+      Remote = Get-Field $entry 'DestAddress'
+      Port = Get-Field $entry 'DestPort'
+      Protocol = Get-Protocol (Get-Field $entry 'Protocol')
+      Names = ''
+    }
+    if ($tree.ContainsKey($processId) -or $Images -contains $image) {
+      $connections += $connection
+    } elseif (-not (Test-Loopback $connection.Remote)) {
+      if ($identities.ContainsKey($processId)) { $connection.Identity = $identities[$processId] }
+      $others += $connection
+    }
+  }
   $outside = @($connections | Where-Object { -not (Test-Loopback $_.Remote) })
   $loopback = @($connections | Where-Object { Test-Loopback $_.Remote })
 
@@ -332,6 +538,8 @@ function Get-Report([string]$Name, [string[]]$RootImages, [string[]]$Images, [in
       }
     })
 
+  $jobs = @(Get-BitsJobs $bits $tree $KnownJobs)
+
   # Names from the capture: what each local port asked (a query's source
   # port), and what each address answered for (a response's A or AAAA).
   $asked = @{}
@@ -355,7 +563,7 @@ function Get-Report([string]$Name, [string[]]$RootImages, [string[]]$Images, [in
       }
     }
   }
-  foreach ($connection in $outside) {
+  foreach ($connection in @($outside + $others)) {
     $names = @()
     if ($connection.Port -eq '53') {
       $key = $connection.Local
@@ -363,8 +571,20 @@ function Get-Report([string]$Name, [string[]]$RootImages, [string[]]$Images, [in
     } elseif ($answered.ContainsKey($connection.Remote)) {
       $names = $answered[$connection.Remote]
     }
-    $connection | Add-Member -NotePropertyName Names -NotePropertyValue (@($names | Sort-Object -Unique) -join ', ')
+    $connection.Names = @($names | Sort-Object -Unique) -join ', '
   }
+
+  # Outside the tree: what the baseline lacks, and what started on demand.
+  $suspects = @()
+  if ($null -ne $BaselineIdentities) {
+    $suspects = @($others | Where-Object { $BaselineIdentities -notcontains $_.Identity })
+  }
+  $onDemand = @($created | Where-Object {
+      -not $tree.ContainsKey($_.ProcessId) -and
+      ($_.ParentImage -eq 'services.exe' -or $_.CommandLine -match '-Embedding|-ServerName:|/Processid:')
+    } | ForEach-Object {
+      [pscustomobject]@{ Time = $_.Time; Identity = Format-Identity $_.Image '' $_.CommandLine }
+    })
 
   return [pscustomobject]@{
     Name = $Name
@@ -374,19 +594,43 @@ function Get-Report([string]$Name, [string[]]$RootImages, [string[]]$Images, [in
     SecurityEvents = $security.Count
     ConnectionEvents = @($security | Where-Object { $_.Id -eq 5156 -or $_.Id -eq 5157 }).Count
     DnsEvents = $dns.Count
+    BitsEvents = $bits.Count
     Connections = $connections
     Outside = $outside
     Loopback = $loopback
     Binds = $binds
     Queries = $queries
-    Findings = $outside.Count + $queries.Count
+    Jobs = $jobs
+    Others = $others
+    Identities = @($others | ForEach-Object { $_.Identity } | Sort-Object -Unique)
+    Baseline = ($null -ne $BaselineIdentities)
+    Suspects = $suspects
+    OnDemand = $onDemand
+    Findings = $outside.Count + $queries.Count + $jobs.Count
   }
+}
+
+# Rows of connections, grouped, for a Markdown table.
+function Add-ConnectionRows($Lines, $Connections, [string]$Key, [datetime]$Start) {
+  $Lines.Add("| Process | Event | Direction | Destination | Port | Protocol | Name, from the capture's DNS packets | Events | First, from the phase's start |")
+  $Lines.Add('|---|---|---|---|---|---|---|---|---|')
+  $rows = @($Connections | Group-Object $Key, Event, Direction, Remote, Port, Protocol | ForEach-Object {
+      $first = $_.Group[0]
+      $names = @($_.Group | ForEach-Object { $_.Names -split ', ' } | Where-Object { $_ } | Sort-Object -Unique) -join ', '
+      if (-not $names) { $names = '-' }
+      $earliest = ConvertTo-Time ($_.Group | Sort-Object Time | Select-Object -First 1).Time
+      [pscustomobject]@{
+        At = $earliest
+        Text = "| $($first.$Key) | $($first.Event) | $($first.Direction) | $($first.Remote) | $($first.Port) | $($first.Protocol) | $names | $($_.Count) | $(Format-Offset $earliest $Start) |"
+      }
+    })
+  $rows | Sort-Object At | ForEach-Object { $Lines.Add($_.Text) }
+  $Lines.Add('')
 }
 
 # The phase's table as Markdown, written to <name>-findings.md and printed.
 function Write-Report($Report) {
-  $start = $Report.Start
-  if ($start -isnot [datetime]) { $start = [datetime]::Parse([string]$start, $null, [Globalization.DateTimeStyles]::RoundtripKind) }
+  $start = ConvertTo-Time $Report.Start
   $label = $env:MATRIX_OS
   if (-not $label) { $label = 'windows' }
   $lines = New-Object System.Collections.Generic.List[string]
@@ -396,6 +640,7 @@ function Write-Report($Report) {
   $lines.Add('|---|---|---|---|---|')
   $lines.Add("| WFP connections (5156 allowed, 5157 blocked) | $($Report.ConnectionEvents) | $($Report.Connections.Count) | $($Report.Loopback.Count) | $($Report.Outside.Count) |")
   $lines.Add("| DNS client (the tree's queries, and the canary's names from any process) | $($Report.DnsEvents) | $($Report.Queries.Count) | - | $($Report.Queries.Count) |")
+  $lines.Add("| BITS client (download jobs the tree created) | $($Report.BitsEvents) | $($Report.Jobs.Count) | - | $($Report.Jobs.Count) |")
   $lines.Add('')
   $kinds = @($Report.Tree.Values | ForEach-Object {
       $image = Split-Path -Leaf $_.Image
@@ -416,20 +661,10 @@ function Write-Report($Report) {
   }
   $lines.Add('')
   if ($Report.Findings -eq 0) {
-    $lines.Add('No connection or DNS query from the process tree.')
+    $lines.Add('No connection, DNS query or BITS job from the process tree.')
+    $lines.Add('')
   } else {
-    if ($Report.Outside.Count -gt 0) {
-      $lines.Add('| Process | Event | Direction | Destination | Port | Protocol | Name, from the capture''s DNS packets | Events | First, from the phase''s start |')
-      $lines.Add('|---|---|---|---|---|---|---|---|---|')
-      $Report.Outside | Group-Object Process, Event, Direction, Remote, Port, Protocol | ForEach-Object {
-        $first = $_.Group[0]
-        $names = @($_.Group | ForEach-Object { $_.Names -split ', ' } | Where-Object { $_ } | Sort-Object -Unique) -join ', '
-        if (-not $names) { $names = '-' }
-        $earliest = ($_.Group | Sort-Object Time | Select-Object -First 1).Time
-        $lines.Add("| $($first.Process) | $($first.Event) | $($first.Direction) | $($first.Remote) | $($first.Port) | $($first.Protocol) | $names | $($_.Count) | $(Format-Offset $earliest $start) |")
-      }
-      $lines.Add('')
-    }
+    if ($Report.Outside.Count -gt 0) { Add-ConnectionRows $lines $Report.Outside 'Process' $start }
     if ($Report.Queries.Count -gt 0) {
       $lines.Add('| Process | DNS client event | Name | Type | Events | First, from the phase''s start |')
       $lines.Add('|---|---|---|---|---|---|')
@@ -440,6 +675,36 @@ function Write-Report($Report) {
       }
       $lines.Add('')
     }
+    if ($Report.Jobs.Count -gt 0) {
+      $lines.Add('| BITS job | Created by | Hosts of its URLs | Bytes transferred | BITS transfer events | First, from the phase''s start |')
+      $lines.Add('|---|---|---|---|---|---|')
+      foreach ($job in $Report.Jobs) {
+        $hosts = @($job.Urls | ForEach-Object { try { ([uri]$_).Host } catch { $_ } } | Sort-Object -Unique) -join ', '
+        if (-not $hosts) { $hosts = '-' }
+        $when = '-'
+        if ($null -ne $job.Time) { $when = Format-Offset $job.Time $start }
+        $lines.Add("| $($job.Title) | $($job.Creator) | $hosts | $($job.Transferred) | $($job.Events) | $when |")
+      }
+      $lines.Add('')
+    }
+  }
+  if ($Report.Name -eq 'idle' -or $Report.Name -eq 'in-use') {
+    $lines.Add('##### Outside the process tree, not in the baseline (for review, not a finding)')
+    $lines.Add('')
+    $lines.Add('Connections outside loopback from processes outside the tree whose identity (image, plus the services it hosts or the COM server it is) made none in the 5 min baseline. A service that works for the tree without a log naming it, such as WAM''s account broker, would show here; so do the runner''s own scheduled tasks.')
+    $lines.Add('')
+    if (-not $Report.Baseline) {
+      $lines.Add('No baseline was captured, so there is no such list.')
+    } elseif ($Report.Suspects.Count -eq 0) {
+      $lines.Add('None.')
+    } else {
+      Add-ConnectionRows $lines $Report.Suspects 'Identity' $start
+    }
+    $lines.Add('')
+    $started = @($Report.OnDemand | Sort-Object Time | ForEach-Object { "``$($_.Identity)`` $(Format-Offset $_.Time $start)" })
+    if ($started.Count -eq 0) { $started = @('none') }
+    $lines.Add("Started on demand in the phase, outside the tree (services, and COM servers such as task hosts): $($started -join ', ').")
+    $lines.Add('')
   }
   $lines.Add('')
   $text = $lines -join "`n"
@@ -450,7 +715,10 @@ function Write-Report($Report) {
 # --- Control ----------------------------------------------------------------------
 
 # A request the logs must see and attribute, through the same analysis as the
-# phases: if they don't, empty phase logs would prove nothing.
+# phases: if they don't, empty phase logs would prove nothing. Then a BITS
+# download, which the BITS service makes for the process that asks: the BITS
+# log must name that process, or a download the tree hands to BITS would go
+# unattributed.
 function Invoke-Control {
   # A cold cache, so that curl's lookup reaches the DNS client's network path.
   Clear-DnsClientCache
@@ -464,11 +732,27 @@ function Invoke-Control {
   $code = (Get-Content -Raw "$Out\control-curl.txt").Trim()
   Write-Host "curl.exe (PID $($proc.Id)) https://github.com: HTTP $code, exit $($proc.ExitCode)"
   if ($proc.ExitCode -ne 0) { Fail 'control: curl https://github.com failed' }
+
+  $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $target = Join-Path $Out 'control-bits.txt'
+  $bitsProc = Start-Process -FilePath $powershell -NoNewWindow -PassThru `
+    -ArgumentList @('-NoProfile', '-NonInteractive', '-Command',
+      "Start-BitsTransfer -Source 'https://github.com/robots.txt' -Destination '$target' -ErrorAction Stop")
+  # Without the handle, ExitCode stays empty once the process is gone.
+  $null = $bitsProc.Handle
+  if (-not $bitsProc.WaitForExit(120000)) {
+    Stop-Process -Id $bitsProc.Id -Force -ErrorAction SilentlyContinue
+    Fail 'control: the BITS download of https://github.com/robots.txt did not finish within 120 s'
+  }
+  Write-Host "powershell.exe (PID $($bitsProc.Id)) Start-BitsTransfer https://github.com/robots.txt: exit $($bitsProc.ExitCode), $((Get-Item $target -ErrorAction SilentlyContinue).Length) bytes"
+  if ($bitsProc.ExitCode -ne 0) { Fail 'control: the BITS download of https://github.com/robots.txt failed' }
+
   # Events reach the logs a moment after the fact.
+  $marker = Send-DnsMarker 'control'
   Start-Sleep -Seconds 3
   $end = Get-Date
   Stop-Capture 'control'
-  Export-Phase 'control' $start $end
+  Export-Phase 'control' $start $end $marker
   $report = Get-Report 'control' @('curl.exe') @() @([int64]$proc.Id)
   Write-Report $report
   $tcp = @($report.Outside | Where-Object { $_.Port -eq '443' -and $_.Protocol -eq 'TCP' -and $_.Process -like "curl.exe ($($proc.Id))" })
@@ -482,7 +766,14 @@ function Invoke-Control {
   if (@($tcp | Where-Object { $_.Names -like '*github.com*' }).Count -eq 0) {
     Fail "control: pktmon's DNS packets do not name github.com for curl's connection; the names in the findings can't be trusted"
   }
-  Write-Host 'Control: the logs attributed curl''s connection and its DNS query to curl.exe, and pktmon''s DNS packets named its host.'
+  $bitsTree = @{ ([int64]$bitsProc.Id) = [pscustomobject]@{ Image = $powershell } }
+  $jobs = @(Get-BitsJobs (Read-Json "$Out\control-bits.json") $bitsTree @())
+  $jobs | Format-Table -AutoSize Title, Creator, Urls, Transferred, Events | Out-String -Width 200 | Write-Host
+  if (@($jobs | Where-Object { @($_.Urls | Where-Object { $_ -like '*github.com*' }).Count -gt 0 -and $_.Events -gt 0 }).Count -eq 0) {
+    Fail "control: the BITS log names no transfer of github.com in a job created by powershell.exe ($($bitsProc.Id)); a download the tree hands to BITS would go unattributed, so the logs can't be trusted"
+  }
+  Write-Host ('Control: the logs attributed curl''s connection and its DNS query to curl.exe, pktmon''s DNS packets named its host, ' +
+    'and the BITS log attributed the download job to powershell.exe.')
 }
 
 # --- Phases -----------------------------------------------------------------------
@@ -556,6 +847,25 @@ function Test-WebDriverReady {
   }
 }
 
+# The same capture and logs as idle, as long, before the app ever runs on
+# this machine.
+function Invoke-Baseline {
+  $running = @(Get-Process -Name navaja -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Binary })
+  if ($running.Count -gt 0) { Fail "baseline: the app already runs (PID $($running.Id -join ', ')), so this is no baseline" }
+  Start-Capture 'baseline'
+  $start = Get-Date
+  Save-Snapshot 'baseline' 'start'
+  Write-Host "Baseline: capturing $IdleSeconds s with nothing of Navaja running."
+  Start-Sleep -Seconds $IdleSeconds
+  Save-Snapshot 'baseline' 'end'
+  $marker = Send-DnsMarker 'baseline'
+  Start-Sleep -Seconds 3
+  $end = Get-Date
+  Stop-Capture 'baseline'
+  Export-Phase 'baseline' $start $end $marker
+  Write-Host 'Baseline: done; the logs are checked in the next step.'
+}
+
 # The idle phase: the app starts as @wdio/tauri-service starts it, runs for
 # $IdleSeconds with its window shown and nothing driving it, and is stopped.
 function Invoke-Idle {
@@ -565,6 +875,7 @@ function Invoke-Idle {
   New-Item -ItemType Directory -Path $appDir | Out-Null
   Start-Capture 'idle'
   $start = Get-Date
+  Save-Snapshot 'idle' 'start'
   Start-Sleep -Milliseconds 500
   # The harness's launch (wdio.conf.ts, @wdio/tauri-service's embedded
   # driver): --tool uuid, a fresh app directory, and its WebDriver server.
@@ -614,11 +925,13 @@ function Invoke-Idle {
   }
   Write-Host 'Its output:'
   Get-Content "$Out\idle-app.out.log", "$Out\idle-app.err.log" -ErrorAction SilentlyContinue | ForEach-Object { "  | $_" } | Write-Host
+  Save-Snapshot 'idle' 'end'
+  $marker = Send-DnsMarker 'idle'
   # A moment for anything still in flight, and for the logs.
   Start-Sleep -Seconds 3
   $end = Get-Date
   Stop-Capture 'idle'
-  Export-Phase 'idle' $start $end
+  Export-Phase 'idle' $start $end $marker
   if ($failure) { Fail "idle: $failure" }
   Write-Host 'Idle: done; the logs are checked in the next step.'
 }
@@ -627,6 +940,7 @@ function Invoke-InUse {
   if (-not (Test-Path $Binary)) { Fail "in use: no $Binary; build it first (see s2-7-egress.sh)" }
   Start-Capture 'in-use'
   $start = Get-Date
+  Save-Snapshot 'in-use' 'start'
   Start-Sleep -Milliseconds 500
   & pnpm e2e
   $status = $LASTEXITCODE
@@ -636,39 +950,67 @@ function Invoke-InUse {
       ($_.Name -eq 'msedgewebview2.exe' -and $_.CreationDate -gt $start)
     } | ForEach-Object { [int64]$_.ProcessId })
   if ($left.Count -gt 0) { Wait-Gone $left }
+  Save-Snapshot 'in-use' 'end'
+  $marker = Send-DnsMarker 'in-use'
   Start-Sleep -Seconds 3
   $end = Get-Date
   Stop-Capture 'in-use'
-  Export-Phase 'in-use' $start $end
+  Export-Phase 'in-use' $start $end $marker
   if ($status -ne 0) { Fail "in use: the end-to-end suite failed (exit $status)" }
   Write-Host 'In use: the suite passed; the logs are checked in the next step.'
 }
 
 function Invoke-Check([string]$Name) {
-  $report = Get-Report $Name @('navaja.exe') @('navaja.exe', 'msedgewebview2.exe') @()
+  # The tree's BITS jobs from earlier phases: a job outlives the process
+  # that created it.
+  $known = @()
+  foreach ($file in @(Get-ChildItem -Path $Out -Filter '*-bits-jobs.json' -ErrorAction SilentlyContinue)) {
+    if ($file.Name -ne "$Name-bits-jobs.json") { $known += @(Read-Json $file.FullName | ForEach-Object { [string]$_ }) }
+  }
+  $baseline = $null
+  if ($Name -ne 'baseline' -and (Test-Path "$Out\baseline-identities.json")) {
+    $baseline = @(Read-Json "$Out\baseline-identities.json" | ForEach-Object { [string]$_ })
+  }
+  $report = Get-Report $Name $RootImages $TreeImages @() $known $baseline
+  Save-Json "$Out\$Name-bits-jobs.json" @($report.Jobs | ForEach-Object { $_.Job })
   Write-Report $report
+  if ($Name -eq 'baseline') {
+    Save-Json "$Out\baseline-identities.json" $report.Identities
+    Write-Host "baseline: $($report.Identities.Count) identities outside the tree connected outside loopback."
+    if ($report.Findings -gt 0) {
+      Fail "baseline: $($report.Findings) event(s) counted as the app's while it was not running, so the attribution would blame it for the machine's own traffic; see the tables above"
+    }
+    Write-Host 'baseline: nothing counted as the app''s while it was not running.'
+    return
+  }
   # The app's own WebDriver connections show that the logs saw it.
   if (@($report.Loopback | Where-Object { $_.Process -like 'navaja.exe *' }).Count -eq 0) {
     Fail "${Name}: the logs hold no connection of navaja.exe, not even its WebDriver on loopback, so they prove nothing"
   }
-  if ($report.Findings -gt 0) {
-    Fail "${Name}: $($report.Findings) connection or DNS event(s) from the process tree; see the tables above"
+  $suspects = @($report.Suspects | Group-Object Identity, Event, Direction, Remote, Port, Protocol).Count
+  Set-Content -Path "$Out\$Name-suspects.count" -Value $suspects -Encoding ascii
+  if ($suspects -gt 0) {
+    Write-Host "::warning::S2.7 ${Name}: $suspects connection(s) outside the process tree that the baseline lacks, listed above for review (not findings)"
   }
-  Write-Host "${Name}: no connection or DNS query from the process tree."
+  if ($report.Findings -gt 0) {
+    Fail "${Name}: $($report.Findings) connection, DNS or BITS event(s) from the process tree; see the tables above"
+  }
+  Write-Host "${Name}: no connection, DNS query or BITS job from the process tree."
 }
 
 switch ($Mode) {
   'setup' { Invoke-Setup }
   'control' { Invoke-Control }
+  'baseline' { Invoke-Baseline }
   'idle' { Invoke-Idle }
   'in-use' { Invoke-InUse }
   'check' {
-    if ($Phase -ne 'idle' -and $Phase -ne 'in-use') { Write-Host 'usage: s2-7-egress.ps1 check idle|in-use'; exit 2 }
+    if (@('baseline', 'idle', 'in-use') -notcontains $Phase) { Write-Host 'usage: s2-7-egress.ps1 check baseline|idle|in-use'; exit 2 }
     Invoke-Check $Phase
   }
   'teardown' { Invoke-Teardown }
   default {
-    Write-Host 'usage: s2-7-egress.ps1 setup|control|idle|check idle|in-use|check in-use|teardown'
+    Write-Host 'usage: s2-7-egress.ps1 setup|control|baseline|check baseline|idle|check idle|in-use|check in-use|teardown'
     exit 2
   }
 }

@@ -225,12 +225,15 @@ jobs:
   # canary included. Each OS captures its own way
   # (scripts/spikes/s2-7-egress.sh): Linux runs the app in a network
   # namespace with NAT and captures its veth; macOS captures on pktap, which
-  # names each packet's process; Windows audits WFP connections, process
-  # creation and DNS-client queries. A control request first proves that
+  # names each packet's process, and counts the daemons WebKit starts for
+  # the app as the app's; Windows audits WFP connections, process creation,
+  # DNS-client queries and BITS jobs. A control request first proves that
   # the capture sees and attributes traffic, and each phase must show the
-  # app's own WebDriver traffic on loopback. Nothing opens a URL or the logs
-  # folder (architecture §5). The captures go up as an artifact; nothing
-  # else leaves the runner.
+  # app's own WebDriver traffic on loopback. A 5 min baseline without the
+  # app comes first: nothing in it may count as the app's, and each later
+  # phase lists, for review, the traffic outside the tree that the baseline
+  # lacks. Nothing opens a URL or the logs folder (architecture §5). The
+  # captures go up as an artifact; nothing else leaves the runner.
   s2-7:
     name: S2.7 egress capture (${{ matrix.os }})
     strategy:
@@ -291,6 +294,18 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: bash scripts/spikes/s2-7-egress.sh control
 
+      # Before the app ever runs here, so that the daemons it starts are not
+      # running yet.
+      - name: Baseline, 5 min under capture without the app
+        id: baseline
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: bash scripts/spikes/s2-7-egress.sh baseline
+
+      - name: Baseline, nothing counts as the app's while it is not running
+        id: baseline_check
+        if: ${{ !cancelled() && steps.baseline.outcome == 'success' }}
+        run: bash scripts/spikes/s2-7-egress.sh check baseline
+
       - name: Idle, the app runs 5 min with its window shown, under capture
         id: idle
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
@@ -315,16 +330,20 @@ jobs:
         if: ${{ always() && steps.setup.outcome != 'skipped' }}
         run: bash scripts/spikes/s2-7-egress.sh teardown
 
-      # Captures (Linux: the namespace's traffic only; macOS: every
-      # process's, cut to 512 bytes a packet), exported events (Windows),
-      # listings, the app's output and a screenshot.
+      # Captures, exported events (Windows), listings, the app's output and
+      # a screenshot. What holds other processes' traffic keeps little of
+      # it: on Linux the uplink captures keep 96 bytes a packet (DNS: 512);
+      # on Windows pktmon's copy keeps headers only, but for DNS, and the
+      # process-creation events lose the command lines of processes outside
+      # the tree; on macOS pktap keeps 512 bytes a packet, enough for DNS.
+      # Anyone who can see the run can download it, so it is kept 14 days.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: s2-7-${{ matrix.os }}
           path: ${{ runner.temp }}/navaja-s2-7
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 14
 
       - name: Summary
         if: always()
@@ -334,6 +353,8 @@ jobs:
           BUILD: ${{ steps.build.outcome }}
           SETUP: ${{ steps.setup.outcome }}
           CONTROL: ${{ steps.control.outcome }}
+          BASELINE: ${{ steps.baseline.outcome }}
+          BASELINE_CHECK: ${{ steps.baseline_check.outcome }}
           IDLE: ${{ steps.idle.outcome }}
           IDLE_CHECK: ${{ steps.idle_check.outcome }}
           IN_USE: ${{ steps.in_use.outcome }}
@@ -347,6 +368,21 @@ jobs:
               *) echo "$1" ;;
             esac
           }
+          # What a phase's check listed outside the tree that the baseline
+          # lacks: for review, never a FAIL.
+          review() {
+            local file="$OUT/$1-suspects.count" count
+            if [ ! -f "$file" ]; then
+              echo 'no list'
+              return
+            fi
+            count=$(tr -dc 0-9 < "$file")
+            if [ "${count:-0}" -eq 0 ]; then
+              echo 'none'
+            else
+              echo "$count to review"
+            fi
+          }
           {
             echo "### S2.7 egress capture: $OS"
             echo
@@ -355,12 +391,16 @@ jobs:
             echo "| e2e build (\`tauri build --features e2e\`) | $(result "$BUILD") |"
             echo "| Capture set up | $(result "$SETUP") |"
             echo "| Control: a known request is captured and attributed | $(result "$CONTROL") |"
+            echo "| Baseline: 5 min under capture without the app | $(result "$BASELINE") |"
+            echo "| Baseline: nothing counts as the app's | $(result "$BASELINE_CHECK") |"
             echo "| Idle: the app runs 5 min with its window shown | $(result "$IDLE") |"
             echo "| Idle: no packet from the process tree | $(result "$IDLE_CHECK") |"
+            echo "| Idle: traffic outside the tree that the baseline lacks | $(review idle) |"
             echo "| In use: \`pnpm e2e\` passes, egress canary included | $(result "$IN_USE") |"
             echo "| In use: no packet from the process tree | $(result "$IN_USE_CHECK") |"
+            echo "| In use: traffic outside the tree that the baseline lacks | $(review in-use) |"
             echo
-            for phase in control idle in-use; do
+            for phase in control baseline idle in-use; do
               [ ! -f "$OUT/$phase-findings.md" ] || cat "$OUT/$phase-findings.md"
             done
           } >> "$GITHUB_STEP_SUMMARY"

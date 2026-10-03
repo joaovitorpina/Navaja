@@ -11,13 +11,15 @@
 # Usage, from anywhere in the repository, after `pnpm install` and the
 # end-to-end build
 # (pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json):
-#   bash scripts/spikes/s2-7-egress.sh setup         # Linux: the network namespace; Windows: auditing
-#   bash scripts/spikes/s2-7-egress.sh control       # a known request must be captured and attributed
-#   bash scripts/spikes/s2-7-egress.sh idle          # the app idles 5 min, window shown, under capture
-#   bash scripts/spikes/s2-7-egress.sh check idle    # what the capture holds from the process tree
-#   bash scripts/spikes/s2-7-egress.sh in-use        # the end-to-end suite under capture
+#   bash scripts/spikes/s2-7-egress.sh setup           # Linux: the network namespace; Windows: auditing
+#   bash scripts/spikes/s2-7-egress.sh control         # a known request must be captured and attributed
+#   bash scripts/spikes/s2-7-egress.sh baseline        # 5 min under capture without the app
+#   bash scripts/spikes/s2-7-egress.sh check baseline  # nothing may be attributed to the app then
+#   bash scripts/spikes/s2-7-egress.sh idle            # the app idles 5 min, window shown, under capture
+#   bash scripts/spikes/s2-7-egress.sh check idle      # what the capture holds from the process tree
+#   bash scripts/spikes/s2-7-egress.sh in-use          # the end-to-end suite under capture
 #   bash scripts/spikes/s2-7-egress.sh check in-use
-#   bash scripts/spikes/s2-7-egress.sh teardown      # undoes setup
+#   bash scripts/spikes/s2-7-egress.sh teardown        # undoes setup
 # On Windows every mode runs scripts/spikes/s2-7-egress.ps1 instead. The
 # modes idle-app and in-use-app are the parts that run as the app's user,
 # inside the namespace on Linux; idle and in-use call them.
@@ -30,12 +32,27 @@
 #   the namespace's loopback. On the veth, the only packets expected from
 #   the namespace are the kernel's own link-layer ones (ARP, IPv6 neighbour
 #   discovery and MLD); any other is a finding. On the loopback, so is DNS.
+#   After each phase, outside its capture, the namespace must still reach
+#   github.com: a broken route would make a phase look clean.
 # - macOS: tcpdump on pktap, which tags each packet with the process that
 #   sent or received it, and the process it acted for. A packet outside lo0
-#   whose process is navaja or one of WebKit's (Networking, WebContent, GPU)
-#   is a finding.
+#   is a finding when its process is navaja or one of WebKit's (Networking,
+#   WebContent, GPU), or one of the daemons WebKit hands work to: webprivacyd
+#   (its privacy lists), the Safe Browsing service, adattributiond (Private
+#   Click Measurement) or webpushd (Web Push). WebKit starts them for the
+#   app, outside its process tree.
 # On both, a DNS question for one of the egress canary's hosts is a finding
 # too, whichever process asks.
+#
+# The baseline phase captures the same way for 5 min before the app ever
+# runs. Nothing in it may count as the app's: otherwise the attribution
+# blames the app for the machine's own traffic. Each later phase also lists
+# the traffic outside the tree that the baseline lacks: on Linux, what the
+# host itself sends on its uplink (a host daemon the app reached over a Unix
+# socket or the system D-Bus would send from there); on macOS, each process
+# that talks while the baseline had it silent. That list is for a person to
+# review, and does not fail the check: these runners' own daemons come and
+# go.
 #
 # The app is never asked to open a URL or the logs folder: the browser or
 # file manager that would start is not Navaja (docs/architecture.md §5).
@@ -90,9 +107,21 @@ NOISE="arp or ($ND) or ($MLD)"
 # over IPv6, so the flags are read at their offset after a bare IPv6 header.
 SYN='(ip and tcp[tcpflags] & (tcp-syn|tcp-ack) == tcp-syn) or (ip6 and ip6[6] == 6 and ip6[53] & 0x12 == 0x02)'
 
-# macOS: the processes of the tree, as pktap names them. It cuts a name to
-# 16 characters, so com.apple.WebKit.Networking may read com.apple.WebKit.
-TREE_PROCS='^(navaja|com\.apple\.WebKit.*)$'
+# Linux: what a capture of the host's uplink keeps of each packet. Headers
+# only, but DNS whole: the uplink carries the whole runner's traffic, and the
+# capture is uploaded.
+UPLINK_SNAP=96
+UPLINK_DNS_SNAP=512
+
+# macOS: the processes of the tree, and the daemons that WebKit starts for
+# it, as pktap names them. It cuts a name to 16 characters (15 for the
+# process acted for), so com.apple.WebKit.Networking may read
+# com.apple.WebKit, and com.apple.Safari.SafeBrowsing.Service reads
+# com.apple.Safari or com.apple.Safar. The baseline checks that none of them
+# talks while the app is not running.
+APP_PROCS='navaja|com\.apple\.WebKit.*'
+WEBKIT_DAEMONS='webprivacyd|com\.apple\.Safar.*|adattributiond|webpushd'
+TREE_PROCS="^($APP_PROCS|$WEBKIT_DAEMONS)\$"
 
 fail() {
   echo "::error::S2.7 $*"
@@ -209,6 +238,15 @@ start_captures() {
       # file otherwise, and that user can't write here.
       start_capture "$phase-veth" tcpdump -i "$HOST_IF" -n -U -Z root -w "$OUT/$phase-veth.pcap"
       start_capture "$phase-lo" ip netns exec "$NS" tcpdump -i lo -n -U -Z root -w "$OUT/$phase-lo.pcap"
+      # The host's own traffic, for the list of what the baseline lacks.
+      if [ "$phase" != control ]; then
+        local uplink
+        uplink=$(cat "$OUT/uplink")
+        start_capture "$phase-uplink" tcpdump -i "$uplink" -n -U -Z root -s "$UPLINK_SNAP" \
+          -w "$OUT/$phase-uplink.pcap" 'not port 53'
+        start_capture "$phase-uplink-dns" tcpdump -i "$uplink" -n -U -Z root -s "$UPLINK_DNS_SNAP" \
+          -w "$OUT/$phase-uplink-dns.pcap" 'port 53'
+      fi
       ;;
     macos)
       # pktap,all: every interface, each packet with its process. 512 bytes
@@ -263,14 +301,16 @@ snapshot() {
   esac
 }
 
-# The app's processes and WebKit's, without sudo.
+# The app's processes and WebKit's, without sudo; on macOS also the daemons
+# WebKit starts for it, by their full names (pktap cuts them short).
 app_processes() {
   local list
   case $OS in
     linux) list=$(ps -eo pid=,ppid=,lstart=,args=) ;;
     macos) list=$(ps -axo pid=,ppid=,lstart=,command=) ;;
   esac
-  printf '%s\n' "$list" | grep -E 'navaja|com\.apple\.WebKit|WebKit(Network|Web|GPU)Process' || true
+  printf '%s\n' "$list" |
+    grep -E 'navaja|com\.apple\.WebKit|WebKit(Network|Web|GPU)Process|webprivacyd|SafeBrowsing|adattributiond|webpushd' || true
 }
 
 # Writes a snapshot every 5 s to <phase>-processes.txt, until stopped.
@@ -392,8 +432,10 @@ linux_setup() {
     grep -qw "$(hostname)" /etc/hosts || echo "127.0.1.1 $(hostname)"
   } | sudo tee "/etc/netns/$NS/hosts" > /dev/null
   echo "$uplink" > "$OUT/uplink"
+  ip -4 -o addr show dev "$uplink" | awk '{ sub(/\/.*/, "", $4); print $4; exit }' > "$OUT/uplink-ip"
+  [ -s "$OUT/uplink-ip" ] || fail "setup: no IPv4 address on $uplink"
   ns cat "/sys/class/net/$NS_IF/address" > "$OUT/namespace-mac"
-  echo "Namespace $NS (uplink $uplink, NAT for $NET4.0/24):"
+  echo "Namespace $NS (uplink $uplink, $(cat "$OUT/uplink-ip"); NAT for $NET4.0/24):"
   ns ip -br addr
   ns ip route
   ns ip -6 route
@@ -493,11 +535,28 @@ questions() {
   grep -oE '[A-Za-z0-9]+\? [^ ]+' | sort | uniq -c | sort -rn || true
 }
 
+# Joins tcpdump's continuation lines (indented) to the line before, so that
+# each packet is one line, its time stamp first.
+join_lines() {
+  awk '
+    /^[ \t]/ { sub(/^[ \t]+/, " "); line = line $0; next }
+    { if (have) print line; line = $0; have = 1 }
+    END { if (have) print line }
+  ' "$1" > "$1.joined"
+  mv "$1.joined" "$1"
+}
+
 # check <phase>: lists what the phase's capture holds from the process tree,
 # writes <phase>-findings.md and -findings.tsv, and fails on any finding. The
-# control calls it too, where findings are expected.
+# control calls it too, where findings are expected. In the baseline, which
+# runs without the app, any finding means that the attribution would blame
+# the app for the machine's own traffic. After the baseline, each phase also
+# lists the traffic outside the tree that the baseline lacks, for review
+# (<phase>-suspects.md, in the findings table too, and its count in
+# <phase>-suspects.count); that list fails nothing.
 check() {
   local phase=$1
+  rm -f "$OUT/$phase-suspects.md" "$OUT/$phase-suspects.count"
   case $OS in
     linux) check_linux "$phase" ;;
     macos) check_macos "$phase" "$TREE_PROCS" '' ;;
@@ -564,11 +623,88 @@ check_linux() {
     fi
     echo
   } > "$md"
-  if [ "$phase" != control ] && [ "$webdriver" -eq 0 ]; then
-    cat "$md"
-    fail "$phase: no connection to the app's WebDriver on the namespace's loopback; the app did not run in this namespace, so the capture proves nothing"
+  case $phase in
+    idle | in-use)
+      if [ "$webdriver" -eq 0 ]; then
+        cat "$md"
+        fail "$phase: no connection to the app's WebDriver on the namespace's loopback; the app did not run in this namespace, so the capture proves nothing"
+      fi
+      if [ -f "$OUT/$phase-no-way-out" ]; then
+        cat "$md"
+        fail "$phase: after the phase the namespace could no longer reach the network, so a send would have failed inside it and its empty capture proves nothing"
+      fi
+      ;;
+  esac
+  if [ "$phase" != control ]; then
+    uplink_flows "$phase"
+    if [ "$phase" != baseline ]; then
+      suspects_linux "$phase"
+      cat "$OUT/$phase-suspects.md" >> "$md"
+    fi
   fi
   report "$phase" "$md" "$findings" "$OUT/$phase-veth-sent-long.txt" "$OUT/$phase-lo-dns-long.txt"
+}
+
+# Linux: what the host itself sent on its uplink in the phase, by remote end
+# (<phase>-uplink.tsv, rows as group() writes them) and the DNS questions it
+# asked (<phase>-uplink-names.txt).
+uplink_flows() {
+  local phase=$1 ip
+  ip=$(cat "$OUT/uplink-ip")
+  [ -f "$OUT/$phase-uplink.pcap" ] && [ -f "$OUT/$phase-uplink-dns.pcap" ] ||
+    fail "check $phase: no capture of the uplink"
+  packets "$OUT/$phase-uplink.pcap" "src host $ip" "$OUT/$phase-uplink-sent.txt" -q
+  packets "$OUT/$phase-uplink-dns.pcap" "src host $ip" "$OUT/$phase-uplink-dns-sent.txt" -q
+  packets "$OUT/$phase-uplink-dns.pcap" "src host $ip" "$OUT/$phase-uplink-dns-long.txt" -v
+  cat "$OUT/$phase-uplink-sent.txt" "$OUT/$phase-uplink-dns-sent.txt" |
+    awk '{ print "host\t" $0 }' | group | sort -t "$(printf '\t')" -k7,7n > "$OUT/$phase-uplink.tsv"
+  questions < "$OUT/$phase-uplink-dns-long.txt" > "$OUT/$phase-uplink-names.txt"
+  echo "$phase: the host sent $(lines "$OUT/$phase-uplink-sent.txt") packet(s) and $(lines "$OUT/$phase-uplink-dns-sent.txt") DNS packet(s) on its uplink, to $(lines "$OUT/$phase-uplink.tsv") remote end(s)."
+}
+
+# Linux: the remote ends and names the host's uplink shows in the phase but
+# not in the baseline, into <phase>-suspects.md and .count.
+suspects_linux() {
+  local phase=$1 start count ends names file=$OUT/$1-suspects.md
+  start=$(cat "$OUT/$phase-start")
+  {
+    echo
+    echo "##### Outside the process tree, not in the baseline (for review, not a finding)"
+    echo
+    echo "What the host itself sent on its uplink (\`$(cat "$OUT/uplink")\`) in the phase, to remote ends and names that the 5 min baseline did not show. A host daemon the app reached over a Unix socket or the system D-Bus would send from here."
+    echo
+  } > "$file"
+  if [ ! -f "$OUT/baseline-uplink.tsv" ]; then
+    echo "No baseline was captured, so there is no such list." >> "$file"
+    return 0
+  fi
+  awk -F '\t' 'NR == FNR { seen[$3 FS $4 FS $5] = 1; next } !(($3 FS $4 FS $5) in seen)' \
+    "$OUT/baseline-uplink.tsv" "$OUT/$phase-uplink.tsv" > "$OUT/$phase-suspects.tsv"
+  awk 'NR == FNR { seen[$2 " " $3] = 1; next } !(($2 " " $3) in seen)' \
+    "$OUT/baseline-uplink-names.txt" "$OUT/$phase-uplink-names.txt" > "$OUT/$phase-suspect-names.txt"
+  ends=$(lines "$OUT/$phase-suspects.tsv")
+  names=$(lines "$OUT/$phase-suspect-names.txt")
+  count=$((ends + names))
+  echo "$count" > "$OUT/$phase-suspects.count"
+  {
+    if [ "$count" -eq 0 ]; then
+      echo "None."
+    fi
+    if [ "$ends" -gt 0 ]; then
+      echo "| Sent by | Remote end | Port | Protocol | Packets | First, from the phase's start |"
+      echo "|---|---|---|---|---|---|"
+      finding_rows "$start" "$OUT/$phase-suspects.tsv"
+      echo
+    fi
+    if [ "$names" -gt 0 ]; then
+      echo "DNS questions the host asked:"
+      echo
+      echo '```'
+      cat "$OUT/$phase-suspect-names.txt"
+      echo '```'
+    fi
+    echo
+  } >> "$file"
 }
 
 # "127.0.0.1:4445 (WebDriver) 12, 127.0.0.1:9 (dead proxy) 3", or "none".
@@ -602,17 +738,29 @@ os_label() {
 }
 
 # Prints the phase's table, the first findings in full, and fails on any.
+# The list of what the baseline lacks only gets a warning.
 report() {
-  local phase=$1 md=$2 findings=$3
+  local phase=$1 md=$2 findings=$3 suspects=0
   shift 3
   cat "$md"
+  [ ! -f "$OUT/$phase-suspects.count" ] || suspects=$(cat "$OUT/$phase-suspects.count")
+  if [ "$suspects" -gt 0 ]; then
+    echo "::warning::S2.7 $phase: $suspects item(s) of traffic outside the process tree that the baseline lacks, listed above for review (not findings)"
+  fi
   if [ "$findings" -gt 0 ]; then
     echo "The first findings in full:"
     cat "$@" | head -60
-    [ "$phase" = control ] && return 0
-    fail "$phase: $findings packet(s) from the process tree; see the table above"
+    case $phase in
+      control) return 0 ;;
+      baseline) fail "baseline: $findings packet(s) counted as the app's while it was not running, so the attribution would blame it for the machine's own traffic; see the table above" ;;
+      *) fail "$phase: $findings packet(s) from the process tree; see the table above" ;;
+    esac
   fi
-  [ "$phase" = control ] || echo "$phase: no packet from the process tree."
+  case $phase in
+    control) ;;
+    baseline) echo "baseline: nothing counted as the app's while it was not running." ;;
+    *) echo "$phase: no packet from the process tree." ;;
+  esac
 }
 
 # macOS: the capture as text, with pktap's metadata after the time:
@@ -630,7 +778,11 @@ mac_listing() {
 # matches <want> (and, if given, has PID <pid>), as "<label>\t<line without
 # the metadata>". The label names the process and the direction; an
 # incoming packet's addresses are swapped, so that the line's destination is
-# always the remote end. <mode> "lo0" keeps the ones on lo0 instead.
+# always the remote end. <mode> "lo0" keeps the ones on lo0 instead. <mode>
+# "all" keeps every packet outside lo0, as "<identity>\t<1 if it matches
+# want, else 0>\t<label>\t<line>"; the identity is the process the packet
+# was for (eproc) where pktap names one, else the one that sent or received
+# it, cut to 15 characters, as pktap cuts eproc.
 mac_select() {
   local listing=$1 want=$2 pid=$3 mode=${4:-outside}
   WANT=$want awk -v pid="$pid" -v mode="$mode" '
@@ -652,7 +804,8 @@ mac_select() {
         else if (part[i] ~ /^eproc /) eproc = substr(part[i], 7)
         else if (part[i] == "in" || part[i] == "out") dir = part[i]
       }
-      if (!matches(proc) && !matches(eproc)) next
+      tree = matches(proc) || matches(eproc)
+      if (mode != "all" && !tree) next
       lo = (ifname == "lo0")
       if ((mode == "lo0") != lo) next
       label = name(proc) " (" id(proc) ")"
@@ -667,7 +820,12 @@ mac_select() {
           rest = r[1] " " r[4] " > " r[2] ":" tail
         }
       }
-      print label "\t" $1 " " rest
+      if (mode == "all") {
+        who = (eproc != "") ? name(eproc) : name(proc)
+        print substr(who, 1, 15) "\t" (tree ? 1 : 0) "\t" label "\t" $1 " " rest
+      } else {
+        print label "\t" $1 " " rest
+      }
     }
   ' "$listing"
 }
@@ -677,6 +835,83 @@ lo0_summary() {
   local out
   out=$(awk -F '\t' '{ c[$1]++ } END { for (k in c) { printf "%s%s %d", sep, k, c[k]; sep = "; " } }' "$1")
   echo "${out:-none}"
+}
+
+# macOS: the full command of each process a findings file names, from the
+# phase's process snapshots: pktap cuts names short.
+mac_names() {
+  local file=$1 snapshots=$2 pid cmd
+  [ -f "$snapshots" ] || return 0
+  for pid in $(grep -oE '\([0-9]+\)' "$file" | tr -d '()' | sort -un); do
+    # ps prints PID, parent, the start time in 5 fields, then the command.
+    cmd=$(awk -v pid="$pid" '$1 == pid { for (i = 1; i <= 7; i++) $i = ""; sub(/^ +/, ""); print; exit }' "$snapshots")
+    [ -z "$cmd" ] || echo "- $pid: \`$cmd\`"
+  done
+}
+
+# macOS: each process that sent or received outside lo0 in the phase, while
+# the baseline had it silent, and not counted as the tree's, into
+# <phase>-suspects.md and .count.
+suspects_macos() {
+  local phase=$1 start count file=$OUT/$1-suspects.md
+  start=$(cat "$OUT/$phase-start")
+  {
+    echo
+    echo "##### Outside the process tree, not in the baseline (for review, not a finding)"
+    echo
+    echo "Each process that sent or received packets outside lo0 in the phase, or had them sent for it, but none in the 5 min baseline. macOS starts and stops many daemons of its own, so most of these have nothing to do with the app."
+    echo
+  } > "$file"
+  if [ ! -f "$OUT/baseline-identities.txt" ]; then
+    echo "No baseline was captured, so there is no such list." >> "$file"
+    return 0
+  fi
+  awk -F '\t' 'NR == FNR { seen[$1] = 1; next } $2 == 0 && !($1 in seen)' \
+    "$OUT/baseline-identities.txt" "$OUT/$phase-outside.txt" > "$OUT/$phase-suspects.txt"
+  cut -f 3,4 "$OUT/$phase-suspects.txt" | group > "$OUT/$phase-suspects.tsv"
+  count=$(cut -f 1 "$OUT/$phase-suspects.txt" | sort -u | awk 'END { print NR }')
+  echo "$count" > "$OUT/$phase-suspects.count"
+  if [ "$count" -eq 0 ]; then
+    echo "None." >> "$file"
+    return 0
+  fi
+  {
+    echo "| For | Processes | Packets | Remote ends | First, from the phase's start |"
+    echo "|---|---|---|---|---|"
+    awk -F '\t' -v start="$start" '
+      {
+        who = $1
+        if (!(who in packets)) { order[++k] = who; first[who] = $4 + 0 }
+        packets[who]++
+        proc = $3
+        sub(/, (in|out)$/, "", proc)
+        sub(/ for .*/, "", proc)
+        if (!((who SUBSEP proc) in seenproc)) {
+          seenproc[who SUBSEP proc] = 1
+          if (nprocs[who]++ < 3) procs[who] = procs[who] (procs[who] == "" ? "" : ", ") proc
+        }
+        split($4, f, " ")
+        end = f[5]
+        sub(/:$/, "", end)
+        proto = f[6]
+        sub(/,$/, "", proto)
+        if (proto == "tcp" || proto == "UDP" || proto == "udp") sub(/\.[^.]*$/, "", end)
+        if (!((who SUBSEP end) in seenend)) {
+          seenend[who SUBSEP end] = 1
+          if (nends[who]++ < 3) ends[who] = ends[who] (ends[who] == "" ? "" : ", ") end
+        }
+      }
+      END {
+        for (i = 1; i <= k; i++) {
+          who = order[i]
+          more = (nprocs[who] > 3) ? sprintf(" and %d more", nprocs[who] - 3) : ""
+          moreends = (nends[who] > 3) ? sprintf(" and %d more", nends[who] - 3) : ""
+          printf "| %s | %s%s | %d | %d: %s%s | +%.1f s |\n", who, procs[who], more, packets[who], nends[who], ends[who], moreends, first[who] - start
+        }
+      }
+    ' "$OUT/$phase-suspects.txt"
+    echo
+  } >> "$file"
 }
 
 # check_macos <phase> <process regex> <pid or empty>
@@ -695,22 +930,29 @@ check_macos() {
   tree=$(lines "$OUT/$phase-tree.txt")
   lo0=$(lines "$OUT/$phase-tree-lo0.txt")
   # The canary's names, whichever process asks: a lookup the resolver makes
-  # for a process it does not name would still show here.
+  # for a process it does not name would still show here. One line a packet.
   packets "$pcap" 'port 53' "$OUT/$phase-dns-long.txt" -k -v
+  join_lines "$OUT/$phase-dns-long.txt"
   grep -F "$CANARY" "$OUT/$phase-dns-long.txt" > "$OUT/$phase-canary.txt" || true
   canary=$(lines "$OUT/$phase-canary.txt")
-  findings=$((tree + canary))
-  group "$OUT/$phase-tree.txt" > "$tsv"
-  # The same packets in long form (DNS questions), by time stamp.
+  # Packets, each once: a canary lookup made for the tree is in both lists,
+  # so a canary packet counts only if no packet of the tree has its time
+  # stamp. (Time stamps alone can't be counted: pktap gives a burst of
+  # packets one time stamp.)
   cut -f 2 "$OUT/$phase-tree.txt" | awk '{ print $1 }' > "$OUT/$phase-tree-times.txt"
-  grep -F -f "$OUT/$phase-tree-times.txt" "$OUT/$phase-dns-long.txt" > "$OUT/$phase-tree-dns.txt" 2> /dev/null || true
+  awk 'NR == FNR { seen[$1] = 1; next } !($1 in seen)' \
+    "$OUT/$phase-tree-times.txt" "$OUT/$phase-canary.txt" > "$OUT/$phase-canary-other.txt"
+  findings=$((tree + $(lines "$OUT/$phase-canary-other.txt")))
+  group "$OUT/$phase-tree.txt" > "$tsv"
+  # The tree's DNS packets in long form, which shows their questions.
+  mac_select "$OUT/$phase-dns-long.txt" "$want" "$pid" | cut -f 2 > "$OUT/$phase-tree-dns.txt"
 
   {
     echo "#### $phase: $(os_label)"
     echo
-    echo "| Capture | Packets, all processes | Outside lo0 | From the process tree, outside lo0 (findings) | From the tree on lo0 | DNS for the canary's hosts, any process |"
-    echo "|---|---|---|---|---|---|"
-    echo "| pktap, every interface | $total | $outside | $tree | $lo0 | $canary |"
+    echo "| Capture | Packets, all processes | Outside lo0 | From the process tree, outside lo0 | From the tree on lo0 | DNS for the canary's hosts, any process | Findings (packets, each once) |"
+    echo "|---|---|---|---|---|---|---|"
+    echo "| pktap, every interface | $total | $outside | $tree | $lo0 | $canary | $findings |"
     echo
     echo "The tree's packets on lo0, which never leave the machine: $(lo0_summary "$OUT/$phase-tree-lo0.txt")."
     echo
@@ -720,16 +962,34 @@ check_macos() {
       echo "| Process | Remote end | Port | Protocol | Packets | First, from the phase's start |"
       echo "|---|---|---|---|---|---|"
       finding_rows "$start" "$tsv"
-      dns_lines "$OUT/$phase-tree-dns.txt" "$OUT/$phase-canary.txt"
+      dns_lines "$OUT/$phase-tree-dns.txt" "$OUT/$phase-canary-other.txt"
+      if [ -s "$OUT/$phase-processes.txt" ]; then
+        echo
+        echo "The processes named above, from the phase's process snapshots:"
+        echo
+        mac_names "$tsv" "$OUT/$phase-processes.txt"
+      fi
     fi
     echo
   } > "$md"
   # The app's own WebDriver traffic on lo0 shows that pktap saw the app and
   # named it.
-  if [ "$phase" != control ] && [ "$lo0" -eq 0 ]; then
+  if { [ "$phase" = idle ] || [ "$phase" = in-use ]; } && [ "$lo0" -eq 0 ]; then
     cat "$md"
     fail "$phase: pktap named no packet as the app's, not even its WebDriver traffic on lo0, so the capture proves nothing"
   fi
+  case $phase in
+    baseline)
+      mac_select "$listing" "$TREE_PROCS" '' all > "$OUT/$phase-outside.txt"
+      cut -f 1 "$OUT/$phase-outside.txt" | sort -u > "$OUT/baseline-identities.txt"
+      echo "baseline: $(lines "$OUT/baseline-identities.txt") process(es) sent or received packets outside lo0, or had them sent for them."
+      ;;
+    idle | in-use)
+      mac_select "$listing" "$TREE_PROCS" '' all > "$OUT/$phase-outside.txt"
+      suspects_macos "$phase"
+      cat "$OUT/$phase-suspects.md" >> "$md"
+      ;;
+  esac
   report "$phase" "$md" "$findings" "$OUT/$phase-tree.txt" "$OUT/$phase-canary.txt"
 }
 
@@ -810,8 +1070,53 @@ control_macos() {
 
 # --- Phases -------------------------------------------------------------------
 
+# The same captures as idle, as long, before the app ever runs on this
+# machine, so that the daemons it starts are not running yet.
+baseline() {
+  local process
+  process=$(pgrep -fl "$BINARY" || true)
+  [ -z "$process" ] || fail "baseline: the app already runs, so this is no baseline: $process"
+  echo "WebKit's processes and daemons running now (none expected; any traffic of theirs fails the baseline's check):"
+  app_processes | grep -v -e tcpdump -e "$OUT" || echo "  none"
+  start_captures baseline
+  watch_processes baseline
+  echo "Baseline: capturing $IDLE_SECONDS s with nothing of Navaja running."
+  sleep "$IDLE_SECONDS"
+  stop_watch
+  stop_captures
+  capture_counts baseline
+  echo "Baseline: done; the capture is checked in the next step."
+}
+
+# Linux: after a phase, outside its capture, the namespace must still reach
+# the network. Had its veth, route or NAT stopped working, a send from the
+# app would have failed inside the namespace (no route) without putting a
+# packet on the veth, and the phase would look clean.
+namespace_alive() {
+  local phase=$1 status=0 link route
+  rm -f "$OUT/$phase-no-way-out"
+  link=$(ns ip -o link show "$NS_IF" 2>&1 || true)
+  route=$(ns ip route show default 2>&1 || true)
+  echo "$NS_IF: $link"
+  echo "Default route: $route"
+  [[ $link == *"state UP"* ]] || status=1
+  [[ $route == *"via $NET4.1 "* ]] || status=1
+  ns ping -c 1 -W 2 "$NET4.1" > /dev/null || status=1
+  # shellcheck disable=SC2016
+  in_ns bash -c '
+    getent ahosts github.com > /dev/null &&
+      curl -sS -o /dev/null --max-time 30 https://github.com
+  ' || status=1
+  if [ "$status" -ne 0 ]; then
+    : > "$OUT/$phase-no-way-out"
+    echo "::error::S2.7 $phase: after the phase the namespace no longer reaches the network: $NS_IF, its default route, a ping to $NET4.1 or a request to github.com failed"
+    return 1
+  fi
+  echo "After the phase, outside its capture, the namespace still reached github.com (DNS through $RESOLVER, TCP to port 443)."
+}
+
 idle() {
-  local status=0
+  local status=0 alive=0
   [ -x "$BINARY" ] || fail "idle: no $BINARY; build it first (see the top of this script)"
   start_captures idle
   watch_processes idle
@@ -826,12 +1131,14 @@ idle() {
   stop_watch
   stop_captures
   capture_counts idle
+  [ "$OS" != linux ] || namespace_alive idle || alive=1
   [ "$status" -eq 0 ] || fail "idle: the app did not idle as planned (exit $status); see above"
+  [ "$alive" -eq 0 ] || fail "idle: the namespace lost its way out; see above"
   echo "Idle: done; the capture is checked in the next step."
 }
 
 in_use() {
-  local status=0
+  local status=0 alive=0
   [ -x "$BINARY" ] || fail "in use: no $BINARY; build it first (see the top of this script)"
   start_captures in-use
   watch_processes in-use
@@ -848,7 +1155,9 @@ in_use() {
   stop_watch
   stop_captures
   capture_counts in-use
+  [ "$OS" != linux ] || namespace_alive in-use || alive=1
   [ "$status" -eq 0 ] || fail "in use: the end-to-end suite failed (exit $status)"
+  [ "$alive" -eq 0 ] || fail "in use: the namespace lost its way out; see above"
   echo "In use: the suite passed; the capture is checked in the next step."
 }
 
@@ -972,22 +1281,23 @@ in_use_app() {
 case "${1:-}" in
   setup) setup ;;
   control) control ;;
+  baseline) baseline ;;
   idle) idle ;;
   idle-app) idle_app ;;
   in-use) in_use ;;
   in-use-app) in_use_app ;;
   check)
     case "${2:-}" in
-      idle | in-use) check "$2" ;;
+      baseline | idle | in-use) check "$2" ;;
       *)
-        echo "usage: $0 check idle|in-use" >&2
+        echo "usage: $0 check baseline|idle|in-use" >&2
         exit 2
         ;;
     esac
     ;;
   teardown) teardown ;;
   *)
-    echo "usage: $0 setup|control|idle|check idle|in-use|check in-use|teardown" >&2
+    echo "usage: $0 setup|control|baseline|check baseline|idle|check idle|in-use|check in-use|teardown" >&2
     exit 2
     ;;
 esac

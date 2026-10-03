@@ -5,14 +5,20 @@
 // captures the packets; this reads the DNS ones, so that a connection's
 // local port or remote address can be matched with a name.
 //
-// Usage: node scripts/spikes/s2-7-dns.mjs <capture.pcapng>
+// Usage: node scripts/spikes/s2-7-dns.mjs <capture.pcapng> [--strip <out.pcapng>]
 // Prints a JSON array, one object per DNS message over UDP:
 //   { time, src, sport, dst, dport, id, response, rcode, questions: [{ name, type }],
 //     answers: [{ name, type, data }] }
 // time is in seconds since the epoch. Ethernet (with or without a VLAN tag)
 // and raw IP frames are read; other link types, TCP DNS and frames cut short
 // are skipped.
-import { readFileSync } from 'node:fs';
+//
+// With --strip, it also writes a copy of the capture for the artifact: each
+// packet cut to its link, IP and TCP or UDP headers, except DNS over UDP,
+// which is kept as captured. The capture holds the whole runner's traffic,
+// and some of it is plain text that is none of this spike's business, such
+// as the VM agent's exchanges with Azure's WireServer.
+import { readFileSync, writeFileSync } from 'node:fs';
 
 const TYPES = {
   1: 'A',
@@ -27,9 +33,9 @@ const TYPES = {
   65: 'HTTPS',
 };
 
-const file = process.argv[2];
-if (!file) {
-  console.error('usage: node s2-7-dns.mjs <capture.pcapng>');
+const [file, flag, stripTo] = process.argv.slice(2);
+if (!file || (flag !== undefined && (flag !== '--strip' || !stripTo))) {
+  console.error('usage: node s2-7-dns.mjs <capture.pcapng> [--strip <out.pcapng>]');
   process.exit(2);
 }
 const buf = readFileSync(file);
@@ -131,45 +137,110 @@ function parseDns(msg) {
   return out;
 }
 
-function onFrame(linkType, time, frame) {
+/**
+ * Where a frame's headers end, and its UDP datagram if it has one:
+ * { headers, udp: { src, dst, sport, dport, payload } | null }. headers is 0
+ * for a link type this can't read.
+ */
+function layers(linkType, frame) {
   let at = 0;
   let ethertype;
   if (linkType === 1) {
-    if (frame.length < 14) return;
+    if (frame.length < 14) return { headers: 0, udp: null };
     ethertype = frame.readUInt16BE(12);
     at = 14;
-    while (ethertype === 0x8100 || ethertype === 0x88a8) {
+    while ((ethertype === 0x8100 || ethertype === 0x88a8) && at + 4 <= frame.length) {
       ethertype = frame.readUInt16BE(at + 2);
       at += 4;
     }
   } else if (linkType === 101 || linkType === 12 || linkType === 228 || linkType === 229) {
+    if (frame.length < 1) return { headers: 0, udp: null };
     ethertype = frame[0] >> 4 === 6 ? 0x86dd : 0x0800;
   } else {
-    return;
+    return { headers: 0, udp: null };
   }
   let src;
   let dst;
   let proto;
-  if (ethertype === 0x0800) {
+  if (ethertype === 0x0800 && at + 20 <= frame.length) {
     const ihl = (frame[at] & 0xf) * 4;
     proto = frame[at + 9];
     src = ipv4(frame, at + 12);
     dst = ipv4(frame, at + 16);
     at += ihl;
-  } else if (ethertype === 0x86dd) {
+  } else if (ethertype === 0x86dd && at + 40 <= frame.length) {
     proto = frame[at + 6];
     src = ipv6(frame, at + 8);
     dst = ipv6(frame, at + 24);
     at += 40;
   } else {
-    return;
+    // ARP and the like: the link header only.
+    return { headers: Math.min(at, frame.length), udp: null };
   }
-  if (proto !== 17 || at + 8 > frame.length) return;
-  const sport = frame.readUInt16BE(at);
-  const dport = frame.readUInt16BE(at + 2);
-  if (sport !== 53 && dport !== 53) return;
-  const dns = parseDns(frame.subarray(at + 8));
-  if (dns) messages.push({ time, src, sport, dst, dport, ...dns });
+  if (proto === 6 && at + 13 <= frame.length) {
+    return { headers: Math.min(at + (frame[at + 12] >> 4) * 4, frame.length), udp: null };
+  }
+  if (proto === 17 && at + 8 <= frame.length) {
+    const udp = {
+      src,
+      dst,
+      sport: frame.readUInt16BE(at),
+      dport: frame.readUInt16BE(at + 2),
+      payload: frame.subarray(at + 8),
+    };
+    return { headers: at + 8, udp };
+  }
+  // ICMP, ICMPv6 and the rest: their first 8 bytes at most.
+  return { headers: Math.min(at + 8, frame.length), udp: null };
+}
+
+function isDns(udp) {
+  return udp !== null && (udp.sport === 53 || udp.dport === 53);
+}
+
+function onFrame(linkType, time, frame) {
+  const { udp } = layers(linkType, frame);
+  if (!isDns(udp)) return;
+  const dns = parseDns(udp.payload);
+  if (dns) {
+    const { src, sport, dst, dport } = udp;
+    messages.push({ time, src, sport, dst, dport, ...dns });
+  }
+}
+
+/** The blocks of the stripped copy, with --strip. */
+const copy = [];
+
+function u32Bytes(value) {
+  const bytes = Buffer.alloc(4);
+  if (little) bytes.writeUInt32LE(value);
+  else bytes.writeUInt32BE(value);
+  return bytes;
+}
+
+/**
+ * The Enhanced Packet Block at `at` with its packet cut to `keep` bytes; the
+ * original length and the options stay as they were.
+ */
+function cutPacketBlock(at, length, keep) {
+  const body = at + 8;
+  const captured = u32(body + 12);
+  const options = buf.subarray(body + 20 + Math.ceil(captured / 4) * 4, at + length - 4);
+  const pad = (4 - (keep % 4)) % 4;
+  const total = 32 + keep + pad + options.length;
+  return Buffer.concat([
+    u32Bytes(0x00000006),
+    u32Bytes(total),
+    // Interface, and the time stamp's two halves.
+    buf.subarray(body, body + 12),
+    u32Bytes(keep),
+    // The original length.
+    buf.subarray(body + 16, body + 20),
+    buf.subarray(body + 20, body + 20 + keep),
+    Buffer.alloc(pad),
+    options,
+    u32Bytes(total),
+  ]);
 }
 
 let at = 0;
@@ -202,15 +273,37 @@ while (at + 12 <= buf.length) {
     const iface = interfaces[u32(body)];
     const stamp = (BigInt(u32(body + 4)) << 32n) | BigInt(u32(body + 8));
     const captured = u32(body + 12);
+    const frame = buf.subarray(body + 20, body + 20 + captured);
+    let keep = 0;
     if (iface) {
-      const time = Number(stamp) / iface.perSecond;
-      onFrame(iface.linkType, time, buf.subarray(body + 20, body + 20 + captured));
+      onFrame(iface.linkType, Number(stamp) / iface.perSecond, frame);
+      const { headers, udp } = layers(iface.linkType, frame);
+      keep = isDns(udp) ? captured : headers;
     }
-  } else if (type === 0x00000003 && interfaces[0]) {
-    const captured = Math.min(u32(body), length - 16);
-    onFrame(interfaces[0].linkType, 0, buf.subarray(body + 4, body + 4 + captured));
+    copy.push(keep < captured ? cutPacketBlock(at, length, keep) : buf.subarray(at, at + length));
+    at += length;
+    continue;
+  } else if (type === 0x00000003) {
+    // A Simple Packet Block has no field for a cut copy's original length,
+    // so the copy keeps it only if it holds DNS.
+    let dns = false;
+    if (interfaces[0]) {
+      const captured = Math.min(u32(body), length - 16);
+      const frame = buf.subarray(body + 4, body + 4 + captured);
+      onFrame(interfaces[0].linkType, 0, frame);
+      dns = isDns(layers(interfaces[0].linkType, frame).udp);
+    }
+    if (dns) copy.push(buf.subarray(at, at + length));
+    at += length;
+    continue;
   }
+  copy.push(buf.subarray(at, at + length));
   at += length;
 }
+if (at !== buf.length) {
+  console.error(`s2-7-dns.mjs: ${file}: unreadable block at byte ${at} of ${buf.length}`);
+  process.exit(1);
+}
 
+if (stripTo) writeFileSync(stripTo, Buffer.concat(copy));
 process.stdout.write(`${JSON.stringify(messages)}\n`);
