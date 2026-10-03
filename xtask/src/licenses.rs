@@ -104,13 +104,42 @@ fn pnpm_licenses(root: &Path) -> Result<String> {
     let output = run_pnpm(root, &args)?;
     if !output.status.success() {
         bail!(
-            "pnpm {} failed ({}): {}",
+            "pnpm {} failed ({}): {}; run `pnpm install --frozen-lockfile` first",
             args.join(" "),
             output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
+            pnpm_error(&output.stdout, &output.stderr)
         );
     }
     String::from_utf8(output.stdout).context("pnpm output is not UTF-8")
+}
+
+/// What a failed pnpm run said. Under `--json`, pnpm 11 prints its error
+/// as JSON on stdout, `{ "error": { "code", "message" } }`, and leaves
+/// stderr empty.
+fn pnpm_error(stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    if !stderr.trim().is_empty() {
+        return stderr.trim().to_owned();
+    }
+    let stdout = String::from_utf8_lossy(stdout);
+    let stdout = stdout.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(stdout) {
+        let error = &value["error"];
+        match (error["code"].as_str(), error["message"].as_str()) {
+            (Some(code), Some(message)) => return format!("{code}: {message}"),
+            (Some(text), None) | (None, Some(text)) => return text.to_owned(),
+            (None, None) => {}
+        }
+    }
+    if stdout.is_empty() {
+        return "no output".to_owned();
+    }
+    let excerpt: String = stdout.chars().take(300).collect();
+    if excerpt.len() < stdout.len() {
+        format!("{excerpt}...")
+    } else {
+        excerpt
+    }
 }
 
 /// On Windows pnpm is usually a `.cmd` shim (npm, corepack), which Command
@@ -711,6 +740,32 @@ mod tests {
             license: "MIT".to_owned(),
         };
         assert_eq!(package.label(), "@types/node@20.19.43, 24.19.1");
+    }
+
+    #[test]
+    fn a_failed_pnpm_run_reports_what_pnpm_said() {
+        let error = |stdout: &str, stderr: &str| pnpm_error(stdout.as_bytes(), stderr.as_bytes());
+        // What pnpm 11 prints under --json when there is no lockfile.
+        let json = r#"{
+          "error": {
+            "code": "ERR_PNPM_LICENSES_NO_LOCKFILE",
+            "message": "No pnpm-lock.yaml found"
+          }
+        }"#;
+        assert_eq!(
+            error(json, ""),
+            "ERR_PNPM_LICENSES_NO_LOCKFILE: No pnpm-lock.yaml found"
+        );
+        assert_eq!(error(json, " \n"), error(json, ""));
+        assert_eq!(error(r#"{ "error": { "message": "m" } }"#, ""), "m");
+        // stderr, when there is any, is what pnpm meant to say.
+        assert_eq!(error(json, "  ERR_PNPM_X boom\n"), "ERR_PNPM_X boom");
+        // Anything else is shown as it is, shortened.
+        assert_eq!(error(" plain text\n", ""), "plain text");
+        assert_eq!(error(r#"{ "MIT": [] }"#, ""), r#"{ "MIT": [] }"#);
+        assert_eq!(error("", ""), "no output");
+        let long = "x".repeat(1000);
+        assert_eq!(error(&long, ""), format!("{}...", "x".repeat(300)));
     }
 
     #[test]
