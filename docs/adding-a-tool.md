@@ -4,48 +4,81 @@ A new text tool is **one new folder plus one registration line**. It needs no Ty
 
 ## 1. Create the folder
 
+Copy the reference generator, [`tools/uuid/`](../tools/uuid/), to `tools/<id>/`, or start from the `Transform` example in §3.
+
 ```
 tools/<id>/
 ├── mod.rs      # the tool: metadata + logic
-├── icon.svg    # 24×24, currentColor strokes (assets/brand/GUIDELINES.md)
+├── icon.svg    # 24×24, currentColor strokes
 └── tests.rs    # unit tests (declared with `#[cfg(test)] mod tests;` in mod.rs)
 ```
 
 **Choosing `<id>`:**
-- It must match `[a-z][a-z0-9_]*`.
+- It must match `[a-z][a-z0-9_]*` and be at most 64 bytes.
 - It equals the folder name.
 - It is permanent: settings and translations are keyed by it.
-- Ids containing `__` are reserved for extensions.
+- Ids containing `__` are reserved for extensions, and `core` is reserved for the host.
+
+**`icon.svg`** follows "Tool icons" in [GUIDELINES.md](../assets/brand/GUIDELINES.md#tool-icons-toolsidiconsvg). The registry rejects an icon that breaks these rules ([`icon.rs`](../crates/navaja-core/src/icon.rs)):
+- The root is `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">`.
+- **Elements:** `svg`, `g`, `path`, `circle`, `ellipse`, `rect`, `line`, `polyline`, `polygon`.
+- **Attributes:** only the geometry and paint attributes listed in `icon.rs`, such as `d`, `points`, `fill`, `stroke-width`, `opacity` and `transform`. `fill` and `stroke` are `none` or `currentColor`. No `style`, `class`, `href` or event attributes.
+- No text and no processing instructions; at most 8 KiB and 128 nodes.
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 5h16M11 10h9M11 14h9M4 19h16M4 9.5l3 2.5-3 2.5"/>
+</svg>
+```
 
 ## 2. Register it
 
-Add one line to `register_tools!` in [`tools/lib.rs`](../tools/lib.rs), keeping the list sorted:
+Add one line, `<id>,`, to `register_tools!` in [`tools/lib.rs`](../tools/lib.rs). Today the list holds only `uuid`, so adding `my_tool` gives:
 
 ```rust
 register_tools! {
-    base64,
-    my_tool,   // ← the one line
+    my_tool,
     uuid,
 }
 ```
 
-`registry_test.rs` fails if a folder with a `mod.rs` is missing from the list, or if the list is not sorted.
+- **Order:** byte by byte, as Rust sorts `&str`. A prefix comes first, then digits, then `_`, then letters: `json`, `json5`, `json_path`, `jsonl`.
+- [`registry_test.rs`](../tools/registry_test.rs) fails if a folder with a `mod.rs` is missing from the list, or if the list is out of order.
+- `tool-gate` (§5) accepts only added lines that read exactly `<id>,`, one per new tool. Don't add a comment to the line or edit any other line.
 
 ## 3. Write `mod.rs`
 
-[`tools/uuid/mod.rs`](../tools/uuid/mod.rs) is the reference generator. The shape:
+A complete `Transform` tool with two modes and one option. With the icon above and the `tests.rs` from §5, it compiles as is in `tools/my_tool/`:
 
 ```rust
-use navaja_core::{ActionMeta, Category, Ctx, SPEC_VERSION, Tool, ToolError, ToolId, ToolMeta, UiSpec, Value, typed};
+//! My tool: indents or dedents every line of pasted text.
+
+use navaja_core::{
+    ActionMeta, Category, Control, Ctx, ErrorCode, InputSpec, OptionSpec, OutputKind, OutputSpec,
+    SPEC_VERSION, Tool, ToolError, ToolId, ToolMeta, TransformSpec, UiSpec, Value, typed,
+};
 use serde::Deserialize;
 use serde_json::json;
 
 pub(crate) const TOOL: MyTool = MyTool;
+
 pub(crate) struct MyTool;
 
+const MAX_WIDTH: u32 = 16;
+const DEFAULT_WIDTH: u32 = 2; // used by the spec and by serde
+const WIDTH_OUT_OF_RANGE: ErrorCode = ErrorCode::from_static("my_tool.width_out_of_range");
+
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]          // unknown keys are an error, not ignored
-struct Input { input: String, #[serde(default)] uppercase: bool }
+#[serde(deny_unknown_fields)] // unknown keys are an error, not ignored
+struct Input {
+    input: String, // the pasted text
+    #[serde(default = "default_width")]
+    width: u32, // the option whose key is "width"
+}
+
+fn default_width() -> u32 {
+    DEFAULT_WIDTH
+}
 
 impl Tool for MyTool {
     fn meta(&self) -> ToolMeta {
@@ -53,27 +86,80 @@ impl Tool for MyTool {
             spec_version: SPEC_VERSION,
             id: ToolId::from_static("my_tool"),
             name: "My tool".into(),
-            description: "One sentence on what it does.".into(),
-            category: Category::ENCODERS,
-            keywords: vec!["lower".into(), "case".into()],
+            description: "Indents or dedents every line of pasted text.".into(),
+            category: Category::FORMATTERS,
+            keywords: vec!["indent".into(), "dedent".into()],
             icon: include_str!("icon.svg").into(),
             capabilities: vec![],
-            actions: vec![ActionMeta::new("encode", "Encode")],
+            actions: vec![
+                ActionMeta::new("indent", "Indent"),
+                ActionMeta::new("dedent", "Dedent"),
+            ],
             tray: false,
-            ui: UiSpec::Transform(/* modes, input, options, outputs */),
+            ui: UiSpec::Transform(TransformSpec {
+                modes: vec!["indent".into(), "dedent".into()], // the first is the default
+                input: InputSpec {
+                    lang: None,
+                    placeholder: Some("Paste text".into()),
+                },
+                options: vec![OptionSpec {
+                    key: "width".into(),
+                    label: "Width".into(),
+                    control: Control::Integer {
+                        min: 0,
+                        max: i64::from(MAX_WIDTH),
+                        default: i64::from(DEFAULT_WIDTH),
+                    },
+                    modes: vec!["indent".into()], // empty means every mode
+                }],
+                outputs: vec![OutputSpec {
+                    key: "text".into(),
+                    label: "Result".into(),
+                    format: OutputKind::Text,
+                }],
+                live: true,
+            }),
         }
     }
 
     fn invoke(&self, action: &str, input: Value, ctx: &Ctx<'_>) -> Result<Value, ToolError> {
-        let input: Input = typed(input)?;   // never echoes the input in errors
-        ctx.check()?;                       // before any side effect; in long loops too
-        Ok(json!({ "text": /* … */ }))      // keys = declared output keys
+        let input: Input = typed(input)?; // never echoes the input in errors
+        if input.width > MAX_WIDTH {
+            return Err(
+                ToolError::new(WIDTH_OUT_OF_RANGE, "Choose a width from 0 to 16.")
+                    .with_details(json!({ "min": 0, "max": MAX_WIDTH })),
+            );
+        }
+        ctx.check()?; // before any side effect; in long loops too
+        let text = match action {
+            "indent" => indent(&input.input, input.width),
+            "dedent" => dedent(&input.input),
+            _ => unreachable!("the registry passes only declared actions"),
+        };
+        Ok(json!({ "text": text })) // every declared output key, no others
     }
+}
+
+fn indent(text: &str, width: u32) -> String {
+    let pad = " ".repeat(width as usize);
+    let lines: Vec<String> = text.lines().map(|line| format!("{pad}{line}")).collect();
+    lines.join("\n")
+}
+
+fn dedent(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().map(str::trim_start).collect();
+    lines.join("\n")
 }
 
 #[cfg(test)]
 mod tests;
 ```
+
+For a `Generator`, start from [`tools/uuid/mod.rs`](../tools/uuid/mod.rs). It imports `GeneratorSpec` instead of `TransformSpec` and `InputSpec`, and `Choice` for its choice options.
+
+**In `invoke`:**
+- **Order:** `typed()` first, then checks that need no work, then `ctx.check()`, then the work.
+- **Actions:** `Registry::run` answers an undeclared action with `core.unknown_action` and never calls `invoke`, so `action` is always a declared id. A one-action tool can ignore it, as uuid does. A `match` needs its fallback arm only for the compiler.
 
 ### Choosing the UI
 
@@ -83,7 +169,39 @@ mod tests;
 | `Generator` | Options → output, no input (UUID) | Nothing in TypeScript |
 | `Custom { view }` | Interactive tools the generic views can't express (the port inspector) | `ui/View.svelte` and `ui/i18n/en.ts` in the tool folder; `view` equals the id |
 
-Prefer `Transform` or `Generator`. A custom view needs a reason in the PR. A `Generator` action can't be `destructive`; the registry rejects it, because the generator view has no confirmation step.
+Prefer `Transform` or `Generator`. A custom view needs a reason in the PR.
+
+The registry accepts and runs `Transform` tools today, and their tests pass, but the app has no `TransformView` until M3 ([roadmap](roadmap.md), M3 item 3). Until then it shows such a tool as needing a newer version of Navaja.
+
+Besides `options` and `outputs` (below), the specs have these fields:
+
+| Field | Meaning |
+|---|---|
+| `modes` (Transform) | Action ids, shown as modes; the first is the default. Every declared action must be a mode. |
+| `input` (Transform) | `InputSpec { lang, placeholder }`: an editor language hint such as `json` (`None` for plain text) and the placeholder. The pasted text reaches `invoke` as a string under the key `input`. |
+| `live` (Transform) | Re-run, debounced, as the input changes. A live mode can't be `destructive`. |
+| `action` (Generator) | The tool's one action. It can't be `destructive`, because the generator view has no confirmation step. |
+| `run_on_open` (Generator) | Run once with the default options when the tool opens. |
+
+### Options
+
+Each `OptionSpec` becomes one key of the input object:
+- **`key`:** `[a-z][a-z0-9_]*`, unique, never `input` or `file` (reserved). It must equal the serde field name in your `Input` struct.
+- **`label`:** the English fallback.
+- **`control`:** one of the controls below.
+- **`modes`:** for a `Transform`, the modes the option applies to; empty means all. Leave it empty for a `Generator`; the registry rejects anything else.
+
+| `Control` | Value sent | The registry requires |
+|---|---|---|
+| `Toggle { default }` | bool | nothing more |
+| `Choice { choices, default }` | the `value` of one `Choice::new(value, label)` | non-empty, unique values that include `default` |
+| `Integer { min, max, default }` | an integer (`i64` in the spec) | `min <= default <= max`, all within ±(2^53-1) |
+| `Text { default, limit }` | a string; `limit` is its maximum length in characters | `default` within `limit` |
+
+- **What the view sends:** every option that applies to the current mode, starting at its default ([`options.ts`](../app/src/generic/options.ts)). Options for other modes are left out.
+- **Nothing clamps:** the registry checks the spec, never the values, and in the view `min`, `max` and `limit` are only HTML input attributes. `invoke` re-checks any bound it relies on (§4).
+- **Integer type:** deserialize into any integer type that holds `min..=max` (uuid uses `u32`). A number that doesn't fit the type fails `typed()` with `core.invalid_input`.
+- **Defaults:** each default lives twice, in the `Control` (what the view sends) and in the serde default (used when the key is missing: options outside the current mode, and tests that send `{}`). Nothing checks that the two agree, so use one const for both, like `DEFAULT_WIDTH` above.
 
 ### Outputs
 
@@ -104,30 +222,66 @@ These are enforced by lints, cargo-deny, `registry_test.rs` and review:
   - Never print, prompt, start an async runtime or open a connection.
   - Never take a file path; v1 text tools work on pasted text.
 - **Errors carry stable codes:** `<id>.<snake_case>`, or `core.invalid_input` (from `typed()`) and `core.cancelled` (from `ctx.check()`). Diagnostics use `<id>.*` codes.
+  - Write each code as an `ErrorCode::from_static("<id>.<name>")` literal, spelled exactly so, in a const like `WIDTH_OUT_OF_RANGE` above. `registry_test.rs` finds codes by searching your folder for that text; a code built any other way is checked only when a test returns it.
+  - Build the error with `ToolError::new(CODE, message)`, adding `.with_details(json!({ … }))` for structured facts such as ranges and positions.
   - The message is an English fallback that **never repeats the input**: no "invalid token `eyJ…`".
-  - Put structured facts (ranges, positions) in `details`.
 - **Parse input with `typed()`** on a `#[serde(deny_unknown_fields)]` struct. Never use maps keyed by user content.
-- **Call `ctx.check()` before any side effect.** `registry_test.rs` calls every action with a pre-cancelled context and a junk input, and expects `core.invalid_input` or `core.cancelled`. It also sends each option's default, every choice and both integer bounds, as the generic views do.
+- **Re-check option bounds in `invoke`.** An integer outside `min..=max` or a text longer than `limit` can still arrive. Return your own code with the bounds in `details`, as uuid does with `uuid.count_out_of_range` and `{ min, max }`.
+- **Call `ctx.check()` before any side effect** and periodically in long loops (uuid checks every 1,024 items).
+- **`registry_test.rs` probes every action:**
+  - **Junk input:** it calls `invoke` directly with a cancelled `Ctx` and `{"__navaja_probe__": true}`, and expects `core.invalid_input` or `core.cancelled`. With `deny_unknown_fields`, `typed()` refuses the probe first, so checks that return `<id>.*` codes may come before `ctx.check()`, as in uuid.
+  - **View inputs:** through the registry, it sends every applicable option at its default, plus `input: ""` for a `Transform`. The defaults may not fail with `core.invalid_input`, `core.invalid_output` or `core.panicked`, and a `Generator` without capabilities must succeed with them.
+  - **Option values:** then, one at a time, each choice, both toggle values and both integer bounds. None may fail with `core.invalid_input`.
 - **No secrets in logs.** Tools don't log. The shell logs only the tool id, action, duration and error code.
-- **Dependencies:**
+- **Dependencies** go in [`tools/Cargo.toml`](../tools/Cargo.toml), never in the root `Cargo.toml`: `tool-gate` rejects any change to it.
+  - **Already there:** `navaja-core`, `serde`, `serde_json`, `uuid`.
+  - **In the root `[workspace.dependencies]`:** write `<crate> = { workspace = true }`. Available: `proptest` (under `[dev-dependencies]`), `roxmltree`, `serde_path_to_error`, `ts-rs`. The `tauri` entries are for the app only.
+  - **Anything else:** write its version in `tools/Cargo.toml`, such as `<crate> = "1.2.3"`; cargo-deny rejects `*`. Moving it into the workspace table is a separate `host-change` PR.
   - **Allowed:** small, maintained crates with a licence on the `deny.toml` allowlist.
   - **Not allowed:** Tauri, tokio, HTTP clients and socket crates. `cargo xtask check` and cargo-deny reject them.
 
 ## 5. Test it
 
 ```sh
+cargo fmt --all --check
 cargo test -p navaja-tools            # your tests + the registry checks
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask check                     # dependency rules
-cargo xtask tool-gate origin/main     # what your PR touches
+cargo deny --all-features check bans licenses sources   # if you added a dependency
 ```
 
-In tests, call your tool through `navaja_core::run_single(TOOL, "action", input)`, not `invoke`. That way the output and error-code checks apply, as in `tools/uuid/tests.rs`.
+Then commit, and check what your PR touches:
+
+```sh
+git fetch origin
+cargo xtask tool-gate origin/main
+```
+
+- **Commit first.** `tool-gate` compares `<base>...HEAD`, so it sees committed changes only. Before your first commit it prints `tool-gate: no new tool in this diff` and exits 0. Look for `tool-gate: ok (text tool: <id>)`.
+- **The base** is the branch your PR targets, fetched from the main repository; CI passes `origin/<target branch>`. In a fork, add the main repository as a remote, such as `upstream`, fetch it and pass `upstream/main`.
+- **Bindings:** CI also runs `cargo xtask bindings --check`. The bindings come only from `navaja-core` and the app crate ([`bindings.rs`](../xtask/src/bindings.rs)), so a tool PR leaves them unchanged.
+
+In tests, call your tool through `navaja_core::run_single(TOOL, action, input)`, not `invoke`, as [`tools/uuid/tests.rs`](../tools/uuid/tests.rs) does. It runs the output and error-code checks, returns `Result<Value, ToolError>`, and panics if the metadata is invalid. A `tests.rs` for the tool above:
+
+```rust
+use navaja_core::run_single;
+use serde_json::json;
+
+use super::TOOL;
+
+#[test]
+fn indents_every_line_and_bounds_the_width() {
+    let out = run_single(TOOL, "indent", json!({ "input": "a\nb", "width": 4 })).unwrap();
+    assert_eq!(out["text"], "    a\n    b");
+    let error = run_single(TOOL, "indent", json!({ "input": "a", "width": 17 })).unwrap_err();
+    assert_eq!(error.code.as_str(), "my_tool.width_out_of_range");
+}
+```
 
 Test the behaviour, not the plumbing:
 - each mode on typical and edge input (empty, huge, non-ASCII, malformed);
 - every error code;
-- the property that matters, such as round trips (`decode(encode(x)) == x`) with proptest.
+- the property that matters, such as round trips (`decode(encode(x)) == x`) with proptest. Add `proptest = { workspace = true }` under `[dev-dependencies]` in `tools/Cargo.toml`.
 
 To try the tool in the app, run `pnpm dev` from the repository root. Quit any other Navaja first, an installed one included. Navaja runs as a single instance, so a dev or debug build that finds another one running hands its arguments to it and exits with code 0, and you see the other app's window. End-to-end builds use their own identifier, so they are not affected.
 
@@ -138,6 +292,6 @@ To try the tool in the app, run `pnpm dev` from the repository root. Quit any ot
 | **Text tool** | `tools/<id>/**`, one line in `tools/lib.rs`, `tools/Cargo.toml`, `Cargo.lock` | anything else |
 | **System tool** | The text-tool set, plus target-specific dependencies, an optional new `crates/navaja-<x>/`, generated `app/src/bindings/**`, and `tools/<id>/ui/**` | `app/src/{shell,generic,lib}`, `app/src-tauri`, `navaja-core`, `xtask` |
 
-If your tool needs something the host doesn't offer, such as a new output format or capability, open a separate `host-change` PR first. Examples are a new `OutputKind`, a new `Capability` or a new host service.
+If your tool needs something the host doesn't offer, open a separate `host-change` PR first. Examples are a new `OutputKind`, a new `Capability`, a new host service, or a new entry in the root `[workspace.dependencies]`.
 
 Tauri commands and front-end code stay out of a tool PR.
