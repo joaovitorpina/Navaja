@@ -24,6 +24,8 @@ mod paths;
 mod platform;
 mod settings;
 mod state;
+#[cfg(test)]
+mod test_support;
 mod tray;
 mod window;
 

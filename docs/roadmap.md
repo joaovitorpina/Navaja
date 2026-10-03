@@ -208,6 +208,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
    - install.md covers SmartScreen "More info → Run anyway", Smart App Control, Gatekeeper "Open Anyway", the Linux tray host and the NVIDIA variables.
    - privacy.md lists the OS services in a macOS text field's context menu: Look Up, Translate, Search With Google, Share and Services. They send the selected text only when the user picks one.
    - Optional, later: on macOS, replace that menu with a native one built from `PredefinedMenuItem` cut, copy, paste and select all.
+   - Next to those services, privacy.md lists the hand-offs (architecture §5): About's repository link opens in the default browser and the logs folder in the file manager, only when the user asks. The browser or file manager loads them, not Navaja, even when Windows starts the browser as Navaja's child process.
 7. **Final QA:**
    - `measure`;
    - S2.7 again, now with the updater;
@@ -315,7 +316,7 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 | Workflow | Runs |
 |---|---|
 | `ci.yml` checks (ubuntu-24.04) | rustfmt (`cargo fmt`, plus `rustfmt --check tools/*/mod.rs` for the tool modules it skips), ESLint and Prettier (`pnpm lint`), svelte-check, cargo-deny on 4 targets, `xtask check`, `bindings --check`, `tool-gate`, the JS licence allowlist (`xtask licenses`), gitleaks over fixtures and snapshots (`scripts/check-fixture-secrets.sh`) |
-| `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --no-bundle` → the same build with `--features e2e` and `e2e.conf.json` → WebdriverIO. Linux runs the suite under the strace guard, inside `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The job stops after 45 min, so a hung run fails instead of holding the runner for GitHub's 6 h. macOS also checks the Intel slice of the universal build: `cargo check --workspace --all-targets --target x86_64-apple-darwin` |
+| `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --no-bundle` → the same build with `--features e2e` and `e2e.conf.json` → WebdriverIO. Linux runs the suite under the strace guard, inside `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The job stops after 45 min, so a hung run fails instead of holding the runner for GitHub's 6 h. macOS also runs clippy, with the same bans and `-D warnings`, on the Intel slice of the universal build: `cargo clippy --workspace --all-targets --target x86_64-apple-darwin -- -D warnings`. That step keys on `runner.os` and fails if the runner is not arm64, since then nothing would lint the arm64 slice |
 | `advisories.yml` | Daily `cargo deny check advisories`. Opens an issue but never blocks a PR |
 | `bundle.yml` | Weekly, keyless build of the release matrix: NSIS and zip, universal DMG, deb, rpm and AppImage in `container: ubuntu:22.04` |
 | `spikes.yml` | Manual. macOS spike steps that need no human |

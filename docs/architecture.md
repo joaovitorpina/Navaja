@@ -38,7 +38,7 @@ Navaja/
 │   ├── src/generic/      GeneratorView · TransformView · OptionControl · OutputView (one renderer per OutputKind)
 │   ├── src/editor/       CodeMirror 6 {@attach} + size thresholds
 │   ├── e2e/              wdio.conf.ts · strace-guard.sh (Linux) · support/ · specs/{launch,smoke,single-instance,egress,json,ports}.e2e.ts
-│   ├── eslint/           config.js (ESLint) · view-imports.js (the custom-view import allowlist, §4) · their tests
+│   ├── eslint/           config.js (ESLint) · view-imports.js (the custom-view import allowlist, §4) · view-files.js (what tools/ may hold, §4) · their tests
 │   └── src-tauri/        crate navaja · features: default [docker], updater (M6), e2e
 │       ├── tauri.conf.json · tauri.release.conf.json (updater artifacts + pubkey) · e2e.conf.json
 │       ├── capabilities/main.json · acl.lock.json · nsis/hooks.nsh
@@ -152,8 +152,18 @@ register_tools! {
     - `$lib/view-kit`, exactly;
     - `$bindings/<name>` and `$bindings/<dir>/<name>`, with no `.` or `..` segments.
   - **Tests:** a view's `*.test.ts` and `*.spec.ts` files may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`, and nothing else.
-  - **Forms checked:** static, type-only and side-effect imports, `export … from`, `import()` and `require()`, TypeScript's `import x = require()` and `typeof import()`, and the first argument of `new URL(x, import.meta.url)`. Vite bundles that file as an asset or a worker and resolves a bare `x` through its aliases, so `x` must be allowed like an import, and an absolute URL is refused too. A computed specifier is an error, and `import.meta.glob` is not allowed.
+    - So that the check sees each of Vitest's calls that take a module (see Forms checked), a test imports `vi` and `vitest` by name and under those names (`import { vi } from 'vitest'`): no `* as`, renaming, re-export or `import('vitest')`. It uses them only as `vi.<name>` and calls those six directly: no destructuring them, no `.call`, and no passing `vi` around.
+    - The check reads the code as written. A test runs in Node, so one set on evading it could still reach another module, for example through the `vi` that `vi.resetModules()` returns, `eval` or Node's own APIs. Review covers that.
+  - **Files:** a view folder holds only the scripts ESLint lints, with the extensions `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx` and `.svelte`, and the assets `.css`, `.svg`, `.json`, `.png` and `.webp`. Extensions are lower case, and the folder has no `node_modules` folder. Nothing under `tools/` is a symbolic link, a submodule, a `package.json` or a `tsconfig.json`, and no path differs from `tools/` or `tools/<id>/ui/` only in case.
+    - Vite bundles any file a view imports, but ESLint skips other extensions (`.es6`, `.JS`, or none) and `node_modules`, and neither it nor Prettier follows links. A view could import such a file, and the file could import anything.
+    - Vite reads the nearest `package.json` and `tsconfig.json` above each file. A `browser` field maps one file to another, and `jsxImportSource` makes JSX in a `.jsx` or `.tsx` file import `<source>/jsx-runtime`, so either could send an allowed import anywhere.
+    - On Windows and macOS, `Tools/x` or `tools/<id>/UI/x` lands in the same folder as `tools/x` or `tools/<id>/ui/x`, where Vite bundles it, while ESLint's patterns and this check match the case.
+    - `pnpm lint` first runs `app/eslint/check-view-files.js` over every file git tracks and fails on any of these. The script extensions are one list, shared with the ESLint config.
+  - **Forms checked:** static, type-only and side-effect imports, `export … from`, `import()` and `require()`, TypeScript's `import x = require()` and `typeof import()`, and the first argument of `new URL(x, import.meta.url)`. Vite bundles that file as an asset or a worker and resolves a bare `x` through its aliases, so `x` must be allowed like an import, and an absolute URL is refused too. In a view's tests, also the first argument of `vi.mock`, `vi.doMock`, `vi.unmock`, `vi.doUnmock`, `vi.importActual` and `vi.importMock`, which Vitest resolves through the same aliases. A call by one of those names counts on any object, since `vi.resetModules()` and the like return `vi`. A computed specifier is an error, and `import.meta.glob` is not allowed. Neither is JSX, which the build turns into an import of `react/jsx-runtime` by default, nor a `@jsxImportSource` comment, which makes that import `<source>/jsx-runtime`.
   - **No opt-out:** a view can't switch rules off with a comment (`noInlineConfig`, plus markup `<!-- eslint-disable -->`). `pnpm lint` runs ESLint from the repository root with `--config`, so a config file placed under `tools/` is never used. CI runs `pnpm lint` in the checks job.
+  - **Not checked:** CSS. ESLint reads neither `<style>` blocks nor `.css` files, so nothing checks where a view's CSS leads. Review checks it instead:
+    - `@import` and `url()` must stay inside `tools/<id>/ui/`, like an import;
+    - so must Tailwind's `@reference`, `@plugin` and `@config`, which work in a view because the app builds CSS with `@tailwindcss/vite`. `@plugin` and `@config` load JavaScript and run it in Node at build time, so review reads the code they load too.
   - **(S2.2)** If views outside `app/` turn out not to work, the fallback is `app/src/tools/<id>/`. That would be a brief deviation and needs sign-off.
 - **Tool preferences** never become shell `Settings` fields. `Settings.tools`, a TOML table per tool id, is reserved until a tool needs it.
 
@@ -186,6 +196,7 @@ register_tools! {
 - **Linux:** `xdg-open` (or gio, gnome-open, kde-open) starts after a double fork and `setsid`. It leaves Navaja's process tree by parentage, but a tracer that follows forks, such as `strace -f`, still follows it and the browser.
   - **Failures after the start go unseen:** tauri-plugin-opener, through the `open` crate, returns success as soon as the launcher has been executed, without waiting for it. A launcher that then fails, with no default browser set for example, shows no alert and logs nothing.
 - So the offline checks (the strace guard, the S2.7 capture) must never click these links, and no end-to-end test opens a URL or the logs folder.
+- **Disclosure:** `privacy.md` lists both hand-offs (roadmap M6, item 6). `SECURITY.md` does not count what the browser or file manager loads at the user's request as Navaja's traffic, even when that program is Navaja's child process.
 - **A failed hand-off** logs the error's kind and the OS error code (an HRESULT in hex), never the error's text, which can quote the URL or the path.
 
 **Input limits.** Rust checks what the webview sends:
@@ -292,7 +303,7 @@ Rust never runs a destructive action from argv.
   **(S3.1)** tunes these thresholds.
 - **Components:** Bits UI 2 with shadcn-svelte copies, Tailwind v4 tokens and system fonts.
 - **Accessibility:** landmarks, F6 to cycle panes, Esc, a live region, and real tables with `aria-sort`.
-- **Lint:** `pnpm lint` runs ESLint (the recommended JavaScript, TypeScript and Svelte rules, plus the custom-view allowlist from §4) and Prettier over `app/` and `tools/*/ui/`. `pnpm format` applies Prettier.
+- **Lint:** `pnpm lint` checks which files `tools/` holds (§4), then runs ESLint (the recommended JavaScript, TypeScript and Svelte rules, plus the custom-view allowlist from §4) and Prettier over `app/` and `tools/*/ui/`. `pnpm format` applies Prettier.
 - **Tests:** Vitest with `mockIPC` and axe, and WebdriverIO end-to-end tests on all three OSes **(S2.6)**.
   - The end-to-end tests drive the real debug app through its embedded WebDriver server (§5). On Linux they run under the strace network guard (roadmap §2).
   - axe is not wired in yet. It joins Vitest in M3 (roadmap M3, item 3).

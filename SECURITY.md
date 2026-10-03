@@ -15,6 +15,8 @@ Navaja promises to work offline and to keep what you paste on your machine. Thes
   - webview runtime traffic disclosed in `docs/privacy.md`, once that file is published.
 
   Undisclosed traffic from the embedded webview counts.
+
+  A page or folder you ask Navaja to open, such as the repository link in About or the logs folder in Settings, is loaded by your web browser or file manager, not by Navaja. That holds even when the OS starts that program as Navaja's child process, as Windows can with the browser. Navaja opening a page or folder you did not ask for counts.
 - **Pasted input, tokens or tool output** reaching any of these:
   - logs or crash files;
   - web storage;

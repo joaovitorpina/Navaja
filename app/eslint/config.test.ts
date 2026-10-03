@@ -7,7 +7,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { VIEW_EXTENSIONS } from './config.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const eslint = new ESLint({ cwd: root, overrideConfigFile: 'eslint.config.mjs' });
@@ -22,6 +23,10 @@ const VIEW = 'tools/probe/ui/View.svelte';
 const RULE = 'navaja/view-imports';
 
 describe('the ESLint config', () => {
+  // Loading the config and its plugins takes seconds, and on a loaded Windows
+  // machine more than a test's default 5 s, so it happens once, here.
+  beforeAll(() => eslint.calculateConfigForFile(join(root, VIEW)), 60_000);
+
   it('lints custom views in tools/<id>/ui/ with the import allowlist', async () => {
     const messages = await lint(
       "<script lang=\"ts\">\n  import { invoke } from '@tauri-apps/api/core';\n  invoke('x');\n</script>\n",
@@ -33,9 +38,21 @@ describe('the ESLint config', () => {
   });
 
   it('lints every script file a view can hold', async () => {
-    for (const file of ['label.ts', 'View.test.ts', 'sub/helper.js', 'x.svelte.ts', 'x.tsx']) {
+    // Written out, not read from config.js, so a change to the list fails
+    // here; view-files.js lets a view hold scripts with only these extensions.
+    const extensions = ['js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'svelte'];
+    expect(VIEW_EXTENSIONS).toEqual(extensions);
+    const files = [
+      ...extensions.map((extension) => `x.${extension}`),
+      'x.svelte.ts',
+      'View.test.ts',
+      'sub/helper.js',
+    ];
+    for (const file of files) {
+      // A dynamic import parses in a script and a module alike (.cjs is a script).
+      const code = "void import('../../../app/src/lib/ipc');\n";
       const messages = await lint(
-        "export * from '../../../app/src/lib/ipc';\n",
+        file.endsWith('.svelte') ? `<script lang="ts">\n${code}</script>\n` : code,
         `tools/probe/ui/${file}`,
       );
       expect(
@@ -87,10 +104,11 @@ describe('the ESLint config', () => {
   });
 
   it('is what `pnpm lint` runs, from the repository root, over app/ and tools/*/ui/', () => {
+    // check-view-files.js first refuses any file in a view folder ESLint would skip.
     // `--config` keeps ESLint from picking up a config file placed under tools/.
     const pkg = JSON.parse(readFileSync(join(root, 'app', 'package.json'), 'utf8'));
     expect(pkg.scripts.lint).toMatch(
-      /^cd \.\. && eslint --config eslint\.config\.mjs [^&]* app "tools\/\*\/ui\/\*\*" && /,
+      /^cd \.\. && node app\/eslint\/check-view-files\.js && eslint --config eslint\.config\.mjs [^&]* app "tools\/\*\/ui\/\*\*" && /,
     );
   });
 });
