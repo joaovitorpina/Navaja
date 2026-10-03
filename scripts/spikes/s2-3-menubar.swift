@@ -166,6 +166,8 @@ struct Measure {
   /// Mean of max - min over the core's channels: 0 for grey.
   let coreSaturation: Double
   let maxContrast: Double
+  /// The ink's bounding box, in capture pixels: how large the glyph is drawn.
+  let inkBox: (width: Int, height: Int)
 
   init(_ capture: Capture, _ rect: CGRect) {
     let r = capture.pixelRect(rect)
@@ -180,13 +182,18 @@ struct Measure {
     }
     let bg = (median(ring.map { $0.0 }), median(ring.map { $0.1 }), median(ring.map { $0.2 }))
     var contrasts: [(Double, (Double, Double, Double))] = []
+    var box = (x0: Int.max, y0: Int.max, x1: Int.min, y1: Int.min)
     for y in r.y0..<r.y1 {
       for x in r.x0..<r.x1 {
         let c = capture.rgb(x, y)
         let d = max(abs(c.0 - bg.0), abs(c.1 - bg.1), abs(c.2 - bg.2))
         contrasts.append((d, c))
+        if d >= Measure.inkContrast {
+          box = (min(box.x0, x), min(box.y0, y), max(box.x1, x), max(box.y1, y))
+        }
       }
     }
+    inkBox = box.x1 >= box.x0 ? (box.x1 - box.x0 + 1, box.y1 - box.y0 + 1) : (0, 0)
     let strongest = contrasts.map { $0.0 }.max() ?? 0
     let inkPixels = contrasts.filter { $0.0 >= Measure.inkContrast }
     let corePixels = inkPixels.filter { $0.0 >= 0.6 * strongest }
@@ -211,7 +218,7 @@ struct Measure {
     "pixels=\(pixels) background=\(color(background)) (luma \(fmt(luma(background), 0))) "
       + "ink=\(ink) (\(fmt(inkShare * 100))%) core=\(core) core_colour=\(color(coreColor)) "
       + "(luma \(fmt(luma(coreColor), 0)), saturation \(fmt(coreSaturation))) "
-      + "max_contrast=\(fmt(maxContrast, 0))"
+      + "max_contrast=\(fmt(maxContrast, 0)) ink_box=\(inkBox.width)x\(inkBox.height)"
   }
 }
 
@@ -278,17 +285,28 @@ case "wait-item":
   }
   let leftmost = double(args[3])
   let deadline = Date().addingTimeInterval(double(args[4]))
+  // The item may change size once its image is set: wait until the new
+  // item's rectangle has held for a second.
+  var seen: CGRect? = nil
+  var since = Date()
   while true {
     let items = statusItems()
     if items.count > before + 1 {
       fail("\(items.count - before) new status items, not one: \(items.map { describe($0.bounds) })")
     }
     if items.count == before + 1, let first = items.first, Double(first.bounds.minX) < leftmost {
-      print(describe(first.bounds))
-      exit(0)
+      if first.bounds != seen {
+        seen = first.bounds
+        since = Date()
+      } else if Date().timeIntervalSince(since) >= 1 {
+        print(describe(first.bounds))
+        exit(0)
+      }
+    } else {
+      seen = nil
     }
     if Date() > deadline { fail("no new status item in the menu bar within \(args[4]) s") }
-    Thread.sleep(forTimeInterval: 0.25)
+    Thread.sleep(forTimeInterval: 0.1)
   }
 
 case "wait-gone":
