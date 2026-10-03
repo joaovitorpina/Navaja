@@ -87,7 +87,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 ### M2b · Lifecycle, footprint, bundles (≈2.5 wk)
 
 1. **S2.4** and the StatusNotifier host check in `platform/linux.rs`, then close behaviour per OS through `ShellPlatform`.
-2. **`xtask measure`**, then **S2.5**. Implement the winning hide policy, delete the other path, and record the numbers in ADR 0002.
+2. **`xtask measure`**, then **S2.5**. Implement the winning hide policy, delete the other path, and record the numbers in ADR 0003.
 3. **Final brand SVGs** and `xtask icons`, which wraps `tauri icon` and also produces the macOS template tray icon.
 4. **`bundle.yml`:** a weekly, keyless build of the exact release matrix.
 5. **Stretch, the first thing to cut:** the global-shortcut recorder and `docs/wayland-shortcut.md`.
@@ -107,7 +107,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 - On GNOME and KDE Wayland, `--show`, `--toggle` and `--tool` raise and focus a window that is visible but unfocused.
 - On macOS, a second user's Navaja keeps its own single instance, and a socket owned by another user is refused.
 - On macOS, a copy does not appear on a Handoff-paired device.
-- ADR 0002 has numbers per OS.
+- ADR 0003 has numbers per OS.
 - `bundle.yml` is green for every format.
 - Screen readers pass: NVDA, VoiceOver and Orca.
 - 100-200 % scaling, light and dark themes, and the brand review all pass.

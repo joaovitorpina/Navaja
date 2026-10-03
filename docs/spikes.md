@@ -56,7 +56,7 @@ Copy this for each spike and fill it in.
     - `scripts/spikes/s2-2-check.sh` holds the checks that take more than one command, so a local run does what CI does. It keeps every log in one temporary folder per run, removed on exit.
 - **PASS if:** HMR, build, packaged app, svelte-check, ESLint and Vitest all work on 3 OSes
 - **FAIL then:** tsconfig and Vitest aliases; otherwise `app/src/tools/<id>/` (needs sign-off)
-- **Result:** not finished (2026-10-03). svelte-check, Vitest, `vite build`, ESLint and Prettier work, but only with the tsconfig, Vite, Tailwind, ESLint and Prettier settings below. The first `spikes.yml` run, on commit `ad7b612`, passed on all three OSes, but it predates the negative controls for svelte-check and Prettier and the HMR check in the app's webview. Those pass in a local Windows run and have not run on CI yet, so on macOS and Linux they are not verified.
+- **Result:** PASS (2026-10-03), through the first fallback: the tsconfig, Vite and Tailwind settings below, plus ESLint's and Prettier's root configs. [ADR 0002](adr/0002-views-outside-app.md) records them. `spikes.yml` run [37146842128](https://github.com/joaovitorpina/Navaja/actions/runs/37146842128), on commit `dbf31d5`, passed every check on windows-2025, ubuntu-24.04 and macos-26, the negative controls and the HMR check in the app's webview included.
 - **Numbers and evidence:**
 
   | Check (Windows) | Without settings (PR #4 head) | With settings |
@@ -101,6 +101,22 @@ Copy this for each spike and fill it in.
 
   On all three: `cargo test -p navaja-tools` passed 15 tests, the probe's own among them; svelte-check found 0 errors and 0 warnings; the forbidden imports made `pnpm lint` exit 1 with `2 problems (2 errors, 0 warnings)`; Vitest passed 240 of 240 tests in 12 files, `View.test.ts` among them; and the build put the view in `View-Dm_h5rJo.js` (1,090 bytes; entry `index-FKn6RcoJ.js`, 144.04 kB) and its class in `index-deLtt2pA.css`, the same files on every OS. 605.1.15 is the version WebKit puts in its user agent, frozen there, so it does not identify the build. The deliberate lint failure printed ESLint's output as it was, and setup-node's problem matcher turned it into 6 error annotations on the green run, 2 per OS; the checks now print it behind a prefix.
 
+  The run with every check, [37146842128](https://github.com/joaovitorpina/Navaja/actions/runs/37146842128), on commit `dbf31d5` (2026-10-03), passed every step on all three OSes:
+
+  | Runner | Result | Webview | Job | Probe spec | HMR at the dev server: `View.svelte`, `label.ts` | HMR in the app's webview: `label.ts`, `View.svelte` |
+  |---|---|---|---|---|---|---|
+  | windows-2025 | pass | msedge 153.0.0.0 (WebView2) | 5 min 26 s | 111 ms | 13 ms, 1 ms | 71 ms, 74 ms |
+  | ubuntu-24.04 | pass | WebKitGTK 605.1.15 | 3 min 10 s | 109 ms | 11 ms, 1 ms | 29 ms, 28 ms |
+  | macos-26 | pass | webkit 605.1.15 | 2 min 54 s | 105 ms | 127 ms, 116 ms | 151 ms, 34 ms |
+
+  On all three:
+  - svelte-check's control reported `COMPLETED 665 FILES 2 ERRORS`;
+  - the forbidden imports gave `2 problems (2 errors, 0 warnings)`;
+  - Prettier's control named only `misformatted.ts`;
+  - Vitest passed 240 of 240 tests;
+  - the view was built into `View-Dm_h5rJo.js` (1,090 bytes);
+  - the in-app spec passed its 3 tests, with the `window` mark kept through both edits.
+
   The resolution failures come from pnpm's isolated layout: it installs packages under `app/node_modules` only, so bare imports from `tools/` find nothing. `svelte` and `$bindings/*` were not affected (vite-plugin-svelte dedupes `svelte`, and `$bindings` is an alias).
 
   ESLint 10 looks for a config from each linted file's folder upwards, so files in `tools/` never find one in `app/`. With `--config`, the base path is the working directory, and it skips files outside it with only a warning. Prettier also looks its config up from each file, and it loads plugins named as strings from the working directory.
@@ -111,7 +127,7 @@ Copy this for each spike and fill it in.
   - `$lib/view-kit` exists and is what views import from the shell. ToolHost types the glob against its `ViewProps`.
   - ESLint's config is `app/eslint/config.js`, loaded by the root `eslint.config.mjs`. Its patterns are relative to the repository root and cover `app/` and `tools/*/ui/`, so the root must be ESLint's base path. `pnpm lint` runs from the root with `--config eslint.config.mjs`: with `--config` the base path is the working directory, and a config file placed under `tools/` is never used. Editors use config lookup instead, which finds the root `eslint.config.mjs` and takes its folder as the base path. The import allowlist (architecture §4) is in place, and `app/eslint/config.test.ts` runs the real config through ESLint's Node API on a file under `tools/`, so a change that drops `tools/` fails a test.
   - Prettier's config is `app/prettier.config.js`, loaded by the root `prettier.config.mjs`. It resolves the Svelte plugin from `app/`.
-  - Still open before S2.2 can pass: a `spikes.yml` run with the negative controls and the in-app HMR check on all three runners, recorded here. Until then the HMR check in the app's webview has passed on Windows only, locally. No CI job outside `spikes.yml` checks a custom view: the repository holds none, and `ci.yml` runs `pnpm lint` on Linux only. Once S2.2 passes, this entry needs an ADR for the tsconfig and Vite settings, since the roadmap counts them as the first fallback.
+  - S2.2 passed on all three OSes, so these settings are the decision: [ADR 0002](adr/0002-views-outside-app.md). No CI job outside `spikes.yml` checks a custom view: the repository holds none, and `ci.yml` runs `pnpm lint` on Linux only. Re-run `spikes.yml` by hand after upgrading Vite, Vitest, svelte-check, ESLint, Prettier or Tailwind.
 
 ## S2.3 Tray icon
 
