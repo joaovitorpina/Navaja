@@ -105,10 +105,26 @@ fn os_code(code: i32) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Error as IoError, ErrorKind};
+
+    use tauri_plugin_opener::Error;
+
     use super::*;
+    use crate::test_support::{canary, capture_log};
 
     fn under(rest: &str) -> String {
         format!("{REPOSITORY}{rest}")
+    }
+
+    /// The one line `hand_off` logged about `what`.
+    fn failure_line<'a>(log: &'a str, what: &str) -> &'a str {
+        let mut lines = log.lines().filter(|line| line.contains("could not open"));
+        let line = lines
+            .next()
+            .unwrap_or_else(|| panic!("nothing logged: {log}"));
+        assert!(lines.next().is_none(), "{log}");
+        assert!(line.contains(&format!("could not open {what}")), "{log}");
+        line
     }
 
     #[test]
@@ -120,6 +136,71 @@ mod tests {
         assert_eq!(os_code(-2_147_024_894), "0x80070002");
         assert_eq!(os_code(i32::MIN), "0x80000000");
         assert_eq!(os_code(-1), "0xffffffff");
+    }
+
+    /// At `trace` level, a failure logs its kind and code but never the
+    /// error's text, which here holds the canary as a URL or a path would.
+    #[test]
+    fn a_failure_logs_its_kind_never_its_text() {
+        let canary = canary();
+        let failures = [
+            (
+                Error::Io(IoError::new(ErrorKind::NotFound, canary.clone())),
+                "kind=entity not found code=none",
+            ),
+            (
+                Error::ForbiddenUrl {
+                    url: canary.clone(),
+                    with: None,
+                },
+                "kind=other code=none",
+            ),
+        ];
+        let canary = canary.to_ascii_lowercase();
+        for (error, logged) in failures {
+            let (result, log) = capture_log(|| hand_off("the web browser", move || Err(error)));
+            assert_eq!(result, Err("Could not open the web browser.".to_owned()));
+            let line = failure_line(&log, "the web browser");
+            assert!(line.ends_with(logged), "{log}");
+            assert!(!log.to_ascii_lowercase().contains(&canary), "{log}");
+        }
+    }
+
+    /// An OS error logs its code, an HRESULT in hex, and not the OS's
+    /// message for it.
+    #[test]
+    fn a_failure_logs_the_os_error_code() {
+        for (raw, logged) in [
+            (2, "kind=entity not found code=2"),
+            (-2_147_024_894, "code=0x80070002"),
+        ] {
+            let (result, log) = capture_log(|| {
+                hand_off("the file manager", move || {
+                    Err(Error::Io(IoError::from_raw_os_error(raw)))
+                })
+            });
+            assert_eq!(result, Err("Could not open the file manager.".to_owned()));
+            let line = failure_line(&log, "the file manager");
+            assert!(line.ends_with(logged), "{log}");
+            // The error's text ends with "(os error <code>)".
+            assert!(!log.contains("os error"), "{log}");
+        }
+    }
+
+    /// A panic stays on the hand-off's thread and becomes the same error.
+    /// `resume_unwind` unwinds like a panic but skips the panic hook, so
+    /// the test prints nothing and leaves the process-wide hook alone.
+    #[test]
+    fn a_panic_becomes_an_error() {
+        let canary = canary();
+        let payload = canary.clone();
+        let (result, log) = capture_log(|| {
+            hand_off("the web browser", move || {
+                std::panic::resume_unwind(Box::new(payload))
+            })
+        });
+        assert_eq!(result, Err("Could not open the web browser.".to_owned()));
+        assert!(!log.contains(&canary), "{log}");
     }
 
     #[test]
