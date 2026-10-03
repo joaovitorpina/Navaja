@@ -7,7 +7,8 @@
 //   s2-3-menubar screen                     # the main display: points, pixels, scale, menu bar
 //   s2-3-menubar items                      # every on-screen window in the menu bar, left to right
 //   s2-3-menubar windows                    # every on-screen window, for when `items` finds none
-//   s2-3-menubar wait-item <pid> <seconds>  # waits for a status item of <pid>; prints its rectangle
+//   s2-3-menubar wait-item <count> <x> <seconds>  # waits for one new status item, left of <x>; prints it
+//   s2-3-menubar wait-gone <x> <y> <w> <h> <seconds>  # waits for the status item there to go
 //   s2-3-menubar measure <png> <x> <y> <w> <h>        # what the capture shows there (see Measure)
 //   s2-3-menubar crop <png> <out.png> <x> <y> <w> <h> [zoom]  # a crop, enlarged without smoothing
 //   s2-3-menubar present <png> <x> <y> <w> <h>        # PASS when an icon is drawn there
@@ -76,6 +77,11 @@ func allWindows() -> [Window] {
 
 /// The status level, where NSStatusItem windows live.
 let statusLevel = Int(CGWindowLevelForKey(.statusWindow))
+
+/// The menu bar's status items, left to right.
+func statusItems() -> [Window] {
+  menuBarWindows().filter { $0.layer == statusLevel }
+}
 
 func describe(_ rect: CGRect) -> String {
   "\(fmt(rect.minX)) \(fmt(rect.minY)) \(fmt(rect.width)) \(fmt(rect.height))"
@@ -243,7 +249,7 @@ case "screen":
   let pixelsWide = mode?.pixelWidth ?? 0
   let pixelsHigh = mode?.pixelHeight ?? 0
   let scale = NSScreen.main?.backingScaleFactor ?? 0
-  let itemHeight = menuBarWindows().filter { $0.layer == statusLevel }.map { $0.bounds.maxY }.max() ?? 0
+  let itemHeight = statusItems().map { $0.bounds.maxY }.max() ?? 0
   print(
     "display: \(fmt(bounds.width, 0))x\(fmt(bounds.height, 0)) points, "
       + "\(pixelsWide)x\(pixelsHigh) pixels, backing scale \(fmt(scale)); "
@@ -263,17 +269,37 @@ case "items":
   }
 
 case "wait-item":
-  guard args.count == 4, let pid = Int32(args[2]) else { fail("usage: wait-item <pid> <seconds>") }
-  let deadline = Date().addingTimeInterval(double(args[3]))
+  // On macOS 26 Control Center owns every status item window, the app's
+  // too, so the owner cannot tell them apart. A new item goes to the left
+  // of the others: the app's is the one that makes the count one higher
+  // and sits left of the leftmost item before it started.
+  guard args.count == 5, let before = Int(args[2]) else {
+    fail("usage: wait-item <items before> <leftmost x before> <seconds>")
+  }
+  let leftmost = double(args[3])
+  let deadline = Date().addingTimeInterval(double(args[4]))
   while true {
-    let mine = menuBarWindows().filter { $0.pid == pid && $0.layer == statusLevel }
-    if let item = mine.first {
-      print(describe(item.bounds))
+    let items = statusItems()
+    if items.count > before + 1 {
+      fail("\(items.count - before) new status items, not one: \(items.map { describe($0.bounds) })")
+    }
+    if items.count == before + 1, let first = items.first, Double(first.bounds.minX) < leftmost {
+      print(describe(first.bounds))
       exit(0)
     }
-    if Date() > deadline { fail("no status item of pid \(pid) in the menu bar within \(args[3]) s") }
+    if Date() > deadline { fail("no new status item in the menu bar within \(args[4]) s") }
     Thread.sleep(forTimeInterval: 0.25)
   }
+
+case "wait-gone":
+  guard args.count == 7 else { fail("usage: wait-gone <x> <y> <w> <h> <seconds>") }
+  let gone = rect(args[2...5])
+  let deadline = Date().addingTimeInterval(double(args[6]))
+  while statusItems().contains(where: { $0.bounds == gone }) {
+    if Date() > deadline { fail("the status item at \(describe(gone)) is still there after \(args[6]) s") }
+    Thread.sleep(forTimeInterval: 0.25)
+  }
+  print("The status item at \(describe(gone)) is gone.")
 
 case "measure":
   guard args.count == 7 else { fail("usage: measure <png> <x> <y> <w> <h>") }
@@ -360,5 +386,5 @@ case "tint":
   print("The icon is monochrome and takes the reference item's colour in both appearances.")
 
 default:
-  fail("usage: s2-3-menubar screen|items|windows|wait-item|measure|crop|present|tint ...")
+  fail("usage: s2-3-menubar screen|items|windows|wait-item|wait-gone|measure|crop|present|tint ...")
 }

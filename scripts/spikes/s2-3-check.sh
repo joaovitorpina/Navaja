@@ -87,11 +87,14 @@ rect() {
   cat "$DIR/$1.rect" 2> /dev/null || fail "no rectangle for $1; start that app first"
 }
 
+# The menu bar's status items (layer 25), one "x y w h" line each, left to right.
+status_items() {
+  "$HELPER" items | awk '$6 == 25 { print $1, $2, $3, $4 }'
+}
+
 # The rightmost status item that is not the app's: on macOS 26 the clock.
 reference_rect() {
-  local pid
-  pid=$(cat "$DIR/$1.pid")
-  "$HELPER" items | awk -v pid="$pid" '$6 == 25 && $8 != pid { r = $1 " " $2 " " $3 " " $4 } END { print r }'
+  status_items | grep -vxF "$(rect "$1")" | tail -n 1
 }
 
 # Starts `binary` as `tag` and waits for its status item.
@@ -106,10 +109,15 @@ start_app() {
   # builds honour NAVAJA_APP_DIR). Its window shows once the front end is
   # ready (window.rs); the checks look only at the menu bar's status items.
   mkdir -p "$DIR/app-dir-$tag"
+  # Control Center owns every status item on macOS 26, so the app's is
+  # the new one, left of the others (s2-3-menubar.swift, wait-item).
+  local count leftmost
+  count=$(status_items | wc -l | tr -d ' ')
+  leftmost=$(status_items | head -n 1 | cut -d' ' -f1)
   NAVAJA_APP_DIR="$DIR/app-dir-$tag" nohup "$binary" > "$DIR/$tag.log" 2>&1 &
   echo $! > "$DIR/$tag.pid"
-  echo "Started $binary, pid $(cat "$DIR/$tag.pid")."
-  if ! item=$("$HELPER" wait-item "$(cat "$DIR/$tag.pid")" 60); then
+  echo "Started $binary, pid $(cat "$DIR/$tag.pid"), with $count status items in the menu bar."
+  if ! item=$("$HELPER" wait-item "$count" "${leftmost:-100000}" 60); then
     echo "$item"
     echo "The app's output:"
     cat "$DIR/$tag.log"
@@ -135,6 +143,15 @@ stop_app() {
   kill -9 "$pid" 2> /dev/null || true
   rm -f "$DIR/$tag.pid"
   echo "Stopped $tag (pid $pid)."
+}
+
+# Quits `tag` and checks that its status item goes with it: the item the
+# checks measured was the app's.
+quit_app() {
+  local tag=$1
+  stop_app "$tag"
+  # shellcheck disable=SC2046
+  "$HELPER" wait-gone $(rect "$tag") 10
 }
 
 # Captures `tag`'s light and dark menu bar, plus crops for a person to look
@@ -224,7 +241,7 @@ tint() {
 }
 
 control_build() {
-  stop_app shipped
+  quit_app shipped
   cp "$TRAY" "$DIR/tray.rs.orig"
   trap 'cp "$DIR/tray.rs.orig" "$TRAY"' EXIT
   grep -qF "$TEMPLATE_CALL" "$TRAY" || fail "control-build: $TRAY no longer has $TEMPLATE_CALL"
@@ -249,7 +266,7 @@ tint_refuses() {
   capture_set control
   icon=$(rect control)
   reference=$(reference_rect control)
-  stop_app control
+  quit_app control
   [ -n "$reference" ] || fail "tint-refuses: no other status item to compare with"
   # shellcheck disable=SC2086
   "$HELPER" tint "$DIR/control-light.png" "$DIR/control-dark.png" $icon $reference \
