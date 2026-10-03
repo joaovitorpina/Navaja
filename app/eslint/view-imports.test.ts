@@ -1,11 +1,12 @@
 // @vitest-environment node
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RuleTester } from 'eslint';
 import * as svelteParser from 'svelte-eslint-parser';
 import ts from 'typescript-eslint';
-import { describe, it } from 'vitest';
-import rule from './view-imports.js';
+import { describe, expect, it } from 'vitest';
+import rule, { SVELTE_ENTRIES } from './view-imports.js';
 
 RuleTester.describe = describe;
 RuleTester.it = it;
@@ -52,8 +53,9 @@ tester.run('view-imports', rule, {
     view("  import { label } from '../label';", NESTED),
     { code: "import { label } from '../label';", filename: NESTED_TS },
     { code: "import { label } from '../ui/label';", filename: TS },
-    // svelte and its public subpaths.
+    // svelte and its browser subpaths.
     { code: "import { onMount } from 'svelte';", filename: TS },
+    { code: "import type { HTMLAttributes } from 'svelte/elements';", filename: TS },
     { code: "import { writable } from 'svelte/store';", filename: TS },
     { code: "import { fade } from 'svelte/transition';", filename: TS },
     { code: "import { innerWidth } from 'svelte/reactivity/window';", filename: TS },
@@ -111,9 +113,14 @@ tester.run('view-imports', rule, {
     notAllowed("import { it } from 'vitest';"),
     notAllowed("import { render } from '@testing-library/svelte';"),
     notAllowed("import View from '@tools/other/ui/View.svelte';"),
-    // svelte/internal and anything under it.
+    // svelte/internal and anything under it, and Svelte's non-browser entries.
     notAllowed("import * as internal from 'svelte/internal';"),
     notAllowed("import * as client from 'svelte/internal/client';"),
+    notAllowed("import 'svelte/internal/flags/legacy';"),
+    notAllowed("import { compile } from 'svelte/compiler';"),
+    notAllowed("import { render } from 'svelte/server';"),
+    notAllowed("import pkg from 'svelte/package.json';"),
+    notAllowed("import x from 'svelte/store/x';"),
     notAllowed("import x from 'svelte/../x';"),
     notAllowed("import x from 'svelte-x';"),
     // Only $lib/view-kit itself.
@@ -214,7 +221,8 @@ tester.run('view-imports', rule, {
         {
           message:
             "'$lib/i18n' is not allowed here. A custom view imports only relative paths inside " +
-            'its own tools/<id>/ui/ folder, svelte (not svelte/internal), $lib/view-kit and ' +
+            'its own tools/<id>/ui/ folder, svelte and its browser subpaths (not ' +
+            'svelte/internal, svelte/compiler or svelte/server), $lib/view-kit and ' +
             '$bindings/<name>. See docs/architecture.md §4.',
         },
       ],
@@ -226,11 +234,27 @@ tester.run('view-imports', rule, {
         {
           message:
             "'jsdom' is not allowed here. A custom view imports only relative paths inside its " +
-            'own tools/<id>/ui/ folder, svelte (not svelte/internal), $lib/view-kit and ' +
+            'own tools/<id>/ui/ folder, svelte and its browser subpaths (not svelte/internal, ' +
+            'svelte/compiler or svelte/server), $lib/view-kit and ' +
             '$bindings/<name>; its *.test.ts and *.spec.ts files also vitest, ' +
             '@testing-library/svelte and @tauri-apps/api/mocks. See docs/architecture.md §4.',
         },
       ],
     },
   ],
+});
+
+describe('the svelte entry points', () => {
+  // A Svelte update that adds an entry fails here, so someone decides
+  // whether views may use it.
+  it('are every export of the installed Svelte but the private and non-browser ones', () => {
+    const pkg = createRequire(import.meta.url)('svelte/package.json') as {
+      exports: Record<string, unknown>;
+    };
+    const refused = /^\.\/(package\.json|compiler|server|internal)(\/|$)/;
+    const browser = Object.keys(pkg.exports)
+      .filter((key) => !refused.test(key))
+      .map((key) => `svelte${key.slice(1)}`);
+    expect([...SVELTE_ENTRIES].sort()).toEqual(browser.sort());
+  });
 });

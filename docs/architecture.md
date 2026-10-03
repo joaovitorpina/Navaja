@@ -145,7 +145,8 @@ register_tools! {
 - **Custom views** live in `tools/<id>/ui/`. The shell finds them with `import.meta.glob('@tools/*/ui/View.svelte')`.
   - **Imports:** the ESLint rule `navaja/view-imports` (`app/eslint/view-imports.js`) applies to every script file under `tools/*/ui/`. A view may import only:
     - relative paths that resolve inside its own `tools/<id>/ui/` folder, written without back slashes or percent escapes;
-    - `svelte` and its subpaths, except `svelte/internal` and anything under it;
+    - `svelte` and its browser subpaths, such as `svelte/store`, `svelte/transition` and `svelte/elements`. Not `svelte/internal` or anything under it, and not `svelte/compiler` or `svelte/server`;
+      - the rule lists these subpaths, and a test fails when a Svelte update adds one, so each new one gets a decision;
     - `$lib/view-kit`, exactly;
     - `$bindings/<name>` and `$bindings/<dir>/<name>`, with no `.` or `..` segments.
   - **Tests:** a view's `*.test.ts` and `*.spec.ts` files may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`, and nothing else.

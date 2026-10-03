@@ -89,7 +89,7 @@ Prefer `Transform` or `Generator`. A custom view needs a reason in the PR. A `Ge
 
 The shell loads `tools/<id>/ui/View.svelte` and passes it `ViewProps` from `$lib/view-kit`. A view may import only (architecture §4):
 - its own files, through relative paths that stay inside `tools/<id>/ui/`;
-- `svelte` and its subpaths, but not `svelte/internal`;
+- `svelte` and its browser subpaths, but not `svelte/internal`, `svelte/compiler` or `svelte/server`;
 - `$lib/view-kit`, the shell's API for views: `t`, `runTool`, `copyText`, `CopyButton`, `ToolIcon` and their types;
 - generated types from `$bindings/<name>`.
 

@@ -6,13 +6,33 @@ import path from 'node:path';
 /** Packages a view's own tests may import; S2.2 made exactly these resolvable from tools/. */
 const TEST_PACKAGES = new Set(['vitest', '@testing-library/svelte', '@tauri-apps/api/mocks']);
 
+/**
+ * Svelte's public entry points for code in the browser. Not svelte/internal
+ * (private), svelte/compiler or svelte/server, which have no place in a
+ * webview. A test compares this list with the exports of the installed Svelte.
+ */
+export const SVELTE_ENTRIES = new Set([
+  'svelte',
+  'svelte/action',
+  'svelte/animate',
+  'svelte/attachments',
+  'svelte/easing',
+  'svelte/elements',
+  'svelte/events',
+  'svelte/legacy',
+  'svelte/motion',
+  'svelte/reactivity',
+  'svelte/reactivity/window',
+  'svelte/store',
+  'svelte/transition',
+]);
+
 const TEST_FILE = /\.(test|spec)\.ts$/;
-const SVELTE = /^svelte(\/[a-z][a-z0-9-]*)*$/;
 const BINDING = /^\$bindings(\/[A-Za-z0-9_-]+)+$/;
 
 const ALLOWED =
-  'relative paths inside its own tools/<id>/ui/ folder, svelte (not svelte/internal), ' +
-  '$lib/view-kit and $bindings/<name>';
+  'relative paths inside its own tools/<id>/ui/ folder, svelte and its browser subpaths ' +
+  '(not svelte/internal, svelte/compiler or svelte/server), $lib/view-kit and $bindings/<name>';
 const ALLOWED_IN_TESTS =
   `${ALLOWED}; its *.test.ts and *.spec.ts files also vitest, ` +
   '@testing-library/svelte and @tauri-apps/api/mocks';
@@ -70,8 +90,7 @@ function staysInside(file, specifier) {
  */
 function isAllowed(file, specifier) {
   if (isRelative(specifier)) return staysInside(file, specifier);
-  if (specifier === 'svelte/internal' || specifier.startsWith('svelte/internal/')) return false;
-  if (SVELTE.test(specifier)) return true;
+  if (SVELTE_ENTRIES.has(specifier)) return true;
   if (specifier === '$lib/view-kit') return true;
   if (BINDING.test(specifier)) return true;
   return TEST_FILE.test(file) && TEST_PACKAGES.has(specifier);
