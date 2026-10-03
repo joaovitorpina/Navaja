@@ -26,8 +26,10 @@
 # without the app, gives each process outside the tree an identity (its
 # image, plus the services it hosts or the COM server it is), and each later
 # phase lists the connections from identities that made none in the
-# baseline. That list is for a person to review, and fails nothing: the
-# runner's own scheduled tasks and services come and go.
+# baseline, and those in the 15 s after each start of navaja.exe from any
+# identity that does not poll all through the baseline. That list is for a
+# person to review, and fails nothing: the runner's own scheduled tasks and
+# services come and go.
 #
 # pktmon, built into Windows, also captures the NICs' packets for each phase
 # (cut to 512 bytes). It names no process, but its DNS packets
@@ -64,6 +66,9 @@ $Canary = 'navaja-canary'
 # The images of the tree, and the one it starts from.
 $TreeImages = @('navaja.exe', 'msedgewebview2.exe')
 $RootImages = @('navaja.exe')
+# How long after each start of navaja.exe the review list also takes
+# connections from identities the baseline has (see Get-Report).
+$StartupSeconds = 15
 # Audit subcategories, by GUID so that a localized Windows reads them too.
 $AuditConnection = '{0CCE9226-69AE-11D9-BED3-505054503030}' # Filtering Platform Connection
 $AuditProcess = '{0CCE922B-69AE-11D9-BED3-505054503030}'    # Process Creation
@@ -231,23 +236,43 @@ function Read-Events([hashtable]$Filter) {
     }
     $xml = [xml]$record.ToXml()
     foreach ($node in $xml.SelectNodes("//*[local-name()='EventData']/*[local-name()='Data']")) {
-      $row[$node.GetAttribute('Name')] = $node.InnerText
+      # A field named like one above keeps a "Data" prefix: BITS events 59
+      # to 61 name their job's GUID "Id".
+      $field = $node.GetAttribute('Name')
+      if ($row.Contains($field)) { $field = "Data$field" }
+      $row[$field] = $node.InnerText
     }
     [pscustomobject]$row
   }
 }
 
-# Fails if the log's oldest event is newer than the phase's start: it
-# wrapped, so events of the phase are missing. An empty log lost nothing.
-function Assert-LogCovers([string]$Name, [string]$Log, [datetime]$Start) {
+# The record number of a log's newest or oldest event, 0 when it is empty.
+# Record numbers only grow, so they show whether a log lost events.
+function Get-RecordId([string]$Log, [switch]$Oldest) {
   try {
-    $oldest = Get-WinEvent -LogName $Log -Oldest -MaxEvents 1 -ErrorAction Stop
+    $event = Get-WinEvent -LogName $Log -MaxEvents 1 -Oldest:$Oldest -ErrorAction Stop
   } catch {
-    if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') { return }
-    Fail "${Name}: reading the $Log log failed: $_"
+    if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') { return [int64]0 }
+    Fail "reading the $Log log failed: $_"
   }
-  if ($oldest.TimeCreated -gt $Start) {
-    Fail "${Name}: the $Log log starts after the phase did; it wrapped, so events are missing"
+  return [int64]$event.RecordId
+}
+
+# The newest record of each log, just before a phase starts.
+function Get-LogMarks {
+  return @{
+    Security = Get-RecordId 'Security'
+    $DnsLog = Get-RecordId $DnsLog
+    $BitsLog = Get-RecordId $BitsLog
+  }
+}
+
+# Fails if the log no longer holds the first record written after the phase
+# started: it wrapped, so events of the phase are missing.
+function Assert-LogCovers([string]$Name, [string]$Log, $Marks) {
+  $oldest = Get-RecordId $Log -Oldest
+  if ($oldest -gt $Marks[$Log] + 1) {
+    Fail "${Name}: the $Log log no longer holds record $($Marks[$Log] + 1), the first one after the phase started (its oldest is $oldest); it wrapped, so events are missing"
   }
 }
 
@@ -308,10 +333,10 @@ function Stop-Capture([string]$Name) {
 
 # Writes <name>-security.json, -dns.json and -bits.json: every event of the
 # phase, from any process, so that a person can check what the analysis kept.
-function Export-Phase([string]$Name, [datetime]$Start, [datetime]$End, [string]$Marker) {
-  Assert-LogCovers $Name 'Security' $Start
-  Assert-LogCovers $Name $DnsLog $Start
-  Assert-LogCovers $Name $BitsLog $Start
+function Export-Phase([string]$Name, $Marks, [datetime]$Start, [datetime]$End, [string]$Marker) {
+  Assert-LogCovers $Name 'Security' $Marks
+  Assert-LogCovers $Name $DnsLog $Marks
+  Assert-LogCovers $Name $BitsLog $Marks
   $security = @(Read-Events @{ LogName = 'Security'; Id = 4688, 5156, 5157, 5158, 5159; StartTime = $Start; EndTime = $End })
   $dns = @(Read-Events @{ LogName = $DnsLog; StartTime = $Start; EndTime = $End })
   $bits = @(Read-Events @{ LogName = $BitsLog; StartTime = $Start; EndTime = $End })
@@ -408,8 +433,9 @@ function Get-Identities([string]$Name, $Created) {
 
 # The BITS jobs that the tree created (event 3, or 16403 for a file added
 # to a job), plus $KnownJobs, the tree's jobs from earlier phases, with what
-# BITS transferred for each (59 started, 60 stopped, 61 failed; their "Id" is
-# the job's).
+# BITS did for each: 59 started, 60 stopped and 61 failed a transfer (their
+# job's GUID is "DataId", see Read-Events), 4 completed the job, 5
+# cancelled it.
 function Get-BitsJobs($Bits, $Tree, [string[]]$KnownJobs) {
   $jobs = [ordered]@{}
   foreach ($entry in $Bits) {
@@ -439,12 +465,15 @@ function Get-BitsJobs($Bits, $Tree, [string[]]$KnownJobs) {
     }
   }
   foreach ($entry in $Bits) {
-    if (@(59, 60, 61) -notcontains $entry.Id) { continue }
-    $job = (Get-Field $entry 'Id').ToLowerInvariant()
+    if (@(4, 5, 59, 60, 61) -notcontains $entry.Id) { continue }
+    $job = Get-Field $entry 'DataId'
+    if (-not $job) { $job = Get-Field $entry 'jobId' }
+    $job = $job.ToLowerInvariant()
     if (-not $jobs.Contains($job)) { continue }
     $record = $jobs[$job]
     $record.Events++
     if (-not $record.Title) { $record.Title = Get-Field $entry 'name' }
+    if (-not $record.Title) { $record.Title = Get-Field $entry 'jobTitle' }
     if ($null -eq $record.Time) { $record.Time = $entry.Time }
     $url = Get-Field $entry 'url'
     if ($url -and $record.Urls -notcontains $url) { $record.Urls += $url }
@@ -476,7 +505,7 @@ function Get-Direction([string]$Value) {
 # What a phase's logs hold from the tree, and, given the baseline's
 # identities, what they hold from other processes that the baseline lacks.
 function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]]$RootPids,
-  [string[]]$KnownJobs = @(), $BaselineIdentities = $null) {
+  [string[]]$KnownJobs = @(), $BaselineIdentities = $null, [string[]]$Steady = @()) {
   $security = @(Read-Json "$Out\$Name-security.json")
   $dns = @(Read-Json "$Out\$Name-dns.json")
   $bits = @(Read-Json "$Out\$Name-bits.json")
@@ -574,10 +603,25 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
     $connection.Names = @($names | Sort-Object -Unique) -join ', '
   }
 
-  # Outside the tree: what the baseline lacks, and what started on demand.
+  # Outside the tree, for review: connections from identities the baseline
+  # lacks, and connections in the $StartupSeconds after a navaja.exe started
+  # from identities that do not poll all the time in the baseline (such as
+  # the VM agents). WAM's sign-in service reached login.live.com in the
+  # baseline too, but also 3 s after the app started. Then what started on
+  # demand in the phase.
   $suspects = @()
   if ($null -ne $BaselineIdentities) {
-    $suspects = @($others | Where-Object { $BaselineIdentities -notcontains $_.Identity })
+    $appStarts = @($created | Where-Object { [IO.Path]::GetFileName($_.Image).ToLowerInvariant() -eq 'navaja.exe' } |
+        ForEach-Object { (ConvertTo-Time $_.Time).ToUniversalTime() })
+    foreach ($connection in $others) {
+      $reasons = @()
+      if ($BaselineIdentities -notcontains $connection.Identity) { $reasons += 'not in the baseline' }
+      $at = (ConvertTo-Time $connection.Time).ToUniversalTime()
+      $near = @($appStarts | Where-Object { ($at - $_).TotalSeconds -ge 0 -and ($at - $_).TotalSeconds -le $StartupSeconds })
+      if ($near.Count -gt 0 -and $Steady -notcontains $connection.Identity) { $reasons += "within $StartupSeconds s of an app start" }
+      if ($reasons.Count -eq 0) { continue }
+      $suspects += $connection | Select-Object *, @{ n = 'Label'; e = { "$($_.Identity) ($($reasons -join '; '))" } }
+    }
   }
   $onDemand = @($created | Where-Object {
       -not $tree.ContainsKey($_.ProcessId) -and
@@ -676,7 +720,7 @@ function Write-Report($Report) {
       $lines.Add('')
     }
     if ($Report.Jobs.Count -gt 0) {
-      $lines.Add('| BITS job | Created by | Hosts of its URLs | Bytes transferred | BITS transfer events | First, from the phase''s start |')
+      $lines.Add('| BITS job | Created by | Hosts of its URLs | Bytes transferred | BITS events on it | First, from the phase''s start |')
       $lines.Add('|---|---|---|---|---|---|')
       foreach ($job in $Report.Jobs) {
         $hosts = @($job.Urls | ForEach-Object { try { ([uri]$_).Host } catch { $_ } } | Sort-Object -Unique) -join ', '
@@ -689,16 +733,16 @@ function Write-Report($Report) {
     }
   }
   if ($Report.Name -eq 'idle' -or $Report.Name -eq 'in-use') {
-    $lines.Add('##### Outside the process tree, not in the baseline (for review, not a finding)')
+    $lines.Add('##### Outside the process tree, for review (not findings)')
     $lines.Add('')
-    $lines.Add('Connections outside loopback from processes outside the tree whose identity (image, plus the services it hosts or the COM server it is) made none in the 5 min baseline. A service that works for the tree without a log naming it, such as WAM''s account broker, would show here; so do the runner''s own scheduled tasks.')
+    $lines.Add("Connections outside loopback from processes outside the tree: from identities (image, plus the services it hosts or the COM server it is) that made none in the 5 min baseline, and from any identity but the baseline's steady pollers in the $StartupSeconds s after a start of navaja.exe. A service that works for the tree without a log naming it, such as WAM's account broker, would show here; so do the runner's own scheduled tasks.")
     $lines.Add('')
     if (-not $Report.Baseline) {
       $lines.Add('No baseline was captured, so there is no such list.')
     } elseif ($Report.Suspects.Count -eq 0) {
       $lines.Add('None.')
     } else {
-      Add-ConnectionRows $lines $Report.Suspects 'Identity' $start
+      Add-ConnectionRows $lines $Report.Suspects 'Label' $start
     }
     $lines.Add('')
     $started = @($Report.OnDemand | Sort-Object Time | ForEach-Object { "``$($_.Identity)`` $(Format-Offset $_.Time $start)" })
@@ -723,6 +767,7 @@ function Invoke-Control {
   # A cold cache, so that curl's lookup reaches the DNS client's network path.
   Clear-DnsClientCache
   Start-Capture 'control'
+  $marks = Get-LogMarks
   $start = Get-Date
   Start-Sleep -Milliseconds 500
   $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
@@ -752,7 +797,7 @@ function Invoke-Control {
   Start-Sleep -Seconds 3
   $end = Get-Date
   Stop-Capture 'control'
-  Export-Phase 'control' $start $end $marker
+  Export-Phase 'control' $marks $start $end $marker
   $report = Get-Report 'control' @('curl.exe') @() @([int64]$proc.Id)
   Write-Report $report
   $tcp = @($report.Outside | Where-Object { $_.Port -eq '443' -and $_.Protocol -eq 'TCP' -and $_.Process -like "curl.exe ($($proc.Id))" })
@@ -853,6 +898,7 @@ function Invoke-Baseline {
   $running = @(Get-Process -Name navaja -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Binary })
   if ($running.Count -gt 0) { Fail "baseline: the app already runs (PID $($running.Id -join ', ')), so this is no baseline" }
   Start-Capture 'baseline'
+  $marks = Get-LogMarks
   $start = Get-Date
   Save-Snapshot 'baseline' 'start'
   Write-Host "Baseline: capturing $IdleSeconds s with nothing of Navaja running."
@@ -862,7 +908,7 @@ function Invoke-Baseline {
   Start-Sleep -Seconds 3
   $end = Get-Date
   Stop-Capture 'baseline'
-  Export-Phase 'baseline' $start $end $marker
+  Export-Phase 'baseline' $marks $start $end $marker
   Write-Host 'Baseline: done; the logs are checked in the next step.'
 }
 
@@ -874,6 +920,7 @@ function Invoke-Idle {
   $appDir = Join-Path ([IO.Path]::GetTempPath()) ('navaja-s2-7-' + [guid]::NewGuid())
   New-Item -ItemType Directory -Path $appDir | Out-Null
   Start-Capture 'idle'
+  $marks = Get-LogMarks
   $start = Get-Date
   Save-Snapshot 'idle' 'start'
   Start-Sleep -Milliseconds 500
@@ -931,7 +978,7 @@ function Invoke-Idle {
   Start-Sleep -Seconds 3
   $end = Get-Date
   Stop-Capture 'idle'
-  Export-Phase 'idle' $start $end $marker
+  Export-Phase 'idle' $marks $start $end $marker
   if ($failure) { Fail "idle: $failure" }
   Write-Host 'Idle: done; the logs are checked in the next step.'
 }
@@ -939,6 +986,7 @@ function Invoke-Idle {
 function Invoke-InUse {
   if (-not (Test-Path $Binary)) { Fail "in use: no $Binary; build it first (see s2-7-egress.sh)" }
   Start-Capture 'in-use'
+  $marks = Get-LogMarks
   $start = Get-Date
   Save-Snapshot 'in-use' 'start'
   Start-Sleep -Milliseconds 500
@@ -955,7 +1003,7 @@ function Invoke-InUse {
   Start-Sleep -Seconds 3
   $end = Get-Date
   Stop-Capture 'in-use'
-  Export-Phase 'in-use' $start $end $marker
+  Export-Phase 'in-use' $marks $start $end $marker
   if ($status -ne 0) { Fail "in use: the end-to-end suite failed (exit $status)" }
   Write-Host 'In use: the suite passed; the logs are checked in the next step.'
 }
@@ -968,14 +1016,28 @@ function Invoke-Check([string]$Name) {
     if ($file.Name -ne "$Name-bits-jobs.json") { $known += @(Read-Json $file.FullName | ForEach-Object { [string]$_ }) }
   }
   $baseline = $null
+  $steady = @()
   if ($Name -ne 'baseline' -and (Test-Path "$Out\baseline-identities.json")) {
     $baseline = @(Read-Json "$Out\baseline-identities.json" | ForEach-Object { [string]$_ })
+    $steady = @(Read-Json "$Out\baseline-steady.json" | ForEach-Object { [string]$_ })
   }
-  $report = Get-Report $Name $RootImages $TreeImages @() $known $baseline
+  $report = Get-Report $Name $RootImages $TreeImages @() $known $baseline $steady
   Save-Json "$Out\$Name-bits-jobs.json" @($report.Jobs | ForEach-Object { $_.Job })
   Write-Report $report
   if ($Name -eq 'baseline') {
     Save-Json "$Out\baseline-identities.json" $report.Identities
+    # The identities that connect out in at least half of the baseline's
+    # 30 s slices: pollers such as the VM agents, which the start-up
+    # window's list leaves out.
+    $start = ConvertTo-Time $report.Start
+    $end = ConvertTo-Time (Read-Json "$Out\baseline-window.json")[0].End
+    $slices = [math]::Max(1, [math]::Ceiling(($end - $start).TotalSeconds / 30))
+    $steadyIds = @($report.Others | Group-Object Identity | Where-Object {
+        $seen = @($_.Group | ForEach-Object { [math]::Floor(((ConvertTo-Time $_.Time) - $start).TotalSeconds / 30) } | Sort-Object -Unique)
+        $seen.Count * 2 -ge $slices
+      } | ForEach-Object { $_.Name })
+    Save-Json "$Out\baseline-steady.json" $steadyIds
+    Write-Host "baseline: steady pollers, out in at least half of its $slices slices of 30 s: $($steadyIds -join ', ')."
     Write-Host "baseline: $($report.Identities.Count) identities outside the tree connected outside loopback."
     if ($report.Findings -gt 0) {
       Fail "baseline: $($report.Findings) event(s) counted as the app's while it was not running, so the attribution would blame it for the machine's own traffic; see the tables above"
@@ -987,10 +1049,10 @@ function Invoke-Check([string]$Name) {
   if (@($report.Loopback | Where-Object { $_.Process -like 'navaja.exe *' }).Count -eq 0) {
     Fail "${Name}: the logs hold no connection of navaja.exe, not even its WebDriver on loopback, so they prove nothing"
   }
-  $suspects = @($report.Suspects | Group-Object Identity, Event, Direction, Remote, Port, Protocol).Count
+  $suspects = @($report.Suspects | Group-Object Label, Event, Direction, Remote, Port, Protocol).Count
   Set-Content -Path "$Out\$Name-suspects.count" -Value $suspects -Encoding ascii
   if ($suspects -gt 0) {
-    Write-Host "::warning::S2.7 ${Name}: $suspects connection(s) outside the process tree that the baseline lacks, listed above for review (not findings)"
+    Write-Host "::warning::S2.7 ${Name}: $suspects connection(s) outside the process tree listed above for review (not findings)"
   }
   if ($report.Findings -gt 0) {
     Fail "${Name}: $($report.Findings) connection, DNS or BITS event(s) from the process tree; see the tables above"

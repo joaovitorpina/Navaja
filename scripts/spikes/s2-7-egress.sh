@@ -40,7 +40,8 @@
 #   WebContent, GPU), or one of the daemons WebKit hands work to: webprivacyd
 #   (its privacy lists), the Safe Browsing service, adattributiond (Private
 #   Click Measurement) or webpushd (Web Push). WebKit starts them for the
-#   app, outside its process tree.
+#   app, outside its process tree. A daemon that was already running before
+#   the app first ran is not counted: the VM starts some by itself.
 # On both, a DNS question for one of the egress canary's hosts is a finding
 # too, whichever process asks.
 #
@@ -117,11 +118,20 @@ UPLINK_DNS_SNAP=512
 # it, as pktap names them. It cuts a name to 16 characters (15 for the
 # process acted for), so com.apple.WebKit.Networking may read
 # com.apple.WebKit, and com.apple.Safari.SafeBrowsing.Service reads
-# com.apple.Safari or com.apple.Safar. The baseline checks that none of them
-# talks while the app is not running.
-APP_PROCS='navaja|com\.apple\.WebKit.*'
-WEBKIT_DAEMONS='webprivacyd|com\.apple\.Safar.*|adattributiond|webpushd'
-TREE_PROCS="^($APP_PROCS|$WEBKIT_DAEMONS)\$"
+# com.apple.Safari or com.apple.Safar. A daemon counts only if it was not
+# running before the app first ran in this job (<phase>-daemons-before.txt):
+# the VM may start one by itself, as it did the Safe Browsing service before
+# a job began. The baseline checks that no daemon started without the app
+# talks.
+TREE_PROCS='^(navaja|com\.apple\.WebKit.*)$'
+WEBKIT_DAEMONS='^(webprivacyd|com\.apple\.Safar.*|adattributiond|webpushd)$'
+# The same daemons as ps names them.
+DAEMON_COMMANDS='webprivacyd|SafeBrowsing\.Service|adattributiond|webpushd'
+# Set by check() for the tree's checks only: the daemons' pktap names, and
+# the PIDs (" 1 2 ") of the instances that ran before the app.
+MAC_DAEMONS=''
+MAC_EXCLUDED=' '
+MAC_BEFORE=''
 
 fail() {
   echo "::error::S2.7 $*"
@@ -559,8 +569,70 @@ check() {
   rm -f "$OUT/$phase-suspects.md" "$OUT/$phase-suspects.count"
   case $OS in
     linux) check_linux "$phase" ;;
-    macos) check_macos "$phase" "$TREE_PROCS" '' ;;
+    macos)
+      MAC_DAEMONS=$WEBKIT_DAEMONS
+      MAC_BEFORE=$(daemons_before_file "$phase")
+      MAC_EXCLUDED=" $(tr '\n' ' ' < "$MAC_BEFORE") "
+      check_macos "$phase" "$TREE_PROCS" ''
+      ;;
   esac
+}
+
+# macOS: "3216 (`/System/.../com.apple.Safari.SafeBrowsing.Service`)." for
+# the daemons in MAC_EXCLUDED, from the ps lines recorded with them.
+daemon_names() {
+  local pid cmd out='' file=${MAC_BEFORE%.txt}-ps.txt
+  for pid in $MAC_EXCLUDED; do
+    # ps printed the PID, the start time in 5 fields, then the command.
+    cmd=$(awk -v pid="$pid" '$1 == pid { for (i = 1; i <= 6; i++) $i = ""; sub(/^ +/, ""); print; exit }' "$file" 2> /dev/null || true)
+    out="$out${out:+, }$pid (\`${cmd:-?}\`)"
+  done
+  echo "$out."
+}
+
+# macOS: the PIDs of the WebKit daemons running now, one a line, and their
+# commands and start times on stderr.
+daemon_pids() {
+  local pids
+  pids=$(pgrep -f "$DAEMON_COMMANDS" || true)
+  if [ -n "$pids" ]; then
+    # shellcheck disable=SC2086
+    ps -o pid=,lstart=,command= -p "$(echo $pids | tr ' ' ,)" >&2 || true
+    printf '%s\n' $pids
+  fi
+}
+
+# macOS: the file of daemon PIDs that ran before the app first ran: for the
+# baseline, those at its own start; else those at the idle phase's start,
+# the app's first run (or at the in-use phase's, if idle never ran).
+daemons_before_file() {
+  local file candidates
+  if [ "$1" = baseline ]; then
+    candidates=("$OUT/baseline-daemons-before.txt")
+  else
+    candidates=("$OUT/idle-daemons-before.txt" "$OUT/in-use-daemons-before.txt")
+  fi
+  for file in "${candidates[@]}"; do
+    if [ -f "$file" ]; then
+      echo "$file"
+      return 0
+    fi
+  done
+  fail "check $1: no record of the WebKit daemons that ran before the app; run the $1 mode first"
+}
+
+# macOS: before a phase, the WebKit daemons already running, which the
+# phase's check does not count as the app's.
+record_daemons() {
+  local phase=$1
+  [ "$OS" = macos ] || return 0
+  daemon_pids > "$OUT/$phase-daemons-before.txt" 2> "$OUT/$phase-daemons-before-ps.txt"
+  echo "WebKit daemons running before the $phase phase:"
+  if [ -s "$OUT/$phase-daemons-before.txt" ]; then
+    cat "$OUT/$phase-daemons-before-ps.txt"
+  else
+    echo "  none"
+  fi
 }
 
 check_linux() {
@@ -775,20 +847,28 @@ mac_listing() {
 }
 
 # macOS: keeps the packets outside lo0 whose process or delegated process
-# matches <want> (and, if given, has PID <pid>), as "<label>\t<line without
-# the metadata>". The label names the process and the direction; an
-# incoming packet's addresses are swapped, so that the line's destination is
-# always the remote end. <mode> "lo0" keeps the ones on lo0 instead. <mode>
-# "all" keeps every packet outside lo0, as "<identity>\t<1 if it matches
-# want, else 0>\t<label>\t<line>"; the identity is the process the packet
-# was for (eproc) where pktap names one, else the one that sent or received
-# it, cut to 15 characters, as pktap cuts eproc.
+# matches <want> (and, if given, has PID <pid>), or is one of MAC_DAEMONS
+# with a PID not in MAC_EXCLUDED, as "<label>\t<line without the
+# metadata>". The label names the process and the direction; an incoming
+# packet's addresses are swapped, so that the line's destination is always
+# the remote end. <mode> "lo0" keeps the ones on lo0 instead. <mode> "all"
+# keeps every packet outside lo0, as "<identity>\t<1 if it matches, else
+# 0>\t<label>\t<line>"; the identity is the process the packet was for
+# (eproc) where pktap names one, else the one that sent or received it, cut
+# to 15 characters, as pktap cuts eproc. <mode> "excluded" keeps the packets
+# outside lo0 of the daemons in MAC_EXCLUDED, as "outside" does.
 mac_select() {
   local listing=$1 want=$2 pid=$3 mode=${4:-outside}
-  WANT=$want awk -v pid="$pid" -v mode="$mode" '
+  WANT=$want DAEMONS=$MAC_DAEMONS EXCLUDED=$MAC_EXCLUDED awk -v pid="$pid" -v mode="$mode" '
     function name(s, a) { split(s, a, ":"); return a[1] }
     function id(s, a) { split(s, a, ":"); return a[2] }
-    function matches(s) { return s != "" && name(s) ~ ENVIRON["WANT"] && (pid == "" || id(s) == pid) }
+    function daemon(s) { return s != "" && ENVIRON["DAEMONS"] != "" && name(s) ~ ENVIRON["DAEMONS"] }
+    function excluded(s) { return daemon(s) && index(ENVIRON["EXCLUDED"], " " id(s) " ") > 0 }
+    function matches(s) {
+      if (s == "") return 0
+      if (name(s) ~ ENVIRON["WANT"] && (pid == "" || id(s) == pid)) return 1
+      return daemon(s) && !excluded(s)
+    }
     {
       if (!match($0, /\([^()]*\)/)) next
       meta = substr($0, RSTART + 1, RLENGTH - 2)
@@ -805,7 +885,9 @@ mac_select() {
         else if (part[i] == "in" || part[i] == "out") dir = part[i]
       }
       tree = matches(proc) || matches(eproc)
-      if (mode != "all" && !tree) next
+      if (mode == "excluded") {
+        if (!excluded(proc) && !excluded(eproc)) next
+      } else if (mode != "all" && !tree) next
       lo = (ifname == "lo0")
       if ((mode == "lo0") != lo) next
       label = name(proc) " (" id(proc) ")"
@@ -956,6 +1038,15 @@ check_macos() {
     echo
     echo "The tree's packets on lo0, which never leave the machine: $(lo0_summary "$OUT/$phase-tree-lo0.txt")."
     echo
+    if [ "$phase" != control ]; then
+      mac_select "$listing" "$want" "$pid" excluded > "$OUT/$phase-daemons-before-packets.txt"
+      if [ -n "${MAC_EXCLUDED// /}" ]; then
+        echo "WebKit daemons that were running before the app first ran, so not counted as the app's: $(daemon_names) Their packets outside lo0 in this phase: $(lines "$OUT/$phase-daemons-before-packets.txt")."
+      else
+        echo "No WebKit daemon was running before the app first ran."
+      fi
+      echo
+    fi
     if [ "$findings" -eq 0 ]; then
       echo "No packet from the process tree."
     else
@@ -1076,8 +1167,7 @@ baseline() {
   local process
   process=$(pgrep -fl "$BINARY" || true)
   [ -z "$process" ] || fail "baseline: the app already runs, so this is no baseline: $process"
-  echo "WebKit's processes and daemons running now (none expected; any traffic of theirs fails the baseline's check):"
-  app_processes | grep -v -e tcpdump -e "$OUT" || echo "  none"
+  record_daemons baseline
   start_captures baseline
   watch_processes baseline
   echo "Baseline: capturing $IDLE_SECONDS s with nothing of Navaja running."
@@ -1118,6 +1208,7 @@ namespace_alive() {
 idle() {
   local status=0 alive=0
   [ -x "$BINARY" ] || fail "idle: no $BINARY; build it first (see the top of this script)"
+  record_daemons idle
   start_captures idle
   watch_processes idle
   case $OS in
@@ -1140,6 +1231,7 @@ idle() {
 in_use() {
   local status=0 alive=0
   [ -x "$BINARY" ] || fail "in use: no $BINARY; build it first (see the top of this script)"
+  record_daemons in-use
   start_captures in-use
   watch_processes in-use
   case $OS in
