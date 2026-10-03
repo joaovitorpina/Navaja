@@ -51,38 +51,24 @@ pub fn run() -> Result<()> {
         problems.extend(missing_dependencies(manifest, &json, &packages));
     }
 
-    let mut excepted = 0;
-    let mut needed = HashSet::new();
-    for package in &packages {
-        match verdict(package, &allowlist, &exceptions) {
-            Verdict::Allowed => {}
-            Verdict::Excepted => {
-                excepted += 1;
-                needed.insert(package.name.as_str());
-            }
-            Verdict::Rejected(why) => {
-                needed.insert(package.name.as_str());
-                problems.push(format!("{} ({}): {why}", package.label(), package.license));
-            }
-        }
-    }
+    let judgement = check_packages(&packages, &allowlist, &exceptions);
+    problems.extend(judgement.problems);
     // A stale entry still names one package and one licence, so it lets
     // nothing new in. It only warns: platform-specific packages (native
     // binaries) are installed on some OSes and not others.
-    for exception in &exceptions {
-        if !needed.contains(exception.package.as_str()) {
-            eprintln!(
-                "warning: {EXCEPTIONS}: no installed package needs the exception for {} ({})",
-                exception.package, exception.license
-            );
-        }
+    for exception in judgement.unused {
+        eprintln!(
+            "warning: {EXCEPTIONS}: no installed version of {} declares {:?}; the entry is unused here",
+            exception.package, exception.license
+        );
     }
 
     if problems.is_empty() {
         let versions: usize = packages.iter().map(|p| p.versions.len()).sum();
         println!(
-            "{} npm packages ({versions} versions) checked; {excepted} allowed through {EXCEPTIONS}",
-            packages.len()
+            "{} npm packages ({versions} versions) checked; {} allowed through {EXCEPTIONS}",
+            packages.len(),
+            judgement.excepted
         );
     } else {
         eprintln!(
@@ -433,6 +419,48 @@ fn missing_dependencies(manifest: &str, json: &Value, packages: &[Package]) -> V
     problems
 }
 
+/// The verdicts on all installed packages.
+struct Judgement<'a> {
+    /// Packages allowed only through an entry in js-licenses.toml.
+    excepted: usize,
+    /// One line per rejected package.
+    problems: Vec<String>,
+    /// Entries that no installed package used: none of them is that
+    /// package under that licence.
+    unused: Vec<&'a Exception>,
+}
+
+fn check_packages<'a>(
+    packages: &[Package],
+    allowlist: &Allowlist,
+    exceptions: &'a [Exception],
+) -> Judgement<'a> {
+    let mut excepted = 0;
+    let mut problems = Vec::new();
+    let mut used = HashSet::new();
+    for package in packages {
+        match verdict(package, allowlist, exceptions) {
+            Verdict::Allowed => {}
+            Verdict::Excepted => {
+                excepted += 1;
+                used.insert((package.name.as_str(), package.license.as_str()));
+            }
+            Verdict::Rejected(why) => {
+                problems.push(format!("{} ({}): {why}", package.label(), package.license));
+            }
+        }
+    }
+    let unused = exceptions
+        .iter()
+        .filter(|e| !used.contains(&(e.package.as_str(), e.license.as_str())))
+        .collect();
+    Judgement {
+        excepted,
+        problems,
+        unused,
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum Verdict {
     Allowed,
@@ -705,6 +733,38 @@ mod tests {
                     .to_owned()
             )
         );
+    }
+
+    #[test]
+    fn unused_entries_are_found_per_package_and_licence() {
+        let exceptions = [
+            exception("x", "Unknown"),
+            exception("x", "CC-BY-4.0"),
+            exception("y", "MIT-0"),
+            exception("z", "Unlicense"),
+        ];
+        let packages = [
+            // x is installed under one of its two licences only.
+            package("x", "Unknown"),
+            // y is installed, but under a licence its entry doesn't name.
+            package("y", "WTFPL"),
+            package("z", "Unlicense"),
+            package("allowed", "MIT"),
+        ];
+        let judgement = check_packages(&packages, &allowlist(), &exceptions);
+        assert_eq!(judgement.excepted, 2);
+        assert_eq!(
+            judgement.problems,
+            [
+                "y@1.0.0 (WTFPL): not on the allowlist: WTFPL; js-licenses.toml excepts it only under \"MIT-0\""
+            ]
+        );
+        let unused: Vec<(&str, &str)> = judgement
+            .unused
+            .iter()
+            .map(|e| (e.package.as_str(), e.license.as_str()))
+            .collect();
+        assert_eq!(unused, [("x", "CC-BY-4.0"), ("y", "MIT-0")]);
     }
 
     #[test]

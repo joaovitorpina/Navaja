@@ -301,7 +301,7 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 - Each licence is read as an SPDX expression and checked against deny.toml's `[licenses].allow`, the same list cargo-deny uses for crates.
 - Anything else needs an entry in `js-licenses.toml`: the package, its licence exactly as its `package.json` declares it (`Unknown` when it declares none), and a one-line reason. A package that changes licence falls out of its entry.
 - A missing, custom or unparseable licence fails unless it has an entry, and so does `SEE LICENSE IN <file>`. Before adding an entry for a package that declares no licence, read its LICENSE file. Every failing package is reported.
-- It sees what is installed on the running OS, so another OS's native binaries (esbuild, Tailwind, Tauri CLI) are not listed.
+- It sees what is installed on the running OS, so another OS's native binaries (esbuild, Tailwind, Tauri CLI) are not listed. An entry that no installed package uses under its licence only warns, since another OS may need it.
 
 **Secrets in fixtures** (`scripts/check-fixture-secrets.sh`):
 - gitleaks scans the tracked files under `tests/fixtures/` and `snapshots/` and every `*.snap`, with its built-in rules.
