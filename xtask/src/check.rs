@@ -2,7 +2,7 @@
 //! and the ACL snapshot (see acl.rs).
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use cargo_metadata::{CargoOpt, Dependency, DependencyKind, Metadata, MetadataCommand, PackageId};
@@ -46,8 +46,12 @@ pub fn run() -> Result<()> {
     problems.extend(closure_problems(&metadata));
     problems.extend(parity_problems(&metadata, &root)?);
     problems.extend(config_problems(&root)?);
-    // Last: it builds the app crate's build script (cargo check).
-    problems.extend(crate::acl::problems(&root)?);
+    // Last: it builds the app crate's build script (cargo check). A failure
+    // is one more problem, so the ones found above are still reported.
+    match crate::acl::problems(&root) {
+        Ok(found) => problems.extend(found),
+        Err(error) => problems.push(format!("ACL snapshot could not be resolved: {error:#}")),
+    }
     report("xtask check", &problems)
 }
 
@@ -346,6 +350,28 @@ fn config_problems(root: &Path) -> Result<Vec<String>> {
     let overlay = read_json(&tauri_dir.join("e2e.conf.json"))?;
     problems.extend(e2e_overlay_problems(&overlay));
 
+    let mut names = Vec::new();
+    for entry in
+        std::fs::read_dir(&tauri_dir).with_context(|| format!("reading {}", tauri_dir.display()))?
+    {
+        names.push(entry?.file_name().to_string_lossy().into_owned());
+    }
+    problems.extend(platform_config_problems(&names));
+
+    let mut sources = Vec::new();
+    rust_files(&tauri_dir.join("src"), &mut sources)?;
+    sources.sort();
+    for path in sources {
+        let source = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        let file = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        problems.extend(context_macro_problems(&file, &source));
+    }
+
     let capabilities = tauri_dir.join("capabilities");
     for entry in std::fs::read_dir(&capabilities)
         .with_context(|| format!("reading {}", capabilities.display()))?
@@ -360,6 +386,96 @@ fn config_problems(root: &Path) -> Result<Vec<String>> {
         }
     }
     Ok(problems)
+}
+
+/// The targets tauri-utils looks up a config file of their own for.
+const CONFIG_PLATFORMS: &[&str] = &["linux", "macos", "windows", "android", "ios"];
+
+/// tauri-build and tauri-codegen merge `tauri.<os>.conf.json[5]` or
+/// `Tauri.<os>.toml` over tauri.conf.json when building for that OS, but
+/// the checks here and acl.lock.json read tauri.conf.json alone. Compared
+/// without case: on Windows and macOS the lookup ignores it.
+fn platform_config_problems(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| {
+            CONFIG_PLATFORMS.iter().any(|os| {
+                [
+                    format!("tauri.{os}.conf.json"),
+                    format!("tauri.{os}.conf.json5"),
+                    format!("Tauri.{os}.toml"),
+                ]
+                .iter()
+                .any(|platform| platform.eq_ignore_ascii_case(name))
+            })
+        })
+        .map(|name| {
+            format!(
+                "app/src-tauri/{name}: per-platform config files are merged over \
+                 tauri.conf.json at build time and are not covered by `cargo xtask check` \
+                 or acl.lock.json; extend xtask before adding one"
+            )
+        })
+        .collect()
+}
+
+/// Every `.rs` file under `dir`, recursively.
+fn rust_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        if path.is_dir() {
+            rust_files(&path, files)?;
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+const CONTEXT_MACRO: &str = "generate_context";
+
+/// `tauri::generate_context!()` takes no arguments here. A config path,
+/// `capabilities = [...]` or any other argument reaches tauri-codegen, and
+/// so the built app, but not acl.lock.json or the checks above. A renamed
+/// import would hide a call from this check, so it is refused too. Other
+/// mentions, such as in prose, are not calls and pass.
+fn context_macro_problems(file: &str, source: &str) -> Vec<String> {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut problems = Vec::new();
+    for (start, _) in source.match_indices(CONTEXT_MACRO) {
+        let after = &source[start + CONTEXT_MACRO.len()..];
+        if source[..start].chars().next_back().is_some_and(is_ident)
+            || after.chars().next().is_some_and(is_ident)
+        {
+            continue;
+        }
+        let line = source[..start].matches('\n').count() + 1;
+        let rest = after.trim_start();
+        if let Some(call) = rest.strip_prefix('!') {
+            let mut chars = call.trim_start().chars();
+            let close = match chars.next() {
+                Some('(') => ')',
+                Some('[') => ']',
+                Some('{') => '}',
+                _ => continue,
+            };
+            if !chars.as_str().trim_start().starts_with(close) {
+                problems.push(format!(
+                    "{file}:{line}: generate_context! must be called with no arguments; \
+                     its arguments reach the build but not `cargo xtask check` or acl.lock.json"
+                ));
+            }
+        } else if rest
+            .strip_prefix("as")
+            .is_some_and(|r| r.starts_with(char::is_whitespace))
+        {
+            problems.push(format!(
+                "{file}:{line}: generate_context must not be renamed, so `cargo xtask check` \
+                 sees every call"
+            ));
+        }
+    }
+    problems
 }
 
 fn tauri_config_problems(config: &Value) -> Vec<String> {
@@ -787,6 +903,96 @@ mod tests {
                 e2e_overlay_problems(&overlay)
             );
         }
+    }
+
+    #[test]
+    fn per_platform_configs_are_refused() {
+        let names = |list: &[&str]| list.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+        let ok = names(&[
+            "tauri.conf.json",
+            "e2e.conf.json",
+            "acl.lock.json",
+            "Cargo.toml",
+            "build.rs",
+            "capabilities",
+            "tauri.conf.json.bak",
+            "tauri.freebsd.conf.json",
+        ]);
+        assert!(platform_config_problems(&ok).is_empty());
+
+        let bad = names(&[
+            "tauri.linux.conf.json",
+            "tauri.macos.conf.json5",
+            "Tauri.windows.toml",
+            "tauri.android.conf.json",
+            "Tauri.ios.toml",
+            "TAURI.Windows.conf.JSON",
+        ]);
+        let problems = platform_config_problems(&bad);
+        assert_eq!(problems.len(), bad.len(), "{problems:?}");
+        assert!(
+            problems[0].starts_with(
+                "app/src-tauri/tauri.linux.conf.json: per-platform config files are merged over \
+                 tauri.conf.json"
+            ),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn generate_context_takes_no_arguments() {
+        for ok in [
+            "tauri::Builder::default().build(tauri::generate_context!())",
+            "let context = generate_context! ( );",
+            "generate_context![]\ngenerate_context!{ }",
+            "// `generate_context!` reads tauri.conf.json",
+            "fn my_generate_context() {}\nlet generate_contexts = 1;",
+        ] {
+            let problems = context_macro_problems("lib.rs", ok);
+            assert!(problems.is_empty(), "{ok}: {problems:?}");
+        }
+
+        for bad in [
+            "tauri::generate_context!(\"tauri.other.conf.json\")",
+            "tauri::generate_context!(capabilities = [\"extra.json\"])",
+            "generate_context![test = true]",
+            "generate_context! {\n    assets = Assets,\n}",
+            "use tauri::generate_context as context;",
+            "use tauri::{generate_context as context, Manager};",
+        ] {
+            let problems = context_macro_problems("app/src-tauri/src/lib.rs", bad);
+            assert_eq!(problems.len(), 1, "{bad}: {problems:?}");
+            assert!(
+                problems[0].starts_with("app/src-tauri/src/lib.rs:1: generate_context"),
+                "{problems:?}"
+            );
+        }
+
+        let source =
+            "fn run() {\n    let a = 1;\n    tauri::generate_context!(capabilities = []);\n}";
+        let problems = context_macro_problems("lib.rs", source);
+        assert_eq!(
+            problems,
+            [
+                "lib.rs:3: generate_context! must be called with no arguments; its arguments \
+              reach the build but not `cargo xtask check` or acl.lock.json"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_app_sources_call_generate_context_plainly() {
+        let root = crate::util::root();
+        let mut sources = Vec::new();
+        rust_files(&root.join("app/src-tauri/src"), &mut sources).expect("the app's sources");
+        let calls = sources
+            .iter()
+            .map(|path| std::fs::read_to_string(path).expect("a source file"))
+            .filter(|source| source.contains("generate_context!()"))
+            .count();
+        assert_eq!(calls, 1);
+        let problems = config_problems(&root).expect("the app's config");
+        assert!(problems.is_empty(), "{problems:?}");
     }
 
     #[test]

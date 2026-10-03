@@ -345,4 +345,58 @@ describe('repository link, logs and quit', () => {
     expect(await screen.findByText('Navaja could not quit.')).toBeTruthy();
     expect(screen.getAllByRole('alert')).toHaveLength(3);
   });
+
+  /**
+   * Fails twice through `button` and checks that the second failure shows a
+   * new alert node, which a screen reader announces again, in place of the first.
+   */
+  async function expectNewAlertOnRetry(button: HTMLElement, text: string) {
+    await fireEvent.click(button);
+    const first = await screen.findByText(text);
+    expect(first.getAttribute('role')).toBe('alert');
+
+    await fireEvent.click(button);
+    await vi.waitFor(() => expect(screen.getByText(text)).not.toBe(first));
+    const second = screen.getByText(text);
+    expect(second.getAttribute('role')).toBe('alert');
+    expect(first.isConnected).toBe(false);
+    expect(screen.getAllByText(text)).toHaveLength(1);
+  }
+
+  it('shows a new alert when the browser fails to open again', async () => {
+    const calls = mockApp({ commands: { open_url: fails('Could not open the web browser.') } });
+    router.go({ kind: 'about' });
+    render(App);
+
+    await expectNewAlertOnRetry(
+      await screen.findByRole('button', { name: 'github.com/joaovitorpina/Navaja' }),
+      'Navaja could not open your web browser.',
+    );
+    expect(commandsCalled(calls, 'open_url')).toEqual(['open_url', 'open_url']);
+  });
+
+  it('shows a new alert when the logs folder fails to open again', async () => {
+    const calls = mockApp({ commands: { open_logs: fails('Could not open the file manager.') } });
+    router.go({ kind: 'settings' });
+    render(App);
+
+    await expectNewAlertOnRetry(
+      await screen.findByRole('button', { name: 'Open logs folder' }),
+      'Navaja could not open its logs folder.',
+    );
+    expect(commandsCalled(calls, 'open_logs')).toEqual(['open_logs', 'open_logs']);
+  });
+
+  it('shows a new alert when quitting fails again', async () => {
+    const calls = mockApp({
+      commands: { list_tools: fails('registry unavailable'), quit: fails('ipc unavailable') },
+    });
+    render(App);
+
+    await expectNewAlertOnRetry(
+      await screen.findByRole('button', { name: 'Quit Navaja' }),
+      'Navaja could not quit.',
+    );
+    expect(commandsCalled(calls, 'quit')).toEqual(['quit', 'quit']);
+  });
 });

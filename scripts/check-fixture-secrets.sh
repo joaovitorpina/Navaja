@@ -8,8 +8,13 @@
 # a temporary directory first, so gitleaks sees exactly that set and nothing
 # else in the tree. Set GITLEAKS to use a gitleaks that is not on PATH.
 #
+# Fixtures and snapshots must be UTF-8 text. gitleaks skips binary files,
+# archives, UTF-16 text and symlinks without a word, so any of them fails
+# the check before gitleaks runs, instead of counting as scanned.
+#
 # Exit status: 0 when nothing is found, or there is nothing to scan; 1 when
-# gitleaks reports a finding, is missing, or fails.
+# a fixture is binary or a symlink, or gitleaks reports a finding, is
+# missing, or fails.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -31,6 +36,27 @@ count=$(git ls-files -z -- "${PATHSPECS[@]}" | count_records)
 if [ "$count" -eq 0 ]; then
   echo "No fixtures or snapshots to scan."
   exit 0
+fi
+
+# Git decides what is binary, from the staged content: `i/-text` in
+# `git ls-files --eol` means a NUL byte (which UTF-16 text and archives
+# have), a lone CR, or mostly control characters. Symlinks have mode 120000.
+unscannable=()
+while IFS= read -r -d '' record; do
+  case "$record" in
+    i/-text*) unscannable+=("${record#*$'\t'} (binary)") ;;
+  esac
+done < <(git ls-files --eol -z -- "${PATHSPECS[@]}")
+while IFS= read -r -d '' record; do
+  case "$record" in
+    '120000 '*) unscannable+=("${record#*$'\t'} (symlink)") ;;
+  esac
+done < <(git ls-files -s -z -- "${PATHSPECS[@]}")
+
+if [ "${#unscannable[@]}" -gt 0 ]; then
+  echo "::error::gitleaks would skip ${#unscannable[@]} fixture or snapshot file(s) without scanning them. Fixtures and snapshots must be UTF-8 text (redacted dumps or JSON), not binary files, archives, UTF-16 text or symlinks:"
+  printf '  %s\n' "${unscannable[@]}"
+  exit 1
 fi
 
 gitleaks=${GITLEAKS:-gitleaks}
