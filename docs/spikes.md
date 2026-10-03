@@ -62,6 +62,18 @@ Copy this for each spike and fill it in.
   - `$lib/view-kit` exists and is what views import from the shell. ToolHost types the glob against its `ViewProps`.
   - Still open before S2.2 can pass: HMR and the packaged app on Windows, the same checks on macOS and Linux in CI, and the ESLint import allowlist (tracked in roadmap M2a, item 7). Once it passes, this entry needs an ADR for the tsconfig and Vite settings, since the roadmap counts them as the first fallback.
 
+## S2.3 Tray icon
+
+- **Milestone / gates:** M2a, the tray icon format per OS
+- **Time box:** ½ d
+- **Question:** which icon files keep the tray icon crisp at every scale, and does the macOS template icon work?
+- **Method:** not run yet. It runs on the minimal tray from roadmap M2a, item 9: Windows 11 at 100, 125, 150 and 200 %, and macOS 26 with a light and a dark menu bar.
+- **PASS if:** crisp at 100-200 % on Windows; the macOS template icon works
+- **FAIL then:** per-scale PNGs, or `with_inner_tray_icon` with an .ico
+- **Result:** pending. Nothing is recorded as passed.
+- **Numbers and evidence:** none yet.
+- **Decision:** none yet. The tray shipped before this spike, against the rule that a gating spike runs first, so the spike could run on a working tray. Its icons are placeholders, picked by one `include_bytes!` constant in `tray.rs`: `icons/tray/template.png` on macOS and `icons/tray/color-32.png` elsewhere. Final art is roadmap M2b, item 3.
+
 ## S2.6 WebdriverIO
 
 - **Milestone / gates:** M2a, whether the end-to-end tests gate CI on all three OSes
@@ -79,5 +91,5 @@ Copy this for each spike and fill it in.
   | ubuntu-24.04 (strace guard) | pass | 53 s | 15 s | 6 min 0 s |
   | macos-26 | pass | 2 min 1 s | 18 s | 5 min 55 s |
 
-  That run tested the suite as first submitted, before the PR #7 review fixes: the smoke spec's route reset, the stronger egress canary, the first-launch `--tool` spec, and the strace guard's signal handling and per-address check. It is one run per OS, not ten.
+  That run tested the suite as first submitted, before the PR #7 review fixes: the smoke spec's route reset, the stronger egress canary, the first-launch `--tool` spec, and the strace guard's signal handling and per-address check. It also still loaded WebdriverIO's front-end bridge (`VITE_NAVAJA_E2E=1`) and used the wider e2e overlay (`withGlobalTauri`, `core:default`), without the later harness changes (the window pin in `before()`, the msedgedriver patch, the env-gated WebDriver server). The Method above describes the setup from the next recorded run on. It is one run per OS, not ten.
 - **Decision:** none yet. S2.6 stays open until 10 runs per OS are recorded here.

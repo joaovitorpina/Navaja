@@ -66,7 +66,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
    - accessibility basics.
    - **Still to do:** ESLint (flat config) with the custom-view import allowlist from architecture §4, scoped to `tools/*/ui/**`, and `pnpm lint` in the CI checks job. `$lib/view-kit` exists and is the one app module the allowlist lets custom views import. This must land before the first custom view (the M4 port inspector).
 8. **Window code:** `window.rs`, `guard.rs`, and `args.rs` with single instance and the elevation banner.
-9. **S2.3**, then a minimal tray (Open, Search, `meta.tray` entries, Quit) and the StatusNotifier host check in `platform/linux.rs`.
+9. **Tray:** a minimal tray with placeholder icons (Open, Search, `meta.tray` entries, Quit). **S2.3** runs on it before M2a exit. The StatusNotifier host check moved to M2b, item 1, beside S2.4.
 10. **End-to-end tests:** smoke (palette → UUID), single instance, a first launch with `--tool`, and the egress canary. A Linux strace guard is added, then **S2.6** and **S2.7**.
 11. **`docs/adding-a-tool.md`.**
 
@@ -76,7 +76,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 - UUID comes from `list_tools()`, and searching "uid" ranks it first.
 - 10,000 v7 UUIDs are unique and sorted.
 - Copy stays out of Windows clipboard history.
-- `--tool uuid` focuses the running instance.
+- `--tool uuid` focuses the running instance. On Wayland, raising a window that is visible but unfocused is M2b, item 8.
 - The tray works on Windows, macOS, Ubuntu GNOME with the AppIndicator extension, and KDE.
 - A panicking tool returns `core.panicked` and the app keeps serving.
 - The egress canary and strace guard are green.
@@ -86,23 +86,33 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 
 ### M2b · Lifecycle, footprint, bundles (≈2.5 wk)
 
-1. **S2.4**, then close behaviour per OS through `ShellPlatform`.
+1. **S2.4** and the StatusNotifier host check in `platform/linux.rs`, then close behaviour per OS through `ShellPlatform`.
 2. **`xtask measure`**, then **S2.5**. Implement the winning hide policy, delete the other path, and record the numbers in ADR 0002.
 3. **Final brand SVGs** and `xtask icons`, which wraps `tauri icon` and also produces the macOS template tray icon.
 4. **`bundle.yml`:** a weekly, keyless build of the exact release matrix.
 5. **Stretch, the first thing to cut:** the global-shortcut recorder and `docs/wayland-shortcut.md`.
 6. **`CONTRIBUTING.md`** with the QA checklist.
 7. **macOS clipboard:** keep copies off Universal Clipboard. On macOS, `copy_text` writes through `NSPasteboard` (objc2-app-kit) instead of arboard: `prepareForNewContentsWithOptions(CurrentHostOnly)`, then the text and the ConcealedType marker. arboard's own `set` clears the pasteboard, which would drop that option.
+8. **Wayland focus on a second launch.** The single-instance plugin forwards only argv and the working directory over D-Bus, so the launcher's `XDG_ACTIVATION_TOKEN` or `DESKTOP_STARTUP_ID` is lost. GNOME and KDE then refuse to raise a window that is visible but unfocused.
+   - A second launch on Linux checks whether a running Navaja owns the plugin's D-Bus name. If one does, it makes the plugin's `ExecuteCallback` call itself, with the token as an extra argument, and exits with code 0. The plugin stays for the primary.
+   - `args::parse` accepts the token only if it is printable ASCII and within a length cap.
+   - The primary shows the window, then calls `set_startup_id` with the token on the main thread, instead of `set_focus`, which would mint a token the compositor refuses.
+   - **Known limitation:** tray-menu actions cannot take focus on Wayland. The shell draws the menu (libappindicator), so the app never gets a token for the click.
+9. **Single instance on macOS.** tauri-plugin-single-instance 2.5.2 hands off through a fixed `/tmp/<id>_si.sock` that every user shares, with no peer check. Another local user can squat it, and a second user on the same Mac loses single instance.
+   - Fix it through a patched plugin (`[patch.crates-io]`): put the socket in the per-user temp dir (`_CS_DARWIN_USER_TEMP_DIR`), check the peer with `getpeereid` on connect and accept, and cap the read at a few KiB.
+   - Report the issue upstream.
 
 **Exit:**
 - Close behaves correctly per OS, and every quit path works while the window is hidden.
+- On GNOME and KDE Wayland, `--show`, `--toggle` and `--tool` raise and focus a window that is visible but unfocused.
+- On macOS, a second user's Navaja keeps its own single instance, and a socket owned by another user is refused.
 - On macOS, a copy does not appear on a Handoff-paired device.
 - ADR 0002 has numbers per OS.
 - `bundle.yml` is green for every format.
 - Screen readers pass: NVDA, VoiceOver and Orca.
 - 100-200 % scaling, light and dark themes, and the brand review all pass.
 
-**Cut first:** the global shortcut; window-state.
+**Cut first:** the global shortcut; window-state; the macOS single-instance fix, which then moves to M6 and still lands before v1.
 
 ### M3 · Text tools (≈3 wk)
 
@@ -194,7 +204,10 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
    - `docs/release.md`.
 4. **Provenance:** attestations and a minisign-signed `SHA256SUMS`.
 5. **Package-manager repos:** `xtask manifests`, the tap and bucket repos, and `xtask notices` (THIRD_PARTY_NOTICES).
-6. **S6.2**, then `install.md` and `privacy.md`. install.md covers SmartScreen "More info → Run anyway", Smart App Control, Gatekeeper "Open Anyway", the Linux tray host and the NVIDIA variables.
+6. **S6.2**, then `install.md` and `privacy.md`.
+   - install.md covers SmartScreen "More info → Run anyway", Smart App Control, Gatekeeper "Open Anyway", the Linux tray host and the NVIDIA variables.
+   - privacy.md lists the OS services in a macOS text field's context menu: Look Up, Translate, Search With Google, Share and Services. They send the selected text only when the user picks one.
+   - Optional, later: on macOS, replace that menu with a native one built from `PredefinedMenuItem` cut, copy, paste and select all.
 7. **Final QA:**
    - `measure`;
    - S2.7 again, now with the updater;
@@ -306,6 +319,7 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 
 **Manual QA**, at each milestone end, on Windows 11, Ubuntu GNOME Wayland with AppIndicator, Ubuntu X11, Fedora GNOME (no tray), KDE Plasma 6 Wayland and macOS 26:
 - **Shell:** starts hidden; tray menu; close and quit paths; `--toggle` and `--tool`; keyboard-only use.
+- **Wayland focus, from M2b** (GNOME and KDE): `--show`, `--toggle` and `--tool` raise and focus a window that is visible but unfocused. Tray-menu actions may leave it unfocused; that is a known limitation (M2b, item 8).
 - **M2b and M6:** screen readers (NVDA, Narrator, Orca, VoiceOver); 100-200 % scaling; light and dark themes; on macOS, a copy does not reach a Handoff-paired device.
 - **Ports, from M4:** an elevated listener gets a reason and a guarded command; nodemon kill; pm2 respawn.
 - **Docker Desktop, from M5.**
@@ -323,7 +337,7 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 | Unsigned releases: SmartScreen, Smart App Control, Gatekeeper, Defender false positives | install.md walkthroughs; attestations and a signed `SHA256SUMS`; Defender submission per release; SignPath application right after v1 |
 | Undocumented OS interfaces change: `pcblist_n`, the PEB layout, netsh text, http.sys | One module each, classified fallbacks ("likely", `NotSupported`), and locale and version fixtures |
 | Tauri drift and v3 | Exact CLI pin plus a version-parity check; grouped Renovate PRs merged only after end-to-end tests on all three OSes; v3 after v1 |
-| Linux desktop variance: no tray on vanilla GNOME, Wayland focus, WebKitGTK and NVIDIA | S2.4 decides the close behaviour; NVIDIA variables documented; S6.1 checks the AppImage sandbox |
+| Linux desktop variance: no tray on vanilla GNOME, Wayland focus, WebKitGTK and NVIDIA | S2.4 decides the close behaviour; second launches forward the activation token (M2b); NVIDIA variables documented; S6.1 checks the AppImage sandbox |
 | winget rejects the custom `/CHANNEL=winget` switch | Without the marker, the install falls back to Direct and shows the in-app update. This is documented as a known deviation |
 | Solo maintainer, about 21 weeks | Budgets and cut lists per milestone; gating spikes first; the global shortcut is the first cut |
 

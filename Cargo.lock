@@ -2332,6 +2332,7 @@ version = "0.0.0"
 dependencies = [
  "arboard",
  "dirs",
+ "libloading",
  "navaja-core",
  "navaja-tools",
  "rustix",

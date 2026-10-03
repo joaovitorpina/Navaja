@@ -7,10 +7,11 @@
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
 
+use std::fmt;
 use std::sync::Arc;
 
 use navaja_core::Registry;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 
 mod args;
 mod clipboard;
@@ -36,24 +37,45 @@ pub mod testing {
     pub use crate::state::AppState;
 }
 
+/// Why the app did not start. std prints an error returned from `main` with
+/// `Debug`, so `Debug` prints the plain message rather than a quoted string.
+pub struct StartError(String);
+
+impl<E: std::error::Error> From<E> for StartError {
+    fn from(error: E) -> Self {
+        Self(error.to_string())
+    }
+}
+
+impl fmt::Display for StartError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl fmt::Debug for StartError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 /// Builds and runs the app until the last window closes or the user quits,
 /// then releases what it holds and returns the exit code for `main`.
-pub fn run() -> Result<i32, Box<dyn std::error::Error>> {
-    let args = args::parse(std::env::args());
-    // A GUI run as root breaks on Wayland and leaves root-owned files in the
-    // user's config. Navaja never needs it.
-    #[cfg(target_os = "linux")]
-    if platform::is_elevated() && !args.allow_root {
-        return Err("Navaja does not need root and will not run as root.                     Start it as your own user, or pass --allow-root."
-            .into());
+pub fn run() -> Result<i32, StartError> {
+    let app_dir = paths::app_dir();
+    // First: no panic may reach the default hook, which prints the payload.
+    crash::install(app_dir.clone());
+
+    let args = args::parse(std::env::args_os());
+    // Root on any Unix. An elevated Windows start only gets the banner.
+    let is_root = cfg!(unix) && platform::is_elevated();
+    if let Some(refusal) = args::root_refusal(&args, is_root) {
+        return Err(StartError(refusal.to_owned()));
     }
 
-    let app_dir = paths::app_dir();
     if let Some(dir) = &app_dir {
         let _ = paths::ensure_private_dir(dir);
     }
-    // First: no panic may reach the default hook, which prints the payload.
-    crash::install(app_dir.clone());
     let logs = logging::init(app_dir.as_deref());
 
     // Tool metadata is validated by registry_test in CI; a failure here is a
@@ -113,26 +135,34 @@ pub fn run() -> Result<i32, Box<dyn std::error::Error>> {
             commands::settings_get,
             commands::settings_set,
         ])
-        .setup(move |app| {
-            // Only the primary instance gets here; a second launch has
-            // already handed over its arguments and exited.
-            tracing::info!(
-                version = env!("CARGO_PKG_VERSION"),
-                tools = app.state::<Arc<state::AppState>>().registry.len(),
-                "starting"
-            );
-            let window = window::create_main(app.handle(), initial_tool.as_deref())
-                .inspect_err(|error| tracing::error!(%error, "creating the main window failed"))?;
-            // A new window already follows the OS theme.
-            let theme = app.state::<Arc<state::AppState>>().settings.get().theme;
-            if theme != settings::Theme::System {
-                commands::apply_theme(&window, theme);
+        .setup({
+            let state = Arc::clone(&state);
+            move |app| {
+                // Only the primary instance gets here; a second launch has
+                // already handed over its arguments and exited.
+                tracing::info!(
+                    version = env!("CARGO_PKG_VERSION"),
+                    tools = state.registry.len(),
+                    "starting"
+                );
+                let window = window::create_main(app.handle(), &state, initial_tool.as_deref())
+                    .inspect_err(
+                        |error| tracing::error!(%error, "creating the main window failed"),
+                    )?;
+                // A new window already follows the OS theme.
+                let theme = state.settings.get().theme;
+                if theme != settings::Theme::System {
+                    commands::apply_theme(&window, theme);
+                }
+                // Some Linux desktops have no tray host or no appindicator
+                // library; the app works without a tray.
+                if !platform::tray_available() {
+                    tracing::warn!("no tray icon: no appindicator library");
+                } else if let Err(error) = tray::create(app.handle(), &state, &tray_tools) {
+                    tracing::warn!(%error, "no tray icon");
+                }
+                Ok(())
             }
-            // Some Linux desktops have no tray host; the app works without it.
-            if let Err(error) = tray::create(app.handle(), &tray_tools) {
-                tracing::warn!(%error, "no tray icon");
-            }
-            Ok(())
         })
         .build(tauri::generate_context!())
         .inspect_err(|error| tracing::error!(%error, "starting the app failed"))?;
@@ -163,22 +193,32 @@ fn e2e_harness_launched() -> bool {
 }
 
 /// A second `navaja` launch: show (or toggle) the running window and open
-/// the requested tool. Arguments never run a tool action.
+/// the requested tool. Arguments never run a tool action. Before the front
+/// end is ready, the request waits for it (see `window::ready`).
 fn on_second_launch<R: Runtime>(app: &AppHandle<R>, state: &state::AppState, argv: Vec<String>) {
     let args = args::parse(argv);
-    let Some(main) = window::main_window(app) else {
-        return;
+    let request = window::Request {
+        tool: args.tool.filter(|id| state.registry.meta(id).is_some()),
+        palette: false,
     };
-    let shown = if args.toggle {
-        window::toggle(&main)
+    let result = if args.toggle {
+        window::toggle(app, &state.window, &request)
     } else {
-        window::reveal(&main)
+        window::open(app, &state.window, &request)
     };
-    let opened = match args.tool.filter(|id| state.registry.meta(id).is_some()) {
-        Some(id) => window::open_tool(&main, &id),
-        None => Ok(()),
-    };
-    if let Err(error) = shown.and(opened) {
+    if let Err(error) = result {
         tracing::warn!(%error, "could not handle a second launch");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_errors_print_as_plain_text() {
+        let error = StartError::from(std::io::Error::other("no \"quotes\" added"));
+        assert_eq!(format!("{error:?}"), r#"no "quotes" added"#);
+        assert_eq!(error.to_string(), r#"no "quotes" added"#);
     }
 }
