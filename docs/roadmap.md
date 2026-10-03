@@ -52,19 +52,19 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 2. **CI** per §2 below, then branch protection, a PR-title check (conventional commits) and Renovate.
 3. **`navaja-core`** (architecture §3) with unit tests for panics, unknown tools and actions, error codes, input never echoed, cancellation and output shapes.
 4. **`tools/`:** `registry_test.rs` and `tools/uuid/`, then **S2.1**.
-5. **xtask:** `check`, `bindings` and `tool-gate`, with tests proving that tokio, hyper or tauri under navaja-tools fails the check.
+5. **xtask:** `check`, `bindings` and `tool-gate`, with tests proving that tokio, hyper or tauri under navaja-tools fails the check. `acl` writes the ACL snapshot (`acl.lock.json`), which `check` compares.
 6. **App crate:**
    - `run_tool` and the other commands from architecture §5, except updates;
+   - `open_logs`, `quit` and `open_url`, which About (the repository), Settings (the logs folder) and the start-failure view use;
    - settings, logging and crash files;
    - `platform/` and `copy_text`.
-   - **Still to do, in a follow-up PR:** `open_logs`, `quit` and `open_url`, declared in `build.rs` and granted in `capabilities/main.json`. About then links the repository through `open_url` instead of showing it as text.
 7. **S2.2**, then the front end:
    - ipc, registry, router, i18n and view-kit;
    - the shell;
    - the generic views with Generator and Text outputs;
    - theme;
-   - accessibility basics.
-   - **Still to do:** ESLint (flat config) with the custom-view import allowlist from architecture §4, scoped to `tools/*/ui/**`, and `pnpm lint` in the CI checks job. `$lib/view-kit` exists and is the one app module the allowlist lets custom views import. This must land before the first custom view (the M4 port inspector).
+   - accessibility basics;
+   - ESLint (flat config) and Prettier as `pnpm lint`, run in the CI checks job, with the custom-view import allowlist from architecture §4 on `tools/*/ui/**`. `$lib/view-kit` is the one app module it lets custom views import.
 8. **Window code:** `window.rs`, `guard.rs`, and `args.rs` with single instance and the elevation banner.
 9. **Tray:** a minimal tray with placeholder icons (Open, Search, `meta.tray` entries, Quit). **S2.3** runs on it before M2a exit. The StatusNotifier host check moved to M2b, item 1, beside S2.4.
 10. **End-to-end tests:** smoke (palette → UUID), single instance, a first launch with `--tool`, and the egress canary. A Linux strace guard is added, then **S2.6** and **S2.7**.
@@ -277,6 +277,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 ```sh
 pnpm install --frozen-lockfile
 cargo xtask check                    # crate edges, dependency closures, release config, ACL snapshot, version parity
+cargo xtask acl                      # after a command or capability change: rewrite acl.lock.json, then review its diff
 cargo xtask bindings --check         # ts-rs output == committed bindings
 cargo xtask tool-gate origin/main    # tool PR touches only what architecture §4 allows
 cargo clippy --workspace --all-targets -- -D warnings
@@ -308,7 +309,7 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 
 | Workflow | Runs |
 |---|---|
-| `ci.yml` checks (ubuntu-24.04) | fmt, ESLint (not yet: M2a, item 7), svelte-check, cargo-deny on 4 targets, `xtask check`, `bindings --check`, `tool-gate`, the JS licence allowlist (`xtask licenses`), gitleaks over fixtures and snapshots (`scripts/check-fixture-secrets.sh`) |
+| `ci.yml` checks (ubuntu-24.04) | fmt, ESLint and Prettier (`pnpm lint`), svelte-check, cargo-deny on 4 targets, `xtask check`, `bindings --check`, `tool-gate`, the JS licence allowlist (`xtask licenses`), gitleaks over fixtures and snapshots (`scripts/check-fixture-secrets.sh`) |
 | `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --no-bundle` → the same build with `--features e2e` and `e2e.conf.json` → WebdriverIO. Linux runs the suite under the strace guard, inside `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The job stops after 45 min, so a hung run fails instead of holding the runner for GitHub's 6 h. macOS also checks the Intel slice of the universal build: `cargo check --workspace --all-targets --target x86_64-apple-darwin` |
 | `advisories.yml` | Daily `cargo deny check advisories`. Opens an issue but never blocks a PR |
 | `bundle.yml` | Weekly, keyless build of the release matrix: NSIS and zip, universal DMG, deb, rpm and AppImage in `container: ubuntu:22.04` |
@@ -325,15 +326,15 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 **Offline and privacy checks:**
 - **On every PR:**
   - an egress canary: fetch, image, beacon, WebSocket, `window.open`, top-level navigation, and WebRTC in the page and in the iframes it creates, all blocked. Fetch, image, beacon and WebSocket must each raise their own CSP violation, since a request that fails for some other reason proves nothing;
-  - a Linux strace guard: a `connect`, `sendto`, `sendmsg` or `sendmmsg` to any address other than 127.0.0.1 or ::1 fails the run (the 127.0.0.53 DNS stub included). So does an inet call whose address can't be read, or an app process still running after the suite;
+  - a Linux strace guard: a `connect`, `sendto`, `sendmsg` or `sendmmsg` to any address other than 127.0.0.1 or ::1 fails the run (the 127.0.0.53 DNS stub included). So does an inet call whose address can't be read, or an app process still running after the suite. The suite never opens a URL or the logs folder: strace would follow the browser or file manager that starts (architecture §5, "Hand-offs to other programs");
   - a canary input at `NAVAJA_LOG=trace`, plus a panicking tool, must not appear in logs, crash files or stderr. The integration test `app/src-tauri/tests/privacy.rs`, run by nextest, checks logs and crash files at trace level; it does not capture stderr yet.
 - **In M2a and M6:**
-  - a whole-process-tree NIC capture on each OS (S2.7);
+  - a whole-process-tree NIC capture on each OS (S2.7), without opening the repository link or the logs folder, whose browser or file manager may count as part of the tree;
   - the webview data folder holds no input text;
   - copied tokens are absent from clipboard history and Klipper.
 
 **Manual QA**, at each milestone end, on Windows 11, Ubuntu GNOME Wayland with AppIndicator, Ubuntu X11, Fedora GNOME (no tray), KDE Plasma 6 Wayland and macOS 26:
-- **Shell:** starts hidden; tray menu; close and quit paths; `--toggle` and `--tool`; keyboard-only use.
+- **Shell:** starts hidden; tray menu; close and quit paths; `--toggle` and `--tool`; keyboard-only use; About's repository link opens the browser and Settings' "Open logs folder" opens the file manager (no automated test opens them).
 - **Wayland focus, from M2b** (GNOME and KDE): `--show`, `--toggle` and `--tool` raise and focus a window that is visible but unfocused. Tray-menu actions may leave it unfocused; that is a known limitation (M2b, item 8).
 - **M2b and M6:** screen readers (NVDA, Narrator, Orca, VoiceOver); 100-200 % scaling; light and dark themes; on macOS, a copy does not reach a Handoff-paired device.
 - **Ports, from M4:** an elevated listener gets a reason and a guarded command; nodemon kill; pm2 respawn.

@@ -25,7 +25,9 @@
 
   const route = $derived(router.route);
   const tool = $derived(
-    route.kind === 'tool' ? catalog.tools.find((candidate) => candidate.id === route.id) : undefined,
+    route.kind === 'tool'
+      ? catalog.tools.find((candidate) => candidate.id === route.id)
+      : undefined,
   );
 
   // Native copies of tool output go through Rust (see lib/copy.ts).

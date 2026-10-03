@@ -20,6 +20,7 @@ Navaja/
 ├── Cargo.toml            virtual workspace: crates/*, tools, app/src-tauri, xtask · [workspace.lints]
 ├── rust-toolchain.toml · clippy.toml · deny.toml · js-licenses.toml · release-plz.toml · renovate.json · .gitattributes (eol=lf)
 ├── package.json · pnpm-workspace.yaml   (pnpm 11 pinned via packageManager; workspace root lets Vite serve ../tools)
+├── eslint.config.mjs · prettier.config.mjs · .prettierignore   (load app/'s configs from the root, so they also cover tools/*/ui)
 ├── .github/workflows/    ci · advisories · bundle · spikes · release · release-build
 ├── crates/
 │   ├── navaja-core/      Tool, ToolMeta, UiSpec, payload types, ToolError, Ctx, Registry, search::rank, sys::spawn_system
@@ -32,17 +33,18 @@ Navaja/
 │   └── ports/            mod.rs · icon.svg · ui/View.svelte (+PortTable, WhyPanel, KillDialog) · ui/i18n/en.ts
 ├── app/                  the only pnpm package (Vite root + Tauri project)
 │   ├── src/bindings/     ts-rs output; never hand-edited; CI drift check
-│   ├── src/lib/          ipc · router · i18n · theme · copy · CopyButton · ToolIcon · view-kit/ (the only API custom views may import) · components/ui/ (shadcn copies)
-│   ├── src/shell/        Shell · Sidebar · CommandPalette · ToolHost · Home · SettingsView · AboutView · dialogs
+│   ├── src/lib/          ipc · links · router · i18n · theme · copy · CopyButton · ToolIcon · view-kit/ (the only API custom views may import) · components/ui/ (shadcn copies)
+│   ├── src/shell/        Shell · Sidebar · CommandPalette · ToolHost · Home · SettingsView · AboutView · OpenLogsButton · dialogs
 │   ├── src/generic/      GeneratorView · TransformView · OptionControl · OutputView (one renderer per OutputKind)
 │   ├── src/editor/       CodeMirror 6 {@attach} + size thresholds
 │   ├── e2e/              wdio.conf.ts · strace-guard.sh (Linux) · support/ · specs/{launch,smoke,single-instance,egress,json,ports}.e2e.ts
+│   ├── eslint/           config.js (ESLint) · view-imports.js (the custom-view import allowlist, §4) · their tests
 │   └── src-tauri/        crate navaja · features: default [docker], updater (M6), e2e
 │       ├── tauri.conf.json · tauri.release.conf.json (updater artifacts + pubkey) · e2e.conf.json
 │       ├── capabilities/main.json · acl.lock.json · nsis/hooks.nsh
-│       ├── src/          commands · state · paths · window · guard · tray · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{mod,unix,linux,macos,windows}.rs
+│       ├── src/          commands · state · paths · window · guard · tray · opener · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{mod,unix,linux,macos,windows}.rs
 │       └── tests/        privacy.rs (canary input kept out of logs and crash files)
-├── xtask/                check · tool-gate · bindings · licenses · icons · notices · capture-ports · measure · verify-release · manifests
+├── xtask/                check · acl · tool-gate · bindings · licenses · icons · notices · capture-ports · measure · verify-release · manifests
 ├── assets/brand/         navaja.svg · tray-template.svg · tray-color.svg · GUIDELINES.md
 ├── packaging/            winget / scoop / homebrew templates · dryrun.json (scratch repo only)
 ├── scripts/              check-eol.sh · check-identifiers.sh · check-fixture-secrets.sh (CI)
@@ -65,7 +67,7 @@ navaja (app) ─► navaja-tools ─► navaja-ports ─► navaja-core
   - **Test builds only:** hyper also comes in through axum, the WebDriver server inside `tauri-plugin-wdio-webdriver`. That plugin is part of the app's test-only `e2e` feature (§5), never of a release build, and cargo-deny allows axum under it alone.
 - **Lints** ban printing, `exit`, `unsafe` outside FFI modules, socket and resolver calls, and `Command::new`.
   - **One exception:** the bind-only reserved-range probe in navaja-ports' Windows module (M5). It never calls `listen()` or `connect()`, and it is allowlisted in its FFI module.
-  - **Process start:** processes start only through `navaja_core::sys::spawn_system`, which takes an absolute OS program path, sets `CREATE_NO_WINDOW` and applies a timeout.
+  - **Process start:** processes start only through `navaja_core::sys::spawn_system`, which takes an absolute OS program path, sets `CREATE_NO_WINDOW` and applies a timeout. The one exception is tauri-plugin-opener, which hands a page to the browser or a folder to the file manager for `open_url` and `open_logs` (§5).
 
 ## 3. Core interfaces (`navaja-core`) and the registry
 
@@ -140,15 +142,23 @@ register_tools! {
 | **New capability, output kind or host service** | A separate, reviewed `host-change` PR | none |
 
 - **Strings:** text goes through `t(key, fallback)`. Keys derive from the tool id, action, option and error code, and Rust's English text is the fallback, so a text tool needs no `.ts` edit. A custom view adds its own `tools/<id>/ui/i18n/en.ts`.
-- **Custom views:** they import only `./`, `svelte`, `$lib/view-kit` and `$bindings/*`, enforced by an ESLint allowlist. The shell finds them with `import.meta.glob('@tools/*/ui/View.svelte')`.
-  - The ESLint allowlist is not in place yet; see roadmap M2a, item 7.
+- **Custom views** live in `tools/<id>/ui/`. The shell finds them with `import.meta.glob('@tools/*/ui/View.svelte')`.
+  - **Imports:** the ESLint rule `navaja/view-imports` (`app/eslint/view-imports.js`) applies to every script file under `tools/*/ui/`. A view may import only:
+    - relative paths that resolve inside its own `tools/<id>/ui/` folder, written without back slashes or percent escapes;
+    - `svelte` and its browser subpaths, such as `svelte/store`, `svelte/transition` and `svelte/elements`. Not `svelte/internal` or anything under it, and not `svelte/compiler` or `svelte/server`;
+      - the rule lists these subpaths, and a test fails when a Svelte update adds one, so each new one gets a decision;
+    - `$lib/view-kit`, exactly;
+    - `$bindings/<name>` and `$bindings/<dir>/<name>`, with no `.` or `..` segments.
+  - **Tests:** a view's `*.test.ts` and `*.spec.ts` files may also import `vitest`, `@testing-library/svelte` and `@tauri-apps/api/mocks`, and nothing else.
+  - **Forms checked:** static, type-only and side-effect imports, `export … from`, `import()` and `require()`, TypeScript's `import x = require()` and `typeof import()`, and the first argument of `new URL(x, import.meta.url)`. Vite bundles that file as an asset or a worker and resolves a bare `x` through its aliases, so `x` must be allowed like an import, and an absolute URL is refused too. A computed specifier is an error, and `import.meta.glob` is not allowed.
+  - **No opt-out:** a view can't switch rules off with a comment (`noInlineConfig`, plus markup `<!-- eslint-disable -->`). `pnpm lint` runs ESLint from the repository root with `--config`, so a config file placed under `tools/` is never used. CI runs `pnpm lint` in the checks job.
   - **(S2.2)** If views outside `app/` turn out not to work, the fallback is `app/src/tools/<id>/`. That would be a brief deviation and needs sign-off.
 - **Tool preferences** never become shell `Settings` fields. `Settings.tools`, a TOML table per tool id, is reserved until a tool needs it.
 
 ## 5. App shell (crate `navaja`)
 
 **Commands.** Every command is declared in `AppManifest::commands` and granted individually.
-- **Threads:** commands that touch the OS or the disk (`run_tool`, `copy_text`, `settings_set`) run off the main thread. The rest are cheap (in memory, or a few window calls) and run inline on the main thread.
+- **Threads:** commands that touch the OS or the disk (`run_tool`, `copy_text`, `settings_set`, `open_logs`, `open_url`) run off the main thread. The rest are cheap (in memory, or a few window calls) and run inline on the main thread.
 - **Panics:** `Registry::run`'s `catch_unwind` contains a tool panic, and `copy_text` wraps its clipboard call in its own.
 
 | Command | Notes |
@@ -158,15 +168,30 @@ register_tools! {
 | `cancel_run`, `copy_text` | |
 | `settings_get`, `settings_set` | |
 | `app_info`, `shell_ready` | |
-| `open_logs`, `quit` | Not implemented yet (roadmap M2a, item 6) |
-| `open_url` | Only `https://github.com/joaovitorpina/Navaja/...`. Not implemented yet (roadmap M2a, item 6) |
+| `open_logs` | Shows `APP_DIR/logs` in the file manager, creating it (privately) if it is missing. An error if Navaja has no `APP_DIR` |
+| `quit` | The tray's Quit path, so the `RunEvent::Exit` clean-up runs. Logs whether the tray or the command asked |
+| `open_url(url)` | Only the repository's pages, checked exactly (below) and then handed to the browser unchanged |
 | `update_check`, `update_install` | Behind the `updater` feature (M6) |
+
+**`open_url`'s rule.** The URL must be at most 256 bytes and:
+- start with exactly `https://github.com/joaovitorpina/Navaja` (scheme, host, owner and repository are case-sensitive);
+- continue with any number of `/segment`, then optionally `#fragment`;
+- use only letters, digits, `.`, `_` and `-` in segments and the fragment, neither of which may be empty; a segment is never `.` or `..`.
+
+So there is no query, percent-encoding, userinfo, port, backslash, whitespace or control character. A refusal is logged without the URL, not even its scheme.
+
+**Hand-offs to other programs.** `open_url` and `open_logs` call tauri-plugin-opener's free functions. The plugin is never registered, so its own commands and its link-click script do not exist. Each hand-off runs on a short-lived thread, because opening a folder on Windows initialises COM on the calling thread.
+- **Windows:** a URL goes through `ShellExecuteExW`, so a browser it starts can be Navaja's child process. A folder goes through `SHOpenFolderAndSelectItems`, which Explorer opens in its own process.
+- **macOS:** `/usr/bin/open` runs briefly as Navaja's child and asks LaunchServices, so launchd, not Navaja, starts the browser or Finder.
+- **Linux:** `xdg-open` (or gio, gnome-open, kde-open) starts after a double fork and `setsid`. It leaves Navaja's process tree by parentage, but a tracer that follows forks, such as `strace -f`, still follows it and the browser.
+- So the offline checks (the strace guard, the S2.7 capture) must never click these links, and no end-to-end test opens a URL or the logs folder.
 
 **Input limits.** Rust checks what the webview sends:
 - `run_tool` refuses malformed tool and action ids, and logs only ids the registry knows (`<unknown>` otherwise). It caps `input` at 64 MiB of string data (object keys included) and 1,000,000 JSON nodes, and returns `core.invalid_input` above that, without echoing the input. Tauri has already parsed the IPC body by then, so the cap bounds tool work, not IPC memory.
 - Run ids are 1 to 64 ASCII letters, digits or `-`.
 - `search` reads at most 200 characters of the query.
 - `copy_text` refuses text over 64 MiB.
+- `open_url` refuses anything but the repository's pages (`open_url`'s rule above).
 
 Rust never runs a destructive action from argv.
 
@@ -178,7 +203,10 @@ Rust never runs a destructive action from argv.
   - `Permissions-Policy` denies the camera, microphone, geolocation, display capture, USB, serial, HID, Bluetooth, MIDI, payment, WebAuthn (`publickey-credentials-get`), the screen wake lock, and clipboard read and write through the async Clipboard API;
   - `X-Content-Type-Options: nosniff`.
 - **DNS prefetch:** `index.html` sets `x-dns-prefetch-control: off`, so the engine makes no speculative lookups for links.
-- **Capability:** it grants only the app's own commands, with no `core:default`, and the resolved ACL is snapshotted in `acl.lock.json`.
+- **No external links:** the page holds no external `href`. About's repository link is a button that asks `open_url`, so a middle-click, a prefetch or a navigation has nothing to follow.
+- **Capability:** it grants only the app's own commands, with no `core:default` and no plugin permission.
+  - **ACL snapshot:** `app/src-tauri/acl.lock.json` holds the resolved ACL of the release configuration: `tauri.conf.json`'s capabilities with the default features, not the e2e overlay. It lists every command the webview may call, with its windows, webviews, origins and scopes, plus denied commands and global scopes, for Linux, macOS and Windows.
+  - **Updating it:** `cargo xtask acl` resolves it with Tauri's own code (tauri-utils, pinned to tauri's version) from what the app's build script writes, and rewrites the file. `cargo xtask check` resolves it again and fails, naming each command that differs, until the new file is committed. So a new grant is reviewed as a diff.
 - **Plugins never used:** http, fs, shell, dialog, clipboard-manager and store.
 - **Window:** one Rust builder creates it with:
   - incognito mode;
@@ -204,7 +232,7 @@ Rust never runs a destructive action from argv.
 - Tauri core `tray-icon`;
 - `single-instance`, registered first. Known issue: on macOS it hands off through a world-shared socket in `/tmp` with no peer check; the fix is roadmap M2b, item 9;
 - `window-state`;
-- `opener`;
+- `opener`, from Rust only and never registered (see "Hand-offs to other programs" above);
 - `updater` (M6);
 - `global-shortcut` (a stretch goal).
 
@@ -256,6 +284,7 @@ Rust never runs a destructive action from argv.
   **(S3.1)** tunes these thresholds.
 - **Components:** Bits UI 2 with shadcn-svelte copies, Tailwind v4 tokens and system fonts.
 - **Accessibility:** landmarks, F6 to cycle panes, Esc, a live region, and real tables with `aria-sort`.
+- **Lint:** `pnpm lint` runs ESLint (the recommended JavaScript, TypeScript and Svelte rules, plus the custom-view allowlist from §4) and Prettier over `app/` and `tools/*/ui/`. `pnpm format` applies Prettier.
 - **Tests:** Vitest with `mockIPC` and axe, and WebdriverIO end-to-end tests on all three OSes **(S2.6)**.
   - The end-to-end tests drive the real debug app through its embedded WebDriver server (§5). On Linux they run under the strace network guard (roadmap §2).
   - axe is not wired in yet. It joins Vitest in M3 (roadmap M3, item 3).
@@ -387,7 +416,7 @@ Installs from a package manager show that manager's upgrade command instead of i
 
 - **Settings:** a typed TOML file in `APP_DIR`. Writes are atomic, and a corrupt file is set aside. Unix permissions are 0700 for the directory and 0600 for files.
 - **`NAVAJA_APP_DIR`:** replaces `APP_DIR` in debug builds only, so tests use a throwaway directory; the end-to-end harness always sets it to a fresh temporary one (§5). Release builds ignore it.
-- **Logs:** written with tracing to `APP_DIR/logs`, rotated daily, 7 kept. They record only the tool id, action, duration and error code, never payloads.
+- **Logs:** written with tracing to `APP_DIR/logs`, rotated daily, 7 kept. They record only the tool id, action, duration and error code, never payloads. Settings and the start-failure view open the folder through `open_logs`.
 - **Crash files:** `APP_DIR/crash`, 10 kept, local only. They never contain the panic payload.
 - **Panic hook:** the app replaces the panic hook first thing in `navaja_lib::run`, once it knows `APP_DIR`. The hook records the location, the thread and a backtrace (symbols and source paths only), and it never reads the payload. It also never chains to the default hook, which would print the payload to stderr (journald on Linux).
 

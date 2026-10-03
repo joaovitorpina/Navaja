@@ -70,7 +70,8 @@ jobs:
       - name: cargo-deny (bans, licenses, sources)
         run: cargo deny --all-features check bans licenses sources
 
-      # `xtask bindings` builds the app crate (its IPC types), which links Tauri.
+      # `xtask check` (the ACL snapshot) and `xtask bindings` build the app crate,
+      # which links Tauri.
       - name: Linux system packages for Tauri
         run: |
           sudo apt-get update
@@ -83,7 +84,7 @@ jobs:
           shared-key: checks
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: xtask check (crate edges, dependency closures, Tauri parity and config)
+      - name: xtask check (crate edges, dependency closures, Tauri parity and config, ACL snapshot)
         run: cargo xtask check
 
       - name: TypeScript bindings are up to date
@@ -111,6 +112,9 @@ jobs:
 
       - name: svelte-check and tsc
         run: pnpm check
+
+      - name: ESLint (with the custom-view import allowlist) and Prettier
+        run: pnpm lint
 
   web:
     name: web

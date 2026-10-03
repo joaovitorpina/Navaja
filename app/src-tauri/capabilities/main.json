@@ -12,6 +12,9 @@
     "allow-cancel-run",
     "allow-copy-text",
     "allow-settings-get",
-    "allow-settings-set"
+    "allow-settings-set",
+    "allow-open-logs",
+    "allow-open-url",
+    "allow-quit"
   ]
 }

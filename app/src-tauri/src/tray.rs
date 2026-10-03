@@ -72,7 +72,7 @@ fn on_menu_event<R: Runtime>(app: &AppHandle<R>, state: &AppState, event: &MenuE
     let id = event.id().as_ref();
     let request = match id {
         QUIT => {
-            app.exit(0);
+            crate::quit(app, crate::QuitFrom::Tray);
             return;
         }
         OPEN => Request::default(),

@@ -38,7 +38,12 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.test.ts', '../tools/*/ui/**/*.test.ts'],
+    include: [
+      'src/**/*.test.ts',
+      // A view's tests: the names the import allowlist treats as tests.
+      '../tools/*/ui/**/*.{test,spec}.ts',
+      'eslint/**/*.test.ts',
+    ],
     setupFiles: ['src/test-setup.ts'],
   },
 });
