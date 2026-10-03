@@ -15,6 +15,13 @@
 # compiled with the same target as the build script and executables next to
 # them, and reading them all would take long.
 #
+# Cargo reuses a cached crate as it is unless something it tracks for that
+# crate changed, and it tracks MACOSX_DEPLOYMENT_TARGET only for crates that
+# read it, such as those that compile C. So a target directory from before
+# the setting keeps old proc macros and build scripts; CI keys its macOS
+# cache on the setting for that reason. Rust's standard library comes
+# prebuilt from rustup, outside target/, and is not checked.
+#
 # Fails if any file declares another version, or if no Mach-O file was found:
 # a path that holds nothing proves nothing.
 set -euo pipefail

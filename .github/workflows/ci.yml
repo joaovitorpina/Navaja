@@ -183,6 +183,12 @@ jobs:
         with:
           shared-key: ${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # macOS: a cache from before the macOS 14 deployment target holds
+          # dependencies that cargo keeps reusing as they are, since it
+          # rebuilds a crate for a new MACOSX_DEPLOYMENT_TARGET only if the
+          # crate reads it (run 37160662985: 359 cached proc macros and build
+          # scripts still targeted 11.0). A key of its own rebuilds them once.
+          key: ${{ runner.os == 'macOS' && 'macos14' || '' }}
 
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
