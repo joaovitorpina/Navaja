@@ -93,7 +93,7 @@ pub struct ToolMeta {
 pub enum UiSpec { Transform(TransformSpec), Generator(GeneratorSpec), Custom { view: String }, #[serde(other)] Unsupported }
 pub enum OutputKind { Text, Code { lang: String }, KeyValue, Diagnostics, Binary, #[serde(other)] Unsupported }
 pub struct ToolError { pub code: ErrorCode, pub message: String, pub details: Option<Value> }
-// codes: core.{unknown_tool, unknown_action, invalid_input, cancelled, panicked} | <id>.<snake>; messages never echo input
+// codes: core.{unknown_tool, unknown_action, invalid_input, invalid_output, cancelled, panicked} | <id>.<snake>; messages never echo input
 pub struct Ctx<'a> { /* cancel flag, throttled progress callback, capability-gated services */ }
 ```
 
@@ -113,7 +113,7 @@ register_tools! {
 - **`Registry::new`** validates ids, spec references, categories and icons. It reports every problem of every tool, not just the first. The id `core` is reserved for host error codes.
   - A `Generator` action may not be `destructive`: the generator view runs on one click, with no confirmation step.
 - **`Registry::categories()`** returns the categories in use, as `CategoryInfo { id, label, order }`. The labels and positions come from the host's built-in table; unknown ids sort last, by id.
-- **`Registry::run`** wraps `invoke` in `catch_unwind` and returns `core.panicked` when a tool panics.
+- **`Registry::run`** answers an undeclared action with `core.unknown_action` without calling `invoke`, so a tool only ever sees its declared action ids. It wraps `invoke` in `catch_unwind` and returns `core.panicked` when a tool panics.
   - **Panic hook:** the panic payload is never returned. The app must also replace the default panic hook before anything else can panic (first thing in `navaja_lib::run`, see §8): the default hook prints the payload, which may contain input, to stderr.
   - **Debug checks:** with debug assertions (the default for `cargo test`), each output must round-trip exactly through its payload type. A tool may return only its own `<id>.*` codes plus `core.invalid_input`, `core.cancelled` and `core.panicked`.
   - **Panic strategy:** a `compile_error!` stops the build if anyone switches it to `abort`.
@@ -126,10 +126,10 @@ register_tools! {
 - each id equals its folder name;
 - `ui/View.svelte` and `ui/i18n/` exist exactly for `Custom { view: id }`;
 - error codes match `<id>.<snake>`;
-- every declared action, called with a pre-cancelled `Ctx` and a junk input, returns `core.invalid_input` or `core.cancelled` (tools parse with `typed()` and call `ctx.check()` before any side effect);
-- the generic views' inputs are accepted: defaults, every choice and both integer bounds;
+- every declared action, passed to `invoke` with a pre-cancelled `Ctx` and the junk input `{"__navaja_probe__": true}`, returns `core.invalid_input` or `core.cancelled` (tools parse with `typed()` and call `ctx.check()` before any side effect);
+- the generic views' inputs are accepted: defaults, every choice, both toggle values and both integer bounds;
 - every `ErrorCode::from_static` literal in a tool's folder is in the tool's namespace;
-- an undeclared action returns `core.unknown_action`.
+- `Registry::run` refuses an undeclared action with `core.unknown_action`.
 
 ## 4. Extensibility contract
 
@@ -138,9 +138,11 @@ register_tools! {
 | Change | May touch | Never touches |
 |---|---|---|
 | **Text tool** | `tools/<id>/**`, **one line** in `tools/lib.rs`, `tools/Cargo.toml`, `Cargo.lock` | Anything else, including any TypeScript |
-| **System tool** | The text-tool set, plus target-specific dependencies, an optional new `crates/navaja-<x>/`, generated `app/src/bindings/**`, and `tools/<id>/ui/**` (custom view and i18n) | `app/src/{shell,generic,lib}`, `app/src-tauri`, `navaja-core`, `xtask` |
+| **System tool** | The text-tool set, plus target-specific dependencies, an optional new `crates/navaja-<x>/`, generated `app/src/bindings/**` (once `xtask bindings` exports the tool's crate, a `host-change` PR), and `tools/<id>/ui/**` (custom view and i18n) | `app/src/{shell,generic,lib}`, `app/src-tauri`, `navaja-core`, `xtask` |
 | **New capability, output kind or host service** | A separate, reviewed `host-change` PR | none |
 
+- **Dependencies:** a tool PR never changes the root `Cargo.toml`; tool-gate rejects it. In `tools/Cargo.toml`, a crate already in the root `[workspace.dependencies]` takes `workspace = true`, and any other crate carries its version. Adding to the root table is a `host-change` PR.
+  - **A system tool's new crate:** `crates/navaja-<x>/` joins the workspace through `crates/*`. `tools/Cargo.toml` takes it as `navaja-<x> = { path = "../crates/navaja-<x>" }`, with no version (`deny.toml` sets `allow-wildcard-paths`). The crate's own `Cargo.toml` follows the same rule for its dependencies.
 - **Strings:** text goes through `t(key, fallback)`. Keys derive from the tool id, action, option and error code, and Rust's English text is the fallback, so a text tool needs no `.ts` edit. A custom view adds its own `tools/<id>/ui/i18n/en.ts`.
 - **Custom views** live in `tools/<id>/ui/`. The shell finds them with `import.meta.glob('@tools/*/ui/View.svelte')`.
   - **Imports:** the ESLint rule `navaja/view-imports` (`app/eslint/view-imports.js`) applies to every script file under `tools/*/ui/`. A view may import only:

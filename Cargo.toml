@@ -24,6 +24,10 @@ uuid = { version = "1.27.0", default-features = false, features = ["std", "v4", 
 tauri = "~2.12.1"
 tauri-build = "~2.7.1"
 
+# Tests only: tool PRs add it under tools/Cargo.toml [dev-dependencies]
+# (docs/adding-a-tool.md §4), since a tool PR can't change this file.
+proptest = "1.11.0"
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 
