@@ -258,7 +258,7 @@ These are enforced by lints, cargo-deny, `registry_test.rs` and review:
   - Never print, prompt, start an async runtime or open a connection.
   - Never take a file path; v1 text tools work on pasted text.
 - **Errors carry stable codes:** `<id>.<snake_case>`, or `core.invalid_input` (from `typed()`) and `core.cancelled` (from `ctx.check()`). Diagnostics use `<id>.*` codes.
-  - Write each code as an `ErrorCode::from_static("<id>.<name>")` literal, spelled exactly so, in a const like `WIDTH_OUT_OF_RANGE` above. `registry_test.rs` finds codes by searching your folder for that text; a code built any other way is checked only when a test returns it.
+  - Write each code as an `ErrorCode::from_static("<id>.<name>")` literal, spelled exactly so, in a const like `WIDTH_OUT_OF_RANGE` above. `registry_test.rs` finds codes by searching your folder for that text; a code built any other way is checked only when it comes back through the registry in a debug build (`run_single` in a test, or `pnpm dev`).
   - Build the error with `ToolError::new(CODE, message)`, adding `.with_details(json!({ … }))` for structured facts such as ranges and positions.
   - The message is an English fallback that **never repeats the input**: no "invalid token `eyJ…`".
 - **Parse input with `typed()`** on a `#[serde(deny_unknown_fields)]` struct. Never use maps keyed by user content.
