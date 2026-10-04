@@ -132,7 +132,8 @@ UPLINK_DNS_SNAP=512
 # snapshots never saw counts too. Starting after the app is not enough: the
 # VM starts the Safe Browsing service by itself, before a job and, in run
 # 37160662987, 8 s into the baseline, which never runs the app.
-TREE_PROCS='^(navaja|com\.apple\.WebKit.*)$'
+# pktap may cut com.apple.WebKit.Networking to 15 characters, com.apple.WebKi.
+TREE_PROCS='^(navaja|com\.apple\.WebKi.*)$'
 WEBKIT_DAEMONS='^(webprivacyd|com\.apple\.Safar.*|adattributiond|webpushd)$'
 # The same daemons as ps names them.
 DAEMON_COMMANDS='webprivacyd|SafeBrowsing\.Service|adattributiond|webpushd'
@@ -1132,14 +1133,15 @@ mac_addr_names() {
 # (pktap's eproc, else its proc) is the entry's service, and one of the
 # entry's hosts is the name its DNS packet asks for (a DNS answer is matched
 # to its question by port and ID) or a name the captures' DNS answers give
-# for its remote address, through CNAMEs too (mac_addr_names).
+# for its remote address, through CNAMEs too (mac_addr_names). A packet sent
+# by or for a process of the tree (TREE_PROCS) is never covered.
 mac_disclose() {
   local phase=$1
   mac_addr_names
   disclosed_entries macos "$phase" > "$OUT/$phase-disclosed-entries.tsv"
   : > "$OUT/$phase-disclosed.txt"
   : > "$OUT/$phase-undisclosed.txt"
-  awk -F '\t' -v entries="$OUT/$phase-disclosed-entries.tsv" -v names="$OUT/addr-names.tsv" \
+  TREE=$TREE_PROCS awk -F '\t' -v entries="$OUT/$phase-disclosed-entries.tsv" -v names="$OUT/addr-names.tsv" \
     -v covered="$OUT/$phase-disclosed.txt" -v rest="$OUT/$phase-undisclosed.txt" '
     function port(end, n, p) { n = split(end, p, "."); return p[n] }
     function host(end) { sub(/\.[^.]*$/, "", end); return end }
@@ -1188,6 +1190,13 @@ mac_disclose() {
       who = label
       if (who ~ / for /) sub(/.* for /, "", who)
       sub(/ \(.*/, "", who)
+      sender = label
+      sub(/ \(.*/, "", sender)
+      # The tree'"'"'s own packets are never disclosed, whatever an entry says.
+      if (sender ~ ENVIRON["TREE"] || who ~ ENVIRON["TREE"]) {
+        print $0 > rest
+        next
+      }
       if (port(remote) == "53") {
         key = f[1] " " port(local)
         name = (key in dns) ? dns[key] : asked[answer[key]]
