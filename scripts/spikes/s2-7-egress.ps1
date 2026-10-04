@@ -24,10 +24,11 @@
 # Two services seem to act for the tree without any log naming it: WAM's
 # account broker and its sign-in service ($WokenServices). Their connections
 # in the 15 s after a start of navaja.exe or of its WebView2 browser process
-# count as the app's; those an entry of s2-7-disclosed.tsv covers are reported as disclosed and fail nothing
-# (docs/adr/0003-webview-network.md). An entry covers a connection only
-# through the names its own process asked the DNS client for, before it, in
-# lookups that gave its address (Find-DisclosedEntry).
+# count as the app's; those an entry of s2-7-disclosed.tsv covers are
+# reported as disclosed and fail nothing (docs/adr/0003-webview-network.md).
+# An entry covers a connection only through the names its own process asked
+# the DNS client for, before it, in lookups that gave its address
+# (Find-DisclosedEntry).
 #
 # Other services may act for the tree too, so a baseline, 5 min without the
 # app, gives each process outside the tree an identity (its image, plus the
@@ -81,8 +82,8 @@ $StartupSeconds = 15
 # Format-Identity): WAM's Microsoft-account provider and the sign-in service,
 # which looked login.live.com up 1.2 to 2.3 s after WebView2's browser
 # process started, in every S2.7 run checked, though no log names them as
-# acting for it. Their connections in the $StartupSeconds after
-# those starts count as the app's.
+# acting for it. Their connections in the $StartupSeconds after those
+# starts count as the app's.
 $WokenServices = @('svchost.exe [wlidsvc]', 'backgroundtaskhost.exe [BackgroundTaskHost.WebAccountProvider]')
 # What the check reports as disclosed instead of failing on: traffic the app
 # sets off that nothing it controls can stop (docs/adr/0003-webview-network.md).
