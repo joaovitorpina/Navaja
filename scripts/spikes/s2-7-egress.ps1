@@ -397,7 +397,8 @@ function Get-Created($Security) {
 
 # The tree, from 4688: each process whose image is one of $Roots (and,
 # if $RootPids is given, whose PID is in it), and each process started by one
-# already in the tree, at any depth. Keyed by PID.
+# already in the tree, at any depth, and not before it: Windows reuses PIDs
+# (see Get-LiveTree). Keyed by PID.
 function Get-Tree($Created, [string[]]$Roots, [int64[]]$RootPids) {
   $tree = @{}
   foreach ($process in $Created) {
@@ -409,10 +410,10 @@ function Get-Tree($Created, [string[]]$Roots, [int64[]]$RootPids) {
   do {
     $added = 0
     foreach ($process in $Created) {
-      if (-not $tree.ContainsKey($process.ProcessId) -and $tree.ContainsKey($process.Parent)) {
-        $tree[$process.ProcessId] = $process
-        $added++
-      }
+      if ($tree.ContainsKey($process.ProcessId) -or -not $tree.ContainsKey($process.Parent)) { continue }
+      if ((ConvertTo-Time $process.Time) -lt (ConvertTo-Time $tree[$process.Parent].Time)) { continue }
+      $tree[$process.ProcessId] = $process
+      $added++
     }
   } while ($added -gt 0)
   return $tree
@@ -974,17 +975,27 @@ function Assert-WindowShown([int]$ProcessId, [string]$When) {
   if (-not $visible -or $minimized) { throw "the app's window is not shown ($When)" }
 }
 
-# The live processes under $Root, from WMI.
+# The live processes under $Root, from WMI. A process counts as a child only
+# if it started after its parent: Windows reuses PIDs and keeps a process's
+# parent PID after the parent exits. In run 37170350998 a WebView2 utility
+# process got PID 756, the PID of the smss.exe that had started csrss.exe and
+# wininit.exe at boot, so the tree took in every process on the machine, and
+# Wait-Gone killed them, the runner's own worker too.
 function Get-LiveTree([int64]$Root) {
-  $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine)
+  $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine, CreationDate)
+  $started = @{}
+  foreach ($process in $all) { $started[[int64]$process.ProcessId] = $process.CreationDate }
   $tree = @{ $Root = $true }
   do {
     $added = 0
     foreach ($process in $all) {
-      if (-not $tree.ContainsKey([int64]$process.ProcessId) -and $tree.ContainsKey([int64]$process.ParentProcessId)) {
-        $tree[[int64]$process.ProcessId] = $true
-        $added++
-      }
+      $id = [int64]$process.ProcessId
+      $parent = [int64]$process.ParentProcessId
+      if ($tree.ContainsKey($id) -or -not $tree.ContainsKey($parent)) { continue }
+      if ($null -eq $process.CreationDate) { continue }
+      if ($null -ne $started[$parent] -and $process.CreationDate -lt $started[$parent]) { continue }
+      $tree[$id] = $true
+      $added++
     }
   } while ($added -gt 0)
   return @($all | Where-Object { $tree.ContainsKey([int64]$_.ProcessId) })
@@ -1005,15 +1016,22 @@ function Save-Screenshot([string]$Path) {
   }
 }
 
-# Waits up to 30 s for the given processes to end.
+# Waits up to 30 s for the given processes to end, then kills those left
+# that run one of the tree's images ($TreeImages). Only those: a PID may have
+# been reused by another process by then.
 function Wait-Gone([int64[]]$ProcessIds) {
   for ($i = 0; $i -lt 60; $i++) {
     $left = @($ProcessIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
     if ($left.Count -eq 0) { return }
     Start-Sleep -Milliseconds 500
   }
-  Write-Host "::warning::S2.7 still running 30 s after the run, now killed: $($left -join ', ')"
-  $left | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+  $kill = @($left | Where-Object {
+      $process = Get-Process -Id $_ -ErrorAction SilentlyContinue
+      $null -ne $process -and $TreeImages -contains "$($process.ProcessName).exe".ToLowerInvariant()
+    })
+  $spared = @($left | Where-Object { $kill -notcontains $_ })
+  Write-Host "::warning::S2.7 still running 30 s after the run: $($left -join ', '). Killed, as the tree's images: $($kill -join ', '); left alone: $($spared -join ', ')"
+  $kill | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
 }
 
 # Whether the app's WebDriver server reports ready, as the harness asks it.
