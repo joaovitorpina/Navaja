@@ -23,8 +23,8 @@
 #
 # Two services seem to act for the tree without any log naming it: WAM's
 # account broker and its sign-in service ($WokenServices). Their connections
-# in the 15 s after a start of navaja.exe count as the app's; those an entry
-# of s2-7-disclosed.tsv covers are reported as disclosed and fail nothing
+# in the 15 s after a start of navaja.exe or of its WebView2 browser process
+# count as the app's; those an entry of s2-7-disclosed.tsv covers are reported as disclosed and fail nothing
 # (docs/adr/0003-webview-network.md). An entry covers a connection only
 # through the names its own process asked the DNS client for, before it, in
 # lookups that gave its address (Find-DisclosedEntry).
@@ -33,8 +33,8 @@
 # app, gives each process outside the tree an identity (its image, plus the
 # services it hosts or the COM server it is), and each later phase lists the
 # connections from identities that made none in the baseline, and those in
-# the 15 s after each start of navaja.exe from any identity that does not
-# poll all through the baseline. That list is for a person to review, and
+# the 15 s after each of those starts from any identity that does not poll
+# all through the baseline. That list is for a person to review, and
 # fails nothing: the runner's own scheduled tasks and services come and go.
 #
 # pktmon, built into Windows, also captures the NICs' packets for each phase
@@ -72,15 +72,17 @@ $Canary = 'navaja-canary'
 # The images of the tree, and the one it starts from.
 $TreeImages = @('navaja.exe', 'msedgewebview2.exe')
 $RootImages = @('navaja.exe')
-# How long after each start of navaja.exe the review list also takes
-# connections from identities the baseline has, and connections from the
-# services in $WokenServices count as the app's (see Get-Report).
+# How long after each start of navaja.exe, and of the tree's WebView2
+# browser process, the review list also takes connections from identities
+# the baseline has, and connections from the services in $WokenServices
+# count as the app's (see Get-Report).
 $StartupSeconds = 15
 # Services that the webview wakes outside its tree, by identity (see
 # Format-Identity): WAM's Microsoft-account provider and the sign-in service,
-# which reached login.live.com 1 to 3 s after every start of the app in
-# spike S2.7, though no log names them as acting for it. Their connections
-# in the $StartupSeconds after a start of navaja.exe count as the app's.
+# which looked login.live.com up 1.2 to 2.3 s after WebView2's browser
+# process started, in every S2.7 run checked, though no log names them as
+# acting for it. Their connections in the $StartupSeconds after
+# those starts count as the app's.
 $WokenServices = @('svchost.exe [wlidsvc]', 'backgroundtaskhost.exe [BackgroundTaskHost.WebAccountProvider]')
 # What the check reports as disclosed instead of failing on: traffic the app
 # sets off that nothing it controls can stop (docs/adr/0003-webview-network.md).
@@ -658,10 +660,17 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
   }
 
   # The services the webview wakes ($WokenServices): their connections in
-  # the $StartupSeconds after a navaja.exe started count as the app's, unless
-  # an entry of the disclosed list covers them.
-  $appStarts = @($created | Where-Object { [IO.Path]::GetFileName($_.Image).ToLowerInvariant() -eq 'navaja.exe' } |
-      ForEach-Object { (ConvertTo-Time $_.Time).ToUniversalTime() })
+  # the $StartupSeconds after a start of navaja.exe or of the tree's WebView2
+  # browser process (msedgewebview2.exe without --type=) count as the app's,
+  # unless an entry of the disclosed list covers them. The browser process
+  # counts because WAM follows it: in run 37168559527 it started 14.4 s after
+  # navaja.exe, and the sign-in service looked login.live.com up 2.1 s later,
+  # outside a window that opened with navaja.exe alone.
+  $appStarts = @($created | Where-Object {
+      $image = [IO.Path]::GetFileName($_.Image).ToLowerInvariant()
+      $image -eq 'navaja.exe' -or
+      ($image -eq 'msedgewebview2.exe' -and $tree.ContainsKey($_.ProcessId) -and $_.CommandLine -notmatch '--type=')
+    } | ForEach-Object { (ConvertTo-Time $_.Time).ToUniversalTime() })
   $nearStart = {
     param($Connection)
     $at = (ConvertTo-Time $Connection.Time).ToUniversalTime()
@@ -704,7 +713,7 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
   }
 
   # Outside the tree, for review: connections from identities the baseline
-  # lacks, and connections in the $StartupSeconds after a navaja.exe started
+  # lacks, and connections in the $StartupSeconds after an app start (above)
   # from identities that do not poll all the time in the baseline (such as
   # the VM agents), but those of the services the webview wakes, counted
   # above. Then what started on demand in the phase.
@@ -798,7 +807,7 @@ function Write-Report($Report) {
   $lines.Add("| WFP connections (5156 allowed, 5157 blocked; counted: the process tree's) | $($Report.ConnectionEvents) | $($Report.Connections.Count) | $($Report.Loopback.Count) | $($Report.Outside.Count) |")
   $lines.Add("| DNS client (the tree's queries, and the canary's names from any process) | $($Report.DnsEvents) | $($Report.Queries.Count) | - | $($Report.Queries.Count) |")
   $lines.Add("| BITS client (download jobs the tree created) | $($Report.BitsEvents) | $($Report.Jobs.Count) | - | $($Report.Jobs.Count) |")
-  $lines.Add("| WFP connections of the services the webview wakes ($($WokenServices -join ', ')), in the $StartupSeconds s after a start of navaja.exe | - | $($Report.Woken.Count) | - | $($Report.Delegated.Count) ($($Report.Disclosed.Count) disclosed) |")
+  $lines.Add("| WFP connections of the services the webview wakes ($($WokenServices -join ', ')), in the $StartupSeconds s after a start of navaja.exe or its WebView2 browser process | - | $($Report.Woken.Count) | - | $($Report.Delegated.Count) ($($Report.Disclosed.Count) disclosed) |")
   $lines.Add('')
   $kinds = @($Report.Tree.Values | ForEach-Object {
       $image = Split-Path -Leaf $_.Image
@@ -859,7 +868,7 @@ function Write-Report($Report) {
   if ($Report.Name -eq 'idle' -or $Report.Name -eq 'in-use') {
     $lines.Add('##### Outside the process tree, for review (not findings)')
     $lines.Add('')
-    $lines.Add("Connections outside loopback from processes outside the tree: from identities (image, plus the services it hosts or the COM server it is) that made none in the 5 min baseline, and from any identity but the baseline's steady pollers in the $StartupSeconds s after a start of navaja.exe, except the services the webview wakes, counted above. Another service that works for the tree without a log naming it would show here; so do the runner's own scheduled tasks.")
+    $lines.Add("Connections outside loopback from processes outside the tree: from identities (image, plus the services it hosts or the COM server it is) that made none in the 5 min baseline, and from any identity but the baseline's steady pollers in the $StartupSeconds s after a start of navaja.exe or its WebView2 browser process, except the services the webview wakes, counted above. Another service that works for the tree without a log naming it would show here; so do the runner's own scheduled tasks.")
     $lines.Add('')
     if (-not $Report.Baseline) {
       $lines.Add('No baseline was captured, so there is no such list.')
