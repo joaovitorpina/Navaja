@@ -47,8 +47,10 @@
 #
 # Traffic from those daemons that an entry of s2-7-disclosed.tsv covers
 # (service, host, phase) is reported as disclosed and fails nothing
-# (docs/adr/0003-webview-network.md). Nothing from the tree's own processes
-# can be disclosed.
+# (docs/adr/0003-webview-network.md). A connection is tied to a host only
+# through the lookups made for the same process before it (mac_disclose),
+# not through any name its address had elsewhere. Nothing from the tree's
+# own processes can be disclosed.
 #
 # The baseline phase captures the same way for 5 min before the app ever
 # runs. Nothing in it may count as the app's: otherwise the attribution
@@ -861,6 +863,15 @@ os_label() {
   echo "${MATRIX_OS:-$OS}"
 }
 
+# What a phase's findings come from: on macOS also the WebKit daemons that
+# count as the app's (mac_daemons), which are not the tree's own processes.
+counted() {
+  case $OS in
+    macos) echo "the process tree or the services it wakes" ;;
+    *) echo "the process tree" ;;
+  esac
+}
+
 # Prints the phase's table, the first findings in full, and fails on any.
 # The list of what the baseline lacks only gets a warning.
 report() {
@@ -883,7 +894,7 @@ report() {
     case $phase in
       control) return 0 ;;
       baseline) fail "baseline: $findings packet(s) counted as the app's while it was not running, so the attribution would blame it for the machine's own traffic; see the table above" ;;
-      *) fail "$phase: $findings packet(s) from the process tree; see the table above" ;;
+      *) fail "$phase: $findings packet(s) from $(counted); see the table above" ;;
     esac
   fi
   case $phase in
@@ -891,9 +902,9 @@ report() {
     baseline) echo "baseline: nothing counted as the app's while it was not running." ;;
     *)
       if [ "$disclosed" -gt 0 ]; then
-        echo "$phase: no packet from the process tree but the $disclosed the disclosed list covers."
+        echo "$phase: no packet from $(counted) but the $disclosed the disclosed list covers."
       else
-        echo "$phase: no packet from the process tree."
+        echo "$phase: no packet from $(counted)."
       fi
       ;;
   esac
@@ -1073,13 +1084,13 @@ disclosed_entries() {
   ' "$DISCLOSED" || fail "the disclosed list is malformed" >&2
 }
 
-# macOS: "<key>\t<name>" for every address the job's captures saw a DNS
-# answer give, and for every name in those answers, with every name that
-# leads to it: the record's own name and the names whose CNAMEs lead there.
-# A lookup of a CNAME's target (a1845.dscg2.akamai.net) is then tied to the
-# name first asked for (ocsp2.apple.com). Every phase so far counts, since
-# mDNSResponder may answer a name from its cache, CNAME included.
-mac_addr_names() {
+# macOS: "<target>\t<name>" for every CNAME record in the DNS answers of the
+# job's captures so far, into cnames.tsv. mac_disclose follows them back from
+# a name looked up to the names whose CNAMEs lead to it: mDNSResponder may
+# hold a CNAME in its cache and ask only for its target
+# (ocsp2.g.aaplimg.com, for ocsp2.apple.com). Every phase so far counts, so
+# a CNAME seen in an earlier phase still ties a later lookup to its name.
+mac_cnames() {
   local file
   for file in "$OUT"/*-dns-long.txt; do
     [ ! -f "$file" ] || cat "$file"
@@ -1091,75 +1102,112 @@ mac_addr_names() {
       n = split(rest, record, ", ")
       for (i = 1; i <= n; i++) {
         split(record[i], f, " ")
-        owner = f[1]
-        data = f[3]
-        sub(/\.$/, "", owner)
-        sub(/\.$/, "", data)
-        if (f[2] == "CNAME") {
-          parents[data] = parents[data] " " owner
-          named[data] = 1
-          named[owner] = 1
-        } else if (f[2] == "A" || f[2] == "AAAA") {
-          owners[data] = owners[data] " " owner
-          named[owner] = 1
-        }
+        if (f[2] != "CNAME") continue
+        sub(/\.$/, "", f[1])
+        sub(/\.$/, "", f[3])
+        print f[3] "\t" f[1]
       }
     }
-    function walk(name, depth, list, k, m) {
-      if (depth > 10 || (name in seen)) return
-      seen[name] = 1
-      print key "\t" name
-      m = split(parents[name], list, " ")
-      for (k = 1; k <= m; k++) walk(list[k], depth + 1)
-    }
-    END {
-      for (key in owners) {
-        for (name in seen) delete seen[name]
-        n = split(owners[key], names, " ")
-        for (i = 1; i <= n; i++) walk(names[i], 0)
-      }
-      for (key in named) {
-        for (name in seen) delete seen[name]
-        walk(key, 0)
-      }
-    }
-  ' | sort -u > "$OUT/addr-names.tsv"
+  ' | sort -u > "$OUT/cnames.tsv"
 }
 
 # macOS: splits the tree's packets (<phase>-tree.txt) into those an entry of
 # the disclosed list covers, "<entry>\t<label>\t<line>" in
 # <phase>-disclosed.txt, and the rest, "<label>\t<line>" in
-# <phase>-undisclosed.txt. A packet is covered when the process it was for
-# (pktap's eproc, else its proc) is the entry's service, and one of the
-# entry's hosts is the name its DNS packet asks for (a DNS answer is matched
-# to its question by port and ID) or a name the captures' DNS answers give
-# for its remote address, through CNAMEs too (mac_addr_names). A packet sent
-# by or for a process of the tree (TREE_PROCS) is never covered.
+# <phase>-undisclosed.txt. Each packet is tied to the names it was for:
+# - a DNS packet, to the name it asks for (a DNS answer is matched to its
+#   question by port and ID);
+# - any other packet, to its connection (process, local end and remote
+#   address), and the connection to the lookups that mDNSResponder made for
+#   the same process (pktap's eproc, name and PID) in the phase, before the
+#   connection's first packet, and that gave its remote address. A shared
+#   address (Apple's edge servers answer for many names) is then tied to
+#   what that process looked up, not to every name the captures ever gave
+#   for it. A connection with no such lookup is tied to nothing.
+# A name looked up stands for the names whose CNAMEs lead to it, up to a name
+# no CNAME leads to (mac_cnames): mDNSResponder may ask only for a CNAME's
+# target. A packet is covered when the process it was for (its eproc, else
+# its proc) is an entry's service, and every name it is tied to stands only
+# for the entry's hosts. A packet sent by or for a process of the tree
+# (TREE_PROCS) is never covered.
 mac_disclose() {
   local phase=$1
-  mac_addr_names
+  mac_cnames
   disclosed_entries macos "$phase" > "$OUT/$phase-disclosed-entries.tsv"
   : > "$OUT/$phase-disclosed.txt"
   : > "$OUT/$phase-undisclosed.txt"
-  TREE=$TREE_PROCS awk -F '\t' -v entries="$OUT/$phase-disclosed-entries.tsv" -v names="$OUT/addr-names.tsv" \
+  TREE=$TREE_PROCS awk -F '\t' -v entries="$OUT/$phase-disclosed-entries.tsv" -v cnames="$OUT/cnames.tsv" \
     -v covered="$OUT/$phase-disclosed.txt" -v rest="$OUT/$phase-undisclosed.txt" '
     function port(end, n, p) { n = split(end, p, "."); return p[n] }
     function host(end) { sub(/\.[^.]*$/, "", end); return end }
+    # "webprivacyd (16077)", as mac_select labels it, from pktap'"'"'s
+    # "webprivacyd:16077[:<uuid>]".
+    function client(s, a) { split(s, a, ":"); return a[1] " (" a[2] ")" }
+    # The names a lookup of <name> stands for, as " a b ": <name> followed
+    # back through the CNAMEs that lead to it, to names none leads to. A
+    # chain longer than 10, or a loop, gives "?", which no entry holds.
+    function roots(name, depth, list, k, m, out) {
+      if (depth > 10) return " ? "
+      if (!(name in parents)) return " " name " "
+      out = ""
+      m = split(parents[name], list, " ")
+      for (k = 1; k <= m; k++) out = out roots(list[k], depth + 1)
+      return out
+    }
+    # The names a connection of <proc_key> to <address> that began at
+    # <since> is tied to: those of every lookup made for <proc_key> by then
+    # that gave <address>.
+    function tied(proc_key, address, since, list, k, m, at, out) {
+      out = ""
+      m = split(lookups[proc_key SUBSEP address], list, " ")
+      for (k = 1; k <= m; k++) {
+        at = index(list[k], "|")
+        if (substr(list[k], 1, at - 1) + 0 <= since) out = out roots(substr(list[k], at + 1), 0)
+      }
+      return out
+    }
+    # The entry (its number) whose service is <daemon> and whose hosts hold
+    # every name of <tied_names>, or 0 when there are none or no entry does.
+    function cover(daemon, tied_names, w, n, i, j, all) {
+      n = split(tied_names, w, " ")
+      if (n == 0) return 0
+      for (i = 1; i <= count; i++) {
+        if (substr(daemon, 1, 15) != service[i]) continue
+        all = 1
+        for (j = 1; j <= n && all; j++) if (!index(hostset[i], " " w[j] " ")) all = 0
+        if (all) return i
+      }
+      return 0
+    }
     BEGIN {
       while ((getline line < entries) > 0) {
         split(line, e, "\t")
         entry[++count] = e[1] " -> " e[2]
         service[count] = substr(e[1], 1, 15)
-        hosts[count] = e[2]
+        hostset[count] = " "
+        m = split(e[2], h, ",")
+        for (j = 1; j <= m; j++) {
+          gsub(/^ +| +$/, "", h[j])
+          if (h[j] != "") hostset[count] = hostset[count] h[j] " "
+        }
       }
-      while ((getline line < names) > 0) {
+      while ((getline line < cnames) > 0) {
         split(line, a, "\t")
-        known[a[1]] = known[a[1]] " " a[2] " "
+        parents[a[1]] = parents[a[1]] " " a[2]
       }
     }
     # The phase'"'"'s DNS packets in long form: "<epoch> (<pktap>) IP (<ip>)
     # <source> > <destination>: <id>[flags] <question or answers>".
     FILENAME == ARGV[1] {
+      if (!match($0, /\([^()]*\)/)) next
+      np = split(substr($0, RSTART + 1, RLENGTH - 2), part, ", ")
+      proc = ""
+      eproc = ""
+      for (i = 1; i <= np; i++) {
+        if (part[i] ~ /^proc /) proc = substr(part[i], 6)
+        else if (part[i] ~ /^eproc /) eproc = substr(part[i], 7)
+      }
+      who = client(eproc != "" ? eproc : proc)
       n = split($0, w, " ")
       for (i = 2; i < n; i++) if (w[i] == ">") break
       if (i >= n) next
@@ -1175,46 +1223,65 @@ mac_disclose() {
         asked[port(source) "/" id] = question
         dns[w[1] " " port(source)] = question
       } else if (port(source) == "53") {
-        answer[w[1] " " port(target)] = port(target) "/" id
+        q = port(target) "/" id
+        answer[w[1] " " port(target)] = q
+        question = (q in asked) ? asked[q] : ""
+        if (question == "" || !match($0, / [0-9]+\/[0-9]+\/[0-9]+ /)) next
+        # Each address it gave, tied to the process it was for and the name
+        # asked: "<epoch>|<name>".
+        records = substr($0, RSTART + RLENGTH)
+        sub(/ \([0-9]+\)$/, "", records)
+        m = split(records, record, ", ")
+        for (k = 1; k <= m; k++) {
+          split(record[k], f, " ")
+          if (f[2] == "A" || f[2] == "AAAA") lookups[who SUBSEP f[3]] = lookups[who SUBSEP f[3]] " " w[1] "|" question
+        }
       }
       next
     }
     # The tree'"'"'s packets, short form, remote end last: "<label>\t<epoch> IP
-    # <local> > <remote>: ...".
+    # <local> > <remote>: ...". Kept until the end: a connection is tied by
+    # its first packet.
     {
-      label = $1
+      packet[++packets] = $0
       split($2, f, " ")
       local = f[3]
       remote = f[5]
       sub(/:$/, "", remote)
-      who = label
+      who = $1
+      sub(/, (in|out)$/, "", who)
       if (who ~ / for /) sub(/.* for /, "", who)
-      sub(/ \(.*/, "", who)
-      sender = label
+      owner[packets] = who
+      sender = $1
       sub(/ \(.*/, "", sender)
+      pname = who
+      sub(/ \(.*/, "", pname)
       # The tree'"'"'s own packets are never disclosed, whatever an entry says.
-      if (sender ~ ENVIRON["TREE"] || who ~ ENVIRON["TREE"]) {
-        print $0 > rest
-        next
-      }
+      own[packets] = (sender ~ ENVIRON["TREE"] || pname ~ ENVIRON["TREE"])
       if (port(remote) == "53") {
         key = f[1] " " port(local)
-        name = (key in dns) ? dns[key] : asked[answer[key]]
-        seen_as = " " name " " known[name]
+        question = (key in dns) ? dns[key] : ""
+        if (question == "" && (key in answer) && (answer[key] in asked)) question = asked[answer[key]]
+        tiedto[packets] = (question == "") ? "" : roots(question, 0)
       } else {
-        seen_as = known[host(remote)]
+        flow[packets] = who SUBSEP local SUBSEP host(remote)
+        addr[packets] = host(remote)
+        if (!(flow[packets] in first) || f[1] + 0 < first[flow[packets]]) first[flow[packets]] = f[1] + 0
       }
-      match_entry = 0
-      for (i = 1; i <= count && !match_entry; i++) {
-        if (substr(who, 1, 15) != service[i]) continue
-        m = split(hosts[i], h, ",")
-        for (j = 1; j <= m; j++) {
-          gsub(/^ +| +$/, "", h[j])
-          if (h[j] != "" && index(seen_as, " " h[j] " ")) match_entry = i
+    }
+    END {
+      for (k = 1; k <= packets; k++) {
+        if (own[k]) {
+          print packet[k] > rest
+          continue
         }
+        if (k in flow) tiedto[k] = tied(owner[k], addr[k], first[flow[k]])
+        pname = owner[k]
+        sub(/ \(.*/, "", pname)
+        i = cover(pname, tiedto[k])
+        if (i) print entry[i] "\t" packet[k] > covered
+        else print packet[k] > rest
       }
-      if (match_entry) print entry[match_entry] "\t" $0 > covered
-      else print $0 > rest
     }
   ' "$OUT/$phase-dns-long.txt" "$OUT/$phase-tree.txt"
 }
@@ -1274,11 +1341,11 @@ check_macos() {
   {
     echo "#### $phase: $(os_label)"
     echo
-    echo "| Capture | Packets, all processes | Outside lo0 | From the process tree, outside lo0 | From the tree on lo0 | DNS for the canary's hosts, any process | Disclosed | Findings (packets, each once) |"
+    echo "| Capture | Packets, all processes | Outside lo0 | From the tree or the daemons counted as the app's, outside lo0 | From those on lo0 | DNS for the canary's hosts, any process | Disclosed | Findings (packets, each once) |"
     echo "|---|---|---|---|---|---|---|---|"
     echo "| pktap, every interface | $total | $outside | $tree | $lo0 | $canary | $disclosed | $findings |"
     echo
-    echo "The tree's packets on lo0, which never leave the machine: $(lo0_summary "$OUT/$phase-tree-lo0.txt")."
+    echo "Their packets on lo0, which never leave the machine: $(lo0_summary "$OUT/$phase-tree-lo0.txt")."
     echo
     if [ "$phase" != control ]; then
       mac_select "$listing" "$want" "$pid" excluded > "$OUT/$phase-daemons-left-out-packets.txt"
@@ -1296,9 +1363,9 @@ check_macos() {
       echo
     fi
     if [ "$findings" -eq 0 ] && [ "$disclosed" -gt 0 ]; then
-      echo "No other packet from the process tree."
+      echo "No other packet from the tree or the daemons counted as the app's."
     elif [ "$findings" -eq 0 ]; then
-      echo "No packet from the process tree."
+      echo "No packet from the tree or the daemons counted as the app's."
     else
       echo "| Process | Remote end | Port | Protocol | Packets | First, from the phase's start |"
       echo "|---|---|---|---|---|---|"

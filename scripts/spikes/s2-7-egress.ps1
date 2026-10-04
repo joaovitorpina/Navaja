@@ -25,14 +25,17 @@
 # account broker and its sign-in service ($WokenServices). Their connections
 # in the 15 s after a start of navaja.exe count as the app's; those an entry
 # of s2-7-disclosed.tsv covers are reported as disclosed and fail nothing
-# (docs/adr/0003-webview-network.md). Others may do the same, so a baseline,
-# 5 min without the app, gives each process outside the tree an identity (its
-# image, plus the services it hosts or the COM server it is), and each later
-# phase lists the connections from identities that made none in the
-# baseline, and those in the 15 s after each start of navaja.exe from any
-# identity that does not poll all through the baseline. That list is for a
-# person to review, and fails nothing: the runner's own scheduled tasks and
-# services come and go.
+# (docs/adr/0003-webview-network.md). An entry covers a connection only
+# through the names its own process asked the DNS client for, before it, in
+# lookups that gave its address (Find-DisclosedEntry).
+#
+# Other services may act for the tree too, so a baseline, 5 min without the
+# app, gives each process outside the tree an identity (its image, plus the
+# services it hosts or the COM server it is), and each later phase lists the
+# connections from identities that made none in the baseline, and those in
+# the 15 s after each start of navaja.exe from any identity that does not
+# poll all through the baseline. That list is for a person to review, and
+# fails nothing: the runner's own scheduled tasks and services come and go.
 #
 # pktmon, built into Windows, also captures the NICs' packets for each phase
 # (cut to 512 bytes). It names no process, but its DNS packets
@@ -517,13 +520,18 @@ function Get-DisclosedEntries([string]$Phase) {
 }
 
 # The entry that covers a connection: its service is the connection's
-# identity, and one of its hosts is a name the capture's DNS packets give for
-# the connection's address.
+# identity, and every name the connection is tied to (Asked: what its process
+# asked the DNS client for, before it, in lookups that gave its address) is
+# one of the entry's hosts. A connection tied to no name is covered by none.
+# Not the names pktmon's DNS packets give for the address: those come from
+# any process, and one address can answer for many names, as Apple's edge
+# servers do in the macOS captures.
 function Find-DisclosedEntry($Entries, $Connection) {
-  $names = @($Connection.Names -split ', ' | Where-Object { $_ })
+  $asked = @($Connection.Asked -split ', ' | Where-Object { $_ })
+  if ($asked.Count -eq 0) { return $null }
   foreach ($entry in $Entries) {
     if ($entry.Service -ne $Connection.Identity) { continue }
-    if (@($entry.Hosts | Where-Object { $names -contains $_ }).Count -gt 0) { return $entry }
+    if (@($asked | Where-Object { $entry.Hosts -notcontains $_ }).Count -eq 0) { return $entry }
   }
   return $null
 }
@@ -566,6 +574,7 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
     $connection = [pscustomobject]@{
       Time = $entry.Time
       Event = $entry.Id
+      ProcessId = $processId
       Process = "$image ($processId)"
       Identity = $image
       Direction = Get-Direction (Get-Field $entry 'Direction')
@@ -574,6 +583,7 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
       Port = Get-Field $entry 'DestPort'
       Protocol = Get-Protocol (Get-Field $entry 'Protocol')
       Names = ''
+      Asked = ''
     }
     if ($tree.ContainsKey($processId) -or $Images -contains $image) {
       $connections += $connection
@@ -658,10 +668,33 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
     return @($appStarts | Where-Object { ($at - $_).TotalSeconds -ge 0 -and ($at - $_).TotalSeconds -le $StartupSeconds }).Count -gt 0
   }
   $woken = @($others | Where-Object { $WokenServices -contains $_.Identity -and (& $nearStart $_) })
+  # What each process asked the DNS client for, and the addresses it got
+  # back: event 3008, which the asking process logs. A woken service's
+  # connection is tied to the names of its own process's lookups, made
+  # before it, that gave its address; with no such lookup it is tied to
+  # none, and fails.
+  $lookups = @(foreach ($entry in $dns) {
+      if ($entry.Id -ne 3008) { continue }
+      $results = Get-Field $entry 'QueryResults'
+      if (-not $results) { continue }
+      [pscustomobject]@{
+        Time = (ConvertTo-Time $entry.Time).ToUniversalTime()
+        ProcessId = [int64]$entry.LoggedBy
+        Name = Get-Field $entry 'QueryName'
+        # "type: 5 <CNAME target>;" records, then addresses; IPv4 ones may
+        # come mapped to IPv6 (::ffff:40.126.29.15).
+        Addresses = @($results -split ';' | ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -and $_ -notlike 'type:*' } | ForEach-Object { $_ -replace '^::ffff:', '' })
+      }
+    })
   $entries = @(Get-DisclosedEntries $Name)
   $disclosed = @()
   $delegated = @()
   foreach ($connection in $woken) {
+    $at = (ConvertTo-Time $connection.Time).ToUniversalTime()
+    $connection.Asked = @($lookups | Where-Object {
+        $_.ProcessId -eq $connection.ProcessId -and $_.Time -le $at -and $_.Addresses -contains $connection.Remote
+      } | ForEach-Object { $_.Name } | Sort-Object -Unique) -join ', '
     $entry = Find-DisclosedEntry $entries $connection
     if ($null -ne $entry) {
       $disclosed += $connection | Select-Object *, @{ n = 'Entry'; e = { $entry.Label } }
@@ -721,17 +754,31 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
 }
 
 # Rows of connections, grouped, for a Markdown table.
-function Add-ConnectionRows($Lines, $Connections, [string]$Key, [datetime]$Start) {
-  $Lines.Add("| Process | Event | Direction | Destination | Port | Protocol | Name, from the capture's DNS packets | Events | First, from the phase's start |")
-  $Lines.Add('|---|---|---|---|---|---|---|---|---|')
+# With -Asked, a column more: the names the connection is tied to through its
+# process's own lookups (see Find-DisclosedEntry).
+function Add-ConnectionRows($Lines, $Connections, [string]$Key, [datetime]$Start, [switch]$Asked) {
+  $askedHeader = ''
+  $askedRule = ''
+  if ($Asked) {
+    $askedHeader = ' Its process looked up, before it (DNS client) |'
+    $askedRule = '---|'
+  }
+  $Lines.Add("| Process | Event | Direction | Destination | Port | Protocol | Name, from the capture's DNS packets |$askedHeader Events | First, from the phase's start |")
+  $Lines.Add("|---|---|---|---|---|---|---|$askedRule---|---|")
   $rows = @($Connections | Group-Object $Key, Event, Direction, Remote, Port, Protocol | ForEach-Object {
       $first = $_.Group[0]
       $names = @($_.Group | ForEach-Object { $_.Names -split ', ' } | Where-Object { $_ } | Sort-Object -Unique) -join ', '
       if (-not $names) { $names = '-' }
+      $askedCell = ''
+      if ($Asked) {
+        $tied = @($_.Group | ForEach-Object { $_.Asked -split ', ' } | Where-Object { $_ } | Sort-Object -Unique) -join ', '
+        if (-not $tied) { $tied = '-' }
+        $askedCell = " $tied |"
+      }
       $earliest = ConvertTo-Time ($_.Group | Sort-Object Time | Select-Object -First 1).Time
       [pscustomobject]@{
         At = $earliest
-        Text = "| $($first.$Key) | $($first.Event) | $($first.Direction) | $($first.Remote) | $($first.Port) | $($first.Protocol) | $names | $($_.Count) | $(Format-Offset $earliest $Start) |"
+        Text = "| $($first.$Key) | $($first.Event) | $($first.Direction) | $($first.Remote) | $($first.Port) | $($first.Protocol) | $names |$askedCell $($_.Count) | $(Format-Offset $earliest $Start) |"
       }
     })
   $rows | Sort-Object At | ForEach-Object { $Lines.Add($_.Text) }
@@ -746,9 +793,9 @@ function Write-Report($Report) {
   $lines = New-Object System.Collections.Generic.List[string]
   $lines.Add("#### $($Report.Name): $label")
   $lines.Add('')
-  $lines.Add('| Log | Events in the phase, all processes | From the process tree | Of those, to loopback | Findings |')
+  $lines.Add('| Log | Events in the phase, all processes | Counted as the app''s | Of those, to loopback | Findings |')
   $lines.Add('|---|---|---|---|---|')
-  $lines.Add("| WFP connections (5156 allowed, 5157 blocked) | $($Report.ConnectionEvents) | $($Report.Connections.Count) | $($Report.Loopback.Count) | $($Report.Outside.Count) |")
+  $lines.Add("| WFP connections (5156 allowed, 5157 blocked; counted: the process tree's) | $($Report.ConnectionEvents) | $($Report.Connections.Count) | $($Report.Loopback.Count) | $($Report.Outside.Count) |")
   $lines.Add("| DNS client (the tree's queries, and the canary's names from any process) | $($Report.DnsEvents) | $($Report.Queries.Count) | - | $($Report.Queries.Count) |")
   $lines.Add("| BITS client (download jobs the tree created) | $($Report.BitsEvents) | $($Report.Jobs.Count) | - | $($Report.Jobs.Count) |")
   $lines.Add("| WFP connections of the services the webview wakes ($($WokenServices -join ', ')), in the $StartupSeconds s after a start of navaja.exe | - | $($Report.Woken.Count) | - | $($Report.Delegated.Count) ($($Report.Disclosed.Count) disclosed) |")
@@ -774,7 +821,7 @@ function Write-Report($Report) {
   if ($Report.Disclosed.Count -gt 0) {
     $lines.Add('Disclosed, not findings: connections that an entry of `scripts/spikes/s2-7-disclosed.tsv` covers in this phase (docs/adr/0003-webview-network.md).')
     $lines.Add('')
-    Add-ConnectionRows $lines $Report.Disclosed 'Entry' $start
+    Add-ConnectionRows $lines $Report.Disclosed 'Entry' $start -Asked
   }
   if ($Report.Findings -eq 0) {
     if ($Report.Disclosed.Count -gt 0) {
@@ -785,7 +832,7 @@ function Write-Report($Report) {
     $lines.Add('')
   } else {
     if ($Report.Outside.Count -gt 0) { Add-ConnectionRows $lines $Report.Outside 'Process' $start }
-    if ($Report.Delegated.Count -gt 0) { Add-ConnectionRows $lines $Report.Delegated 'Identity' $start }
+    if ($Report.Delegated.Count -gt 0) { Add-ConnectionRows $lines $Report.Delegated 'Identity' $start -Asked }
     if ($Report.Queries.Count -gt 0) {
       $lines.Add('| Process | DNS client event | Name | Type | Events | First, from the phase''s start |')
       $lines.Add('|---|---|---|---|---|---|')

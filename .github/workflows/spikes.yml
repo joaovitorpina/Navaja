@@ -617,9 +617,11 @@ jobs:
   # review, the traffic outside the tree that the baseline lacks (on Windows
   # also what came right after an app start). Traffic of those daemons and
   # services that scripts/spikes/s2-7-disclosed.tsv covers is reported as
-  # disclosed and fails nothing (docs/adr/0003-webview-network.md). Nothing
-  # opens a URL or the logs folder (architecture §5). The captures go up as
-  # an artifact; nothing else leaves the runner.
+  # disclosed and fails nothing (docs/adr/0003-webview-network.md); a
+  # connection reaches an entry's host only through the lookups its own
+  # process made before it. Nothing opens a URL or the logs folder
+  # (architecture §5). The captures go up as an artifact; nothing else
+  # leaves the runner.
   s2-7:
     name: S2.7 egress capture (${{ matrix.os }})
     strategy:
@@ -708,7 +710,7 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: bash scripts/spikes/s2-7-egress.sh idle
 
-      - name: Idle, no packet from the process tree
+      - name: Idle, nothing from the process tree or the services it wakes but the disclosed list
         id: idle_check
         if: ${{ !cancelled() && (steps.idle.outcome == 'success' || steps.idle.outcome == 'failure') }}
         run: bash scripts/spikes/s2-7-egress.sh check idle
@@ -718,7 +720,7 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: bash scripts/spikes/s2-7-egress.sh in-use
 
-      - name: In use, no packet from the process tree
+      - name: In use, nothing from the process tree or the services it wakes but the disclosed list
         id: in_use_check
         if: ${{ !cancelled() && (steps.in_use.outcome == 'success' || steps.in_use.outcome == 'failure') }}
         run: bash scripts/spikes/s2-7-egress.sh check in-use
@@ -809,11 +811,11 @@ jobs:
             echo "| Baseline: 5 min under capture without the app | $(result "$BASELINE") |"
             echo "| Baseline: nothing counts as the app's | $(result "$BASELINE_CHECK") |"
             echo "| Idle: the app runs 5 min with its window shown | $(result "$IDLE") |"
-            echo "| Idle: no packet from the process tree | $(result "$IDLE_CHECK") |"
+            echo "| Idle: nothing from the process tree or the services it wakes but the disclosed list | $(result "$IDLE_CHECK") |"
             echo "| Idle: delegated traffic on the disclosed list | $(disclosed idle) |"
             echo "| Idle: traffic outside the tree, listed for review | $(review idle) |"
             echo "| In use: \`pnpm e2e\` passes, egress canary included | $(result "$IN_USE") |"
-            echo "| In use: no packet from the process tree | $(result "$IN_USE_CHECK") |"
+            echo "| In use: nothing from the process tree or the services it wakes but the disclosed list | $(result "$IN_USE_CHECK") |"
             echo "| In use: delegated traffic on the disclosed list | $(disclosed in-use) |"
             echo "| In use: traffic outside the tree, listed for review | $(review in-use) |"
             echo
