@@ -90,7 +90,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 1. **S2.4** and the StatusNotifier host check in `platform/linux.rs`, then close behaviour per OS through `ShellPlatform`.
 2. **`xtask measure`**, then **S2.5**. Implement the winning hide policy, delete the other path, and record the numbers in ADR 0004.
 3. **Final brand SVGs** and `xtask icons`, which wraps `tauri icon` and also produces the macOS template tray icon.
-4. **`bundle.yml`:** a weekly, keyless build of the exact release matrix.
+4. **`bundle.yml`:** a weekly, keyless build of the exact release matrix. It also checks that the macOS bundle's `Info.plist` sets `LSMinimumSystemVersion` to 14.0 ([ADR 0003](adr/0003-webview-network.md)): no CI job builds a bundle before it.
 5. **Stretch, the first thing to cut:** the global-shortcut recorder and `docs/wayland-shortcut.md`.
 6. **`CONTRIBUTING.md`** with the QA checklist.
 7. **macOS clipboard:** keep copies off Universal Clipboard. On macOS, `copy_text` writes through `NSPasteboard` (objc2-app-kit) instead of arboard: `prepareForNewContentsWithOptions(CurrentHostOnly)`, then the text and the ConcealedType marker. arboard's own `set` clears the pasteboard, which would drop that option.

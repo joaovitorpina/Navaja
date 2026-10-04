@@ -51,12 +51,13 @@ pub fn disable_peer_connections(wk_webview: *mut c_void) -> bool {
     }
 }
 
-/// Turns WebKit's fraudulent-website warnings off, so that WebKit never
-/// asks the system's Safe Browsing service about a page the webview loads.
-/// That service is a separate daemon, outside the app's process tree, which
-/// fetches its lists from Apple (spike S2.7). The webview only ever shows
-/// Navaja's own pages, so there is nothing for it to check. Returns false
-/// when the webview could not be reached.
+/// Turns WebKit's fraudulent-website warnings off. The webview only ever
+/// shows Navaja's own pages, so there is nothing for them to check, and the
+/// aim is that WebKit stops asking the system's Safe Browsing service about
+/// pages: that service is a separate daemon, outside the app's process
+/// tree, which fetches its lists from Apple. Spike S2.7 has not shown that
+/// it does, since the CI VM runs the service by itself (ADR 0003). Returns
+/// false when the webview could not be reached.
 ///
 /// `fraudulentWebsiteWarningEnabled` is public API (macOS 10.15 and later)
 /// and on by default.

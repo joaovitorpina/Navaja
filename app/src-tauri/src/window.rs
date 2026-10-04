@@ -165,8 +165,9 @@ pub fn create_main<R: Runtime>(
 
     // macOS preferences (docs/architecture.md §5): WebKit skips the guard
     // script in `srcdoc` frames, so WebRTC is also switched off in the
-    // engine; and the fraudulent-website warnings are off, so WebKit never
-    // asks the system's Safe Browsing service about a page.
+    // engine; and the fraudulent-website warnings are off, which the app's
+    // own pages never need, so that WebKit has no reason to ask the system's
+    // Safe Browsing service about them (unproven on CI; ADR 0003).
     #[cfg(target_os = "macos")]
     if let Err(error) = window.with_webview(|webview| {
         if !crate::platform::disable_peer_connections(webview.inner()) {
