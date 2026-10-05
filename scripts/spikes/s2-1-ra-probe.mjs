@@ -50,12 +50,15 @@
 // unresolved import (E0432) or name (E0425) only with them.
 //
 // Exit codes: 0 the check (or the control) passed, 1 it failed, 2 the probe
-// could not ask (rust-analyzer missing, crashed, never quiescent, or a
-// search found nothing). RUST_ANALYZER names another binary.
+// could not ask (rust-analyzer missing, crashed, never quiescent, a search
+// found nothing, or a bug in the probe). On a runner, exit 2 also sets the
+// step's output `result` to "could not ask", which the job's summary shows
+// instead of FAIL. RUST_ANALYZER names another binary.
 // S21_TIMEOUT_MS sets how long to wait for quiescence (default 600000); each
 // answer may take a tenth of that.
 import { execFileSync, spawn } from 'node:child_process';
 import {
+  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -522,13 +525,32 @@ const CHECKS = {
   'control-misspelled': { run: controlMisspelled, line: `    ${MISSPELLED},\n` },
 };
 
+/**
+ * Says why the probe could not ask, and returns exit code 2. On a runner it
+ * also sets the step's `result` output, which the job's summary shows in
+ * place of FAIL: there a failed step reads as a check that failed, or a
+ * control whose broken list was accepted, and this is neither.
+ */
+function couldNotAsk(message) {
+  console.error(`The probe could not ask: ${message}`);
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    // A workflow command's message ends at the line's end.
+    const data = message.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+    console.log(`::error title=S2.1 could not ask::${data}`);
+  }
+  if (process.env.GITHUB_OUTPUT) {
+    appendFileSync(process.env.GITHUB_OUTPUT, 'result=could not ask\n');
+  }
+  return 2;
+}
+
 async function main() {
   const check = CHECKS[process.argv[2]];
   if (!check) {
     console.error(
       `usage: node scripts/spikes/s2-1-ra-probe.mjs <${Object.keys(CHECKS).join('|')}>`,
     );
-    return 2;
+    return couldNotAsk(`no check named ${JSON.stringify(process.argv[2] ?? '')}`);
   }
   let copy;
   let server;
@@ -541,9 +563,10 @@ async function main() {
     await server.start();
     return (await check.run(server)) ? 0 : 1;
   } catch (error) {
-    if (!(error instanceof ProbeError)) throw error;
-    console.error(`The probe could not ask: ${error.message}`);
-    return 2;
+    if (error instanceof ProbeError) return couldNotAsk(error.message);
+    // A bug in the probe. Node would exit 1 on it, which means a failed check.
+    console.error(error);
+    return couldNotAsk(`a bug in the probe: ${error}`);
   } finally {
     await server?.stop();
     if (copy) rmSync(copy, { recursive: true, force: true });

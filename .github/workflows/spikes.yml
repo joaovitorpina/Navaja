@@ -35,7 +35,9 @@ jobs:
   # mod.rs. The negative controls run it on a throwaway copy whose list has
   # the uuid entry removed or misspelled. RustRover, the other half, needs a
   # person (docs/spikes.md). A failed check doesn't stop the ones after it,
-  # and the last step writes a PASS/FAIL table to the run's summary.
+  # and the last step writes a PASS/FAIL table to the run's summary. A step
+  # where the probe could not ask (exit 2) sets its output `result`, and the
+  # table shows "could not ask" for it, not FAIL.
   # Lifetime: deleted once S2.1 is recorded in docs/spikes.md, RustRover half
   # included.
   s2-1:
@@ -124,12 +126,12 @@ jobs:
           VERSION: ${{ steps.ra.outputs.version }}
           RA: ${{ steps.ra.outcome }}
           FETCH: ${{ steps.fetch.outcome }}
-          DEFINITION_LIST: ${{ steps.definition_list.outcome }}
-          DEFINITION_CORE: ${{ steps.definition_core.outcome }}
-          COMPLETION: ${{ steps.completion.outcome }}
-          DIAGNOSTICS: ${{ steps.diagnostics.outcome }}
-          CONTROL_REMOVED: ${{ steps.control_removed.outcome }}
-          CONTROL_MISSPELLED: ${{ steps.control_misspelled.outcome }}
+          DEFINITION_LIST: ${{ steps.definition_list.outputs.result || steps.definition_list.outcome }}
+          DEFINITION_CORE: ${{ steps.definition_core.outputs.result || steps.definition_core.outcome }}
+          COMPLETION: ${{ steps.completion.outputs.result || steps.completion.outcome }}
+          DIAGNOSTICS: ${{ steps.diagnostics.outputs.result || steps.diagnostics.outcome }}
+          CONTROL_REMOVED: ${{ steps.control_removed.outputs.result || steps.control_removed.outcome }}
+          CONTROL_MISSPELLED: ${{ steps.control_misspelled.outputs.result || steps.control_misspelled.outcome }}
           CLEAN: ${{ steps.clean.outcome }}
         run: |
           result() {
