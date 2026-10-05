@@ -60,7 +60,7 @@ One block per OS. Each ends with a release build, and with the path of its binar
 - **Build,** in PowerShell at the repository root:
 
   ```powershell
-  Set-ExecutionPolicy -Scope Process RemoteSigned   # this window only; see below
+  Set-ExecutionPolicy -Scope Process RemoteSigned -Force   # this window only; see below
   git switch main; git pull --ff-only; git rev-parse --short HEAD
   rustup toolchain install       # the toolchain rust-toolchain.toml pins
   corepack enable pnpm           # in an administrator PowerShell if Node is installed for all users
@@ -69,7 +69,7 @@ One block per OS. Each ends with a release build, and with the path of its binar
   $exe = (Resolve-Path .\target\release\navaja.exe).Path
   ```
 
-  corepack's `pnpm` comes with a PowerShell script, `pnpm.ps1`, which PowerShell runs in place of `pnpm.cmd`. A fresh Windows 11 runs no PowerShell scripts, so without the first line `pnpm install` stops with "running scripts is disabled on this system". `-Scope Process` lasts until this window closes and changes no lasting setting. Calling `pnpm.cmd` in place of `pnpm` works too.
+  corepack's `pnpm` comes with a PowerShell script, `pnpm.ps1`, which PowerShell runs in place of `pnpm.cmd`. A fresh Windows 11 runs no PowerShell scripts, so without the first line `pnpm install` stops with "running scripts is disabled on this system". `-Scope Process` lasts until this window closes and changes no lasting setting. `-Force` skips the prompt that asks to confirm the change: its default answer is No, which keeps scripts blocked. Calling `pnpm.cmd` in place of `pnpm` works too.
 
   Keep this PowerShell window open: the checks use `$exe`. After signing out, set it again ("After signing in again", above).
 - **The newest log:** `Get-ChildItem "$env:APPDATA\Navaja\logs\navaja.*.log" | Sort-Object LastWriteTime | Select-Object -Last 1`.
