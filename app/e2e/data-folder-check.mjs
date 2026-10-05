@@ -534,7 +534,22 @@ function check(record, list) {
   }
 }
 
-/** What the control plants in each folder, and the hit each must give. */
+/** Two halves of the canary in `encoding`, with bytes between them. */
+function split(c, encoding) {
+  return Buffer.concat([
+    Buffer.from(c.slice(0, 16), encoding),
+    Buffer.from([0x00, 0xff]),
+    Buffer.from(c.slice(16), encoding),
+  ]);
+}
+
+/**
+ * What the control plants in each folder, and the hit each must give.
+ * Between them they cover every kind of needle: the whole canary and 12
+ * characters of it, in each encoding, and decompressed contents in each
+ * encoding and each format. Needles that broke for one of those alone would
+ * otherwise go unnoticed.
+ */
 const SAMPLES = [
   { name: 'utf-8.txt', form: `${WHOLE} in UTF-8`, bytes: (c) => Buffer.from(`typed: ${c}\n`) },
   {
@@ -543,20 +558,18 @@ const SAMPLES = [
     bytes: (c) => Buffer.from(`typed: ${c}`, 'utf16le'),
   },
   // Split as a Snappy reference would split it: only the pieces remain.
-  {
-    name: 'split.bin',
-    form: `${PART} in UTF-8`,
-    bytes: (c) =>
-      Buffer.concat([
-        Buffer.from(c.slice(0, 16)),
-        Buffer.from([0x00, 0xff]),
-        Buffer.from(c.slice(16)),
-      ]),
-  },
+  { name: 'split.bin', form: `${PART} in UTF-8`, bytes: (c) => split(c, 'utf8') },
+  // A UTF-16 store, such as WebKit's, split the same way.
+  { name: 'split-utf-16le.bin', form: `${PART} in UTF-16LE`, bytes: (c) => split(c, 'utf16le') },
   {
     name: 'text.gz',
     form: `${WHOLE} in UTF-8, in its gzip contents`,
     bytes: (c) => gzipSync(Buffer.from(c)),
+  },
+  {
+    name: 'utf-16le.gz',
+    form: `${WHOLE} in UTF-16LE, in its gzip contents`,
+    bytes: (c) => gzipSync(Buffer.from(c, 'utf16le')),
   },
   {
     name: 'text.zlib',
