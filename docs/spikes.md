@@ -53,9 +53,9 @@ Copy this for each spike and fill it in.
 - **PASS if:** RustRover and rust-analyzer navigate and complete through `register_tools!`
 - **FAIL then:** the two-line form, `mod x;` plus a list entry (needs sign-off)
 - **Result:** not finished (2026-10-05).
-  - rust-analyzer: PASS. `spikes.yml` run [37253862965](https://github.com/joaovitorpina/Navaja/actions/runs/37253862965), on commit `caf86db`: checks a to d passed, and both controls failed the checks they should.
+  - rust-analyzer: PASS. `spikes.yml` run [37254205824](https://github.com/joaovitorpina/Navaja/actions/runs/37254205824), on commit `1b754fe`: checks a to d passed, and both controls failed the checks they should. Every other job of the run passed too.
   - RustRover: not run yet. It needs a person.
-- **Numbers and evidence:** run 37253862965, job `s2-1`, on ubuntu-24.04 (Ubuntu 24.04.5, runner image 20260927.320.1), with rust-analyzer 1.99.0 (b940084 2026-09-28) from the 1.99.0 toolchain. The job took 58 s: 5 to 6 s per check, with rust-analyzer quiescent 1.3 to 1.5 s after it started. The S2.1 job of the run before it, [37253656398](https://github.com/joaovitorpina/Navaja/actions/runs/37253656398) on `7b2b934`, got the same answers; a push then cancelled that run's other jobs.
+- **Numbers and evidence:** run 37254205824, job `s2-1`, on ubuntu-24.04 (Ubuntu 24.04.5, runner image 20260927.320.1), with rust-analyzer 1.99.0 (b940084 2026-09-28) from the 1.99.0 toolchain. The job took 44 s: 3 to 4 s per check, with rust-analyzer quiescent about 1 s after it started. The `s2-1` jobs of runs [37253656398](https://github.com/joaovitorpina/Navaja/actions/runs/37253656398) on `7b2b934` and [37253862965](https://github.com/joaovitorpina/Navaja/actions/runs/37253862965) on `caf86db` got the same answers; a later push cancelled those runs' other jobs. `caf86db` and `1b754fe` have the same probe; `7b2b934` matched the definitions' names as substrings.
 
   | Check | What rust-analyzer answered |
   |---|---|
