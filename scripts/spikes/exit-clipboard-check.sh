@@ -28,7 +28,8 @@
 # folder outside CI), so that each can run as its own workflow step.
 #
 # `copy` writes app/e2e/spikes/exit-clipboard.e2e.ts and runs it alone with
-# --spec; `pnpm e2e` runs only app/e2e/specs/, so it never runs otherwise.
+# --spec; `pnpm e2e` runs only the specs app/e2e/wdio.conf.ts lists, never
+# app/e2e/spikes/, so it never runs otherwise.
 # The spec opens the UUID tool, reads the UUID it generated, presses the
 # output's Copy button (which calls copy_text) and saves the UUID for the
 # modes after it.
@@ -86,8 +87,9 @@ copy() {
   cat > "$SPEC" <<'EOF'
 // M2a exit check "Copy stays out of Windows clipboard history"
 // (docs/spikes.md). scripts/spikes/exit-clipboard-check.sh writes this file
-// outside specs/, so `pnpm e2e` skips it; the script runs it alone with
-// --spec, then looks for the copied UUID on the clipboard and in its history.
+// to app/e2e/spikes/, which wdio.conf.ts's spec list leaves out, so `pnpm e2e`
+// skips it; the script runs it alone with --spec, then looks for the copied
+// UUID on the clipboard and in its history.
 import { writeFileSync } from 'node:fs';
 import { $, browser, expect } from '@wdio/globals';
 

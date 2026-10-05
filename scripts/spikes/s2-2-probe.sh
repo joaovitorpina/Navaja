@@ -26,8 +26,9 @@
 # The view uses one Tailwind class that nothing else in the repository uses,
 # tracking-[0.4242em], so the build check can look for it in the emitted CSS.
 #
-# The end-to-end specs go to app/e2e/spikes/. `pnpm e2e` runs only
-# app/e2e/specs/, so each runs only when named with --spec:
+# The end-to-end specs go to app/e2e/spikes/. `pnpm e2e` runs only the specs
+# app/e2e/wdio.conf.ts lists, never app/e2e/spikes/, so each runs only when
+# named with --spec:
 # - s2-2-probe.e2e.ts, in the packaged app: the label, the answer from Rust
 #   and the class's letter spacing;
 # - s2-2-hmr.e2e.ts, in a debug build without Tauri's custom-protocol
@@ -263,8 +264,9 @@ EOF
 
   cat > "$SPEC" <<'EOF'
 // Spike S2.2 (docs/spikes.md): the probe's custom view in the packaged app.
-// scripts/spikes/s2-2-probe.sh writes this file outside specs/, so `pnpm e2e`
-// skips it; .github/workflows/spikes.yml runs it alone with --spec.
+// scripts/spikes/s2-2-probe.sh writes this file to app/e2e/spikes/, which
+// wdio.conf.ts's spec list leaves out, so `pnpm e2e` skips it;
+// .github/workflows/spikes.yml runs it alone with --spec.
 import { $, browser, expect } from '@wdio/globals';
 
 describe('S2.2 probe', () => {
@@ -289,8 +291,9 @@ EOF
 
   cat > "$HMR_SPEC" <<'EOF'
 // Spike S2.2 (docs/spikes.md): hot reload of the probe's view in the app's
-// own webview. scripts/spikes/s2-2-probe.sh writes this file outside specs/,
-// so `pnpm e2e` skips it; `s2-2-check.sh hmr-app` runs it alone, with app/'s
+// own webview. scripts/spikes/s2-2-probe.sh writes this file to
+// app/e2e/spikes/, which wdio.conf.ts's spec list leaves out, so `pnpm e2e`
+// skips it; `s2-2-check.sh hmr-app` runs it alone, with app/'s
 // Vite dev server on port 1420 and a debug build without Tauri's
 // custom-protocol feature, which loads the front end from that server
 // (build.devUrl) instead of embedding it.

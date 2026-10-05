@@ -9,6 +9,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 - **Spikes** are time-boxed, with PASS and FAIL criteria written first. Results go in `docs/spikes.md`. A fallback that gets taken becomes an ADR.
 - **Budgets** are rough, about 21 focused weeks in total. A milestone that runs a third over budget drops items from its cut list, in order.
 - **macOS work** that needs no human runs on `spikes.yml` (macos-26 and macos-26-intel). A Mac session at the end of each milestone covers UI-only checks.
+- **macOS 14 or later** is the minimum: the webview's dead proxy needs it ([ADR 0003](adr/0003-webview-network.md)). Every macOS build targets it.
 
 ### M1 · Stack decision recorded (≈0.5 wk, no source code)
 
@@ -67,7 +68,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
    - ESLint (flat config) and Prettier as `pnpm lint`, run in the CI checks job, with the custom-view import allowlist from architecture §4 on `tools/*/ui/**`. `$lib/view-kit` is the one app module it lets custom views import.
 8. **Window code:** `window.rs`, `guard.rs`, and `args.rs` with single instance and the elevation banner.
 9. **Tray:** a minimal tray with placeholder icons (Open, Search, `meta.tray` entries, Quit). **S2.3** runs on it before M2a exit. The StatusNotifier host check moved to M2b, item 1, beside S2.4.
-10. **End-to-end tests:** smoke (palette → UUID), single instance, a first launch with `--tool`, and the egress canary. A Linux strace guard is added, then **S2.6** and **S2.7**.
+10. **End-to-end tests:** smoke (palette → UUID), single instance, a first launch with `--tool`, the egress canary, and the data-folder canary (§2). A Linux strace guard is added, then **S2.6** and **S2.7**.
 11. **`docs/adding-a-tool.md`.**
 
 **Exit:**
@@ -87,9 +88,9 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 ### M2b · Lifecycle, footprint, bundles (≈2.5 wk)
 
 1. **S2.4** and the StatusNotifier host check in `platform/linux.rs`, then close behaviour per OS through `ShellPlatform`.
-2. **`xtask measure`**, then **S2.5**. Implement the winning hide policy, delete the other path, and record the numbers in ADR 0003.
+2. **`xtask measure`**, then **S2.5**. Implement the winning hide policy, delete the other path, and record the numbers in ADR 0004.
 3. **Final brand SVGs** and `xtask icons`, which wraps `tauri icon` and also produces the macOS template tray icon.
-4. **`bundle.yml`:** a weekly, keyless build of the exact release matrix.
+4. **`bundle.yml`:** a weekly, keyless build of the exact release matrix. It also checks that the macOS bundle's `Info.plist` sets `LSMinimumSystemVersion` to 14.0 ([ADR 0003](adr/0003-webview-network.md)): no CI job builds a bundle before it.
 5. **Stretch, the first thing to cut:** the global-shortcut recorder and `docs/wayland-shortcut.md`.
 6. **`CONTRIBUTING.md`** with the QA checklist.
 7. **macOS clipboard:** keep copies off Universal Clipboard. On macOS, `copy_text` writes through `NSPasteboard` (objc2-app-kit) instead of arboard: `prepareForNewContentsWithOptions(CurrentHostOnly)`, then the text and the ConcealedType marker. arboard's own `set` clears the pasteboard, which would drop that option.
@@ -107,7 +108,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 - On GNOME and KDE Wayland, `--show`, `--toggle` and `--tool` raise and focus a window that is visible but unfocused.
 - On macOS, a second user's Navaja keeps its own single instance, and a socket owned by another user is refused.
 - On macOS, a copy does not appear on a Handoff-paired device.
-- ADR 0003 has numbers per OS.
+- ADR 0004 has numbers per OS.
 - `bundle.yml` is green for every format.
 - Screen readers pass: NVDA, VoiceOver and Orca.
 - 100-200 % scaling, light and dark themes, and the brand review all pass.
@@ -208,6 +209,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
    - install.md covers SmartScreen "More info → Run anyway", Smart App Control, Gatekeeper "Open Anyway", the Linux tray host and the NVIDIA variables.
    - privacy.md lists the OS services in a macOS text field's context menu: Look Up, Translate, Search With Google, Share and Services. They send the selected text only when the user picks one.
    - Optional, later: on macOS, replace that menu with a native one built from `PredefinedMenuItem` cut, copy, paste and select all.
+   - privacy.md carries ADR 0003's text for privacy.md word for word ([ADR 0003](adr/0003-webview-network.md), "What is disclosed"): the traffic of system services that the webview wakes and that Navaja cannot stop, and who could listen on the dead proxy's port. The ADR's table and `scripts/spikes/s2-7-disclosed.tsv` are S2.7's labels for that traffic, not the text.
    - Next to those services, privacy.md lists the hand-offs (architecture §5): About's repository link opens in the default browser and the logs folder in the file manager, only when the user asks. The browser or file manager loads them, not Navaja, even when Windows starts the browser as Navaja's child process.
 7. **Final QA:**
    - `measure`;
@@ -223,7 +225,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 
 **Exit:**
 - v1.0.0 is published with every artifact, signature and `latest.json`.
-- Clean installs work on Windows (setup.exe, Scoop), macOS (DMG, tap), Ubuntu 22.04/24.04 (deb, AppImage) and Fedora (rpm).
+- Clean installs work on Windows (setup.exe, Scoop), macOS 14 or later (DMG, tap), Ubuntu 22.04/24.04 (deb, AppImage) and Fedora (rpm).
 - **Without consent:** no packets leave Navaja's process tree in 10 minutes.
 - **With consent:** traffic goes only to github.com and release-assets.githubusercontent.com.
 - One-click update works on every format.
@@ -277,14 +279,19 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 **Local commands:**
 ```sh
 pnpm install --frozen-lockfile
-cargo xtask check                    # crate edges, dependency closures, release config, ACL snapshot, version parity
+cargo xtask check                    # crate edges, dependency closures, release config (CSP, features, hidden windows), ACL snapshot, version parity
 cargo xtask acl                      # after a command or capability change: rewrite acl.lock.json, then review its diff
 cargo xtask bindings --check         # ts-rs output == committed bindings
 cargo xtask tool-gate origin/main    # tool PR touches only what architecture §4 allows
 cargo fmt --all --check
 rustfmt --edition 2024 --check tools/*/mod.rs  # tool modules, which cargo fmt skips (declared inside a macro)
 cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace        # includes serial live port tests from M4
+cargo nextest run --workspace        # includes serial live port tests from M4, and the clipboard markers check (below)
+# The clipboard markers check replaces your clipboard's contents, and on X11 leaves it empty. Its ordinary copy can reach
+# clipboard history (Win+V, Klipper, macOS history apps), and cloud clipboard or Universal Clipboard when they are on.
+# Linux: it reads X11, so it skips with no X display, or where arboard copies over Wayland (KDE, wlroots). On GNOME
+# Wayland arboard falls back to X11, so it runs there. This runs it on a private X server, away from your clipboard:
+env -u WAYLAND_DISPLAY xvfb-run -a cargo nextest run -p navaja --test clipboard
 cargo deny check bans licenses sources
 cargo xtask licenses                 # npm licences vs deny.toml's allowlist + js-licenses.toml (after pnpm install)
 bash scripts/check-fixture-secrets.sh  # gitleaks over tracked fixtures and snapshots (needs gitleaks on PATH)
@@ -316,10 +323,10 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 | Workflow | Runs |
 |---|---|
 | `ci.yml` checks (ubuntu-24.04) | rustfmt (`cargo fmt`, plus `rustfmt --check tools/*/mod.rs` for the tool modules it skips), ESLint and Prettier (`pnpm lint`), svelte-check, cargo-deny on 4 targets, `xtask check`, `bindings --check`, `tool-gate`, the JS licence allowlist (`xtask licenses`), gitleaks over fixtures and snapshots (`scripts/check-fixture-secrets.sh`) |
-| `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --no-bundle` → the same build with `--features e2e` and `e2e.conf.json` → WebdriverIO. Linux runs the suite under the strace guard, inside `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The job stops after 45 min, so a hung run fails instead of holding the runner for GitHub's 6 h. macOS also runs clippy, with the same bans and `-D warnings`, on the Intel slice of the universal build: `cargo clippy --workspace --all-targets --target x86_64-apple-darwin -- -D warnings`. That step keys on `runner.os` and fails if the runner is not arm64, since then nothing would lint the arm64 slice |
+| `ci.yml` os, ×3 (windows-2025, ubuntu-24.04, macos-26) | clippy → nextest with live tests → doctests → `tauri build --debug --no-bundle` → the same build with `--features e2e` and `e2e.conf.json` → WebdriverIO, whose last spec quits the app and then runs the data-folder check and its negative control (`app/e2e/data-folder-check.mjs`). Linux runs the suite under the strace guard, inside `dbus-run-session -- xvfb-run` with `WEBKIT_DISABLE_DMABUF_RENDERER=1`. The job stops after 45 min, so a hung run fails instead of holding the runner for GitHub's 6 h. macOS also runs clippy, with the same bans and `-D warnings`, on the Intel slice of the universal build: `cargo clippy --workspace --all-targets --target x86_64-apple-darwin -- -D warnings`. That step keys on `runner.os` and fails if the runner is not arm64, since then nothing would lint the arm64 slice. After the builds, `scripts/check-macos-target.sh` reads the minimum macOS back from each file they produced, which must be 14.0 (ADR 0003) |
 | `advisories.yml` | Daily at 04:23 UTC, and by hand: `cargo deny --all-features check advisories` on deny.toml's 4 targets, with cargo-deny installed the same way as in `ci.yml` (Renovate moves both install-action pins in one branch). A failed run on main, scheduled or by hand, opens an issue labelled `advisories`, or comments on the open one (`scripts/advisories/issue.sh`). A run by hand on another branch checks that branch and reports nothing. It never blocks a PR. A PR that changes it or `scripts/advisories/` runs the check, then the issue path without writing to any issue: `issue.sh` against a stub `gh` (`issue-test.sh`), the check against a fixture advisory for serde that it must fail on (`fixture-check.sh`), and `issue.sh` as a dry run against the repository's open issues. GitHub turns a scheduled workflow off after 60 days without activity in a public repository; the Actions tab turns it back on |
 | `bundle.yml` | Weekly, keyless build of the release matrix: NSIS and zip, universal DMG, deb, rpm and AppImage in `container: ubuntu:22.04` |
-| `spikes.yml` | Manual, and on a PR that changes it or `scripts/spikes/`. Spike steps that need no human. Job `s2-2` (S2.2), on windows-2025, ubuntu-24.04 and macos-26: a throwaway tool with a custom view (`scripts/spikes/s2-2-probe.sh`) through `cargo test -p navaja-tools`, `pnpm check` (and a type error in a .ts and a .svelte file it must refuse), `pnpm lint` (and forbidden imports in a .ts and a .svelte file, and a misformatted file, it must refuse), `pnpm test`, `pnpm build`, the end-to-end build plus the probe's own spec, an HMR check against the Vite dev server (`hmr-check.mjs`), and an HMR check in the app's webview (a dev build without `custom-protocol` that loads the dev server, plus a second spec that edits the view). Job `s2-3` (S2.3), on macos-26 and windows-2025, runs the app as shipped (`scripts/spikes/s2-3-check.sh`, `s2-3-tray.ps1`). On macOS it captures the menu bar before the app starts and in the light and the dark appearance, and checks that the template icon is drawn, monochrome and tinted like the clock; its negative controls are the capture from before the app started and a build whose icon is not a template, which must fail on its tint. On Windows it promotes the notification-area icon, finds it through UI Automation, captures it at the runner's 100 %, and checks that an icon is drawn in its button; the negative control is the same check on an empty stretch of the taskbar. The captures are the run's artifact. Job `exit-clipboard-history` (M2a exit: copy stays out of Windows clipboard history), on windows-2025 (`scripts/spikes/exit-clipboard-check.sh`, `clipboard-history.ps1`): Navaja's Copy button through a spec written at run time, the exclusion formats on the clipboard (an ordinary copy must fail that check), and the history checks with their controls. Windows Server keeps clipboard history off, so there the summary marks history off and those checks inconclusive, and the job leaves a warning; the history checks have never run. Each check is its own step, and the run summary gets a PASS/FAIL table per OS |
+| `spikes.yml` | Manual, and on a PR that changes it or `scripts/spikes/`. Spike steps that need no human. Job `s2-2` (S2.2), on windows-2025, ubuntu-24.04 and macos-26: a throwaway tool with a custom view (`scripts/spikes/s2-2-probe.sh`) through `cargo test -p navaja-tools`, `pnpm check` (and a type error in a .ts and a .svelte file it must refuse), `pnpm lint` (and forbidden imports in a .ts and a .svelte file, and a misformatted file, it must refuse), `pnpm test`, `pnpm build`, the end-to-end build plus the probe's own spec, an HMR check against the Vite dev server (`hmr-check.mjs`), and an HMR check in the app's webview (a dev build without `custom-protocol` that loads the dev server, plus a second spec that edits the view). Job `s2-3` (S2.3), on macos-26 and windows-2025, runs the app as shipped (`scripts/spikes/s2-3-check.sh`, `s2-3-tray.ps1`). On macOS it captures the menu bar before the app starts and in the light and the dark appearance, and checks that the template icon is drawn, monochrome and tinted like the clock; its negative controls are the capture from before the app started and a build whose icon is not a template, which must fail on its tint. On Windows it promotes the notification-area icon, finds it through UI Automation, captures it at the runner's 100 %, and checks that an icon is drawn in its button; the negative control is the same check on an empty stretch of the taskbar. The captures are the run's artifact. Job `exit-clipboard-history` (M2a exit: copy stays out of Windows clipboard history), on windows-2025 (`scripts/spikes/exit-clipboard-check.sh`, `clipboard-history.ps1`): Navaja's Copy button through a spec written at run time, the exclusion formats on the clipboard (an ordinary copy must fail that check), and the history checks with their controls. Windows Server keeps clipboard history off, so there the summary marks history off and those checks inconclusive, and the job leaves a warning; the history checks have never run. Job `s2-7` (S2.7), on the same three runners (`scripts/spikes/s2-7-egress.sh`): a 5 min baseline without the app, then the e2e build idles 5 min with its window shown, then `pnpm e2e` runs, each phase under a capture of the VM's traffic. Linux runs the app and WebdriverIO in a network namespace with NAT and a public resolver and captures its veth and loopback with tcpdump, and the host's uplink for comparison with the baseline; after each phase the namespace must still reach the network. macOS captures with tcpdump on pktap, which names each packet's process, and counts the daemons WebKit starts for the app (webprivacyd, the Safe Browsing service) as the app's when they start within 15 s after it. Windows reads the WFP connection, process creation, DNS client and BITS client logs, names the hosts from a pktmon capture, and counts WAM's sign-in service and Microsoft-account provider in the 15 s after an app start as the app's. Traffic of those daemons and services that an entry of `scripts/spikes/s2-7-disclosed.tsv` covers is reported as disclosed, in its own summary row, and fails nothing (ADR 0003); anything else still fails. A control request to github.com (and on Windows a BITS download) must be captured and attributed first, each phase must show the app's own WebDriver traffic, and nothing in the baseline may count as the app's, so an empty capture can't pass and the attribution can't blame the machine's own traffic on the app. Each later phase also lists, for review, the traffic outside the tree that the baseline lacks, and on Windows what follows each app start. The captures are uploaded as an artifact for 14 days. Each check is its own step, and the run summary gets a PASS/FAIL table per OS, plus a findings table per phase for S2.7 |
 | `release.yml` + `release-build.yml` | Every push to main runs release-plz, which opens or updates the release PR. Merging that PR runs the build: tauri-action v1, then `verify-release`, attestations, `SHA256SUMS.minisig`, undraft, and bucket and tap updates. `release-build.yml` can also be run by hand on a tag |
 
 **CI hygiene:**
@@ -335,14 +342,25 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 - **On every PR:**
   - an egress canary: fetch, image, beacon, WebSocket, `window.open`, top-level navigation, and WebRTC in the page and in the iframes it creates, all blocked. Fetch, image, beacon and WebSocket must each raise their own CSP violation, since a request that fails for some other reason proves nothing;
   - a Linux strace guard: a `connect`, `sendto`, `sendmsg` or `sendmmsg` to any address other than 127.0.0.1 or ::1 fails the run (the 127.0.0.53 DNS stub included). So does an inet call whose address can't be read, or an app process still running after the suite. The suite never opens a URL or the logs folder: strace would follow the browser or file manager that starts (architecture §5, "Hand-offs to other programs");
-  - a canary input at `NAVAJA_LOG=trace`, plus a panicking tool, must not appear in logs, crash files or stderr. The integration test `app/src-tauri/tests/privacy.rs`, run by nextest, checks logs and crash files at trace level; it does not capture stderr yet.
+  - a canary input at `NAVAJA_LOG=trace`, plus a panicking tool, must not appear in logs, crash files or stderr. The integration test `app/src-tauri/tests/privacy.rs`, run by nextest, checks logs and crash files at trace level; it does not capture stderr yet;
+  - the clipboard privacy markers (architecture §5, "Clipboard"): `copy_carries_the_privacy_markers` (`app/src-tauri/tests/clipboard`), run by nextest, copies a random canary through `copy_text`'s own call and reads the markers back through the OS's own API, against an ordinary copy that must carry none. It checks the three Windows formats and macOS's `org.nspasteboard.ConcealedType`. Its Linux part (`x-kde-passwordManagerHint`, over X11, which is also how arboard copies on GNOME Wayland) needs an X display, which CI's nextest step does not have, so on CI it prints why it skipped. It runs only where a developer runs it with a display, e.g. under `xvfb-run` (local commands above);
+  - the webview data folder holds no input text. The suite's last spec (`app/e2e/last/data-folder.e2e.ts`) enters a fresh random canary into every text field through WebDriver: the sidebar filter, the palette's search, and any text field on Home, Settings, About and each tool's page. It then quits the app through its `quit` command, and its next test runs `app/e2e/data-folder-check.mjs`, which searches every folder where the end-to-end build keeps data on that OS: `NAVAJA_APP_DIR`, Tauri's folders for the e2e identifier, and the webview's (WebView2's `EBWebView`, WebKit's and WebKitGTK's). The script says why it searches each one.
+    - The embedded WebDriver sets each value from script and fires input and change events. No real keystrokes reach the engine, so the check does not cover anything the engine keeps only for trusted keyboard or IME input.
+    - Every file is read as raw bytes, binary and compressed ones included. A hit is the canary in UTF-8 or UTF-16LE, or any 12 characters of it in a row, since the Snappy compression in Chromium's LevelDB files can split it. Gzip and zlib files are also searched decompressed.
+    - It fails closed: a folder that must exist and is missing, a folder that always holds files and is empty, zero files searched, a file it can't read, or folders still changing a minute after the quit all fail it.
+    - Its negative control, the spec's last test, plants seven files in each of those folders and must find the canary in every one before removing them. Together they hold each kind of hit: the whole canary and 12 characters of it, each in UTF-8 and in UTF-16LE, and the whole canary inside a gzip file (in both encodings) and a zlib file (in UTF-8).
+    - It is part of the end-to-end suite, so every `pnpm e2e` runs it, as CI's end-to-end step does on each OS (on Linux, inside the strace guard's run).
 - **In M2a and M6:**
-  - a whole-process-tree NIC capture on each OS (S2.7), without opening the repository link or the logs folder, whose browser or file manager may count as part of the tree;
-  - the webview data folder holds no input text;
-  - copied tokens are absent from clipboard history and Klipper.
+  - a whole-process-tree NIC capture on each OS (S2.7), without opening the repository link or the logs folder, whose browser or file manager may count as part of the tree. The webview's web traffic goes to a dead proxy on every OS (architecture §5). What system services the webview wakes, and Navaja cannot stop, is on S2.7's disclosed list ([ADR 0003](adr/0003-webview-network.md)): reported apart, never a pass for anything else;
+  - copied tokens are absent from clipboard history and Klipper:
+    - the markers are checked on every PR on Windows and macOS (above). The Linux one is checked only when a developer runs the check with an X display;
+    - a person checks that Windows clipboard history honours them (spikes.md, "M2a exit check");
+    - a person checks Klipper during manual QA on KDE Plasma 6 Wayland (below). Its compositor offers data-control, so arboard copies over Wayland there, which no automated check reads;
+    - nothing checks the macOS history apps that follow nspasteboard.org yet.
 
 **Manual QA**, at each milestone end, on Windows 11, Ubuntu GNOME Wayland with AppIndicator, Ubuntu X11, Fedora GNOME (no tray), KDE Plasma 6 Wayland and macOS 26:
 - **Shell:** starts hidden; tray menu; close and quit paths; `--toggle` and `--tool`; keyboard-only use; About's repository link opens the browser and Settings' "Open logs folder" opens the file manager (no automated test opens them).
+- **Klipper, M2a and M6** (KDE Plasma 6 Wayland): a UUID copied with Navaja's Copy button, or with Ctrl+C on the output, pastes, and Klipper's history does not list it. An ordinary copy is listed, as the control.
 - **Wayland focus, from M2b** (GNOME and KDE): `--show`, `--toggle` and `--tool` raise and focus a window that is visible but unfocused. Tray-menu actions may leave it unfocused; that is a known limitation (M2b, item 8).
 - **M2b and M6:** screen readers (NVDA, Narrator, Orca, VoiceOver); 100-200 % scaling; light and dark themes; on macOS, a copy does not reach a Handoff-paired device.
 - **Ports, from M4:** an elevated listener gets a reason and a guarded command; nodemon kill; pm2 respawn.
@@ -357,7 +375,7 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 |---|---|
 | Killing the wrong process: PID reuse, stale PPIDs, dead socket owners | Edges ordered by start time; Windows owner verification; the plan is re-validated from a fresh snapshot; identity re-checked before each signal; denylist; ancestors never by default; spikes S4.3a and S4.3b |
 | WebView2 memory comes in far above expectations (criterion 1) | S2.5 measures the whole process tree and picks the hide policy; a regression above 20 % blocks a milestone; the stack stays |
-| "Fully offline" is undermined by webview telemetry, crash dumps, DNS prefetch or WebRTC | Hardening (architecture §5), egress checks on every PR, S2.7 captures; anything uncontrollable is disclosed in privacy.md and the first-run dialog |
+| "Fully offline" is undermined by webview telemetry, crash dumps, DNS prefetch or WebRTC | Hardening and the dead proxy on every OS (architecture §5), egress checks on every PR, S2.7 captures; anything uncontrollable is disclosed in privacy.md and the first-run dialog (ADR 0003's list) |
 | Unsigned releases: SmartScreen, Smart App Control, Gatekeeper, Defender false positives | install.md walkthroughs; attestations and a signed `SHA256SUMS`; Defender submission per release; SignPath application right after v1 |
 | Undocumented OS interfaces change: `pcblist_n`, the PEB layout, netsh text, http.sys | One module each, classified fallbacks ("likely", `NotSupported`), and locale and version fixtures |
 | Tauri drift and v3 | Exact CLI pin plus a version-parity check; grouped Renovate PRs merged only after end-to-end tests on all three OSes; v3 after v1 |

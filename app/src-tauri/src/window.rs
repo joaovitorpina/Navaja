@@ -23,12 +23,39 @@ const READY_TIMEOUT: Duration = Duration::from_secs(5);
 /// taskbar before the click arrives. KeePassXC allows the same 500 ms.
 const TRAY_BLUR_GRACE: Duration = Duration::from_millis(500);
 
-/// Where the webview's web traffic goes on Linux: a closed, privileged
-/// loopback port (the discard service's). WebKitGTK looks a link's host up
-/// while it waits for the navigation decision, even one the guard then
-/// denies; through this proxy nothing is resolved and nothing leaves the
-/// machine. The app's own scheme and IPC never use the network.
-#[cfg(target_os = "linux")]
+/// Where the webview's web traffic goes, on every OS: a closed loopback port
+/// (the discard service's). The engine hands a proxied request's host name
+/// to the proxy instead of resolving it, so through this one nothing is
+/// resolved and, while nothing listens there, nothing leaves the machine
+/// (docs/architecture.md §5, spike S2.7). Without it:
+/// - WebKitGTK and macOS's WebKit look a link's host up while they wait for
+///   the navigation decision, even one the guard then denies;
+/// - WebView2's network service fetches its own configuration and component
+///   update checks, and probes `wpad` for proxy auto-detection.
+///
+/// Port 9 is privileged only on Linux, while
+/// `net.ipv4.ip_unprivileged_port_start` keeps its default of 1024. On
+/// Windows any local process may listen on 127.0.0.1:9, and on macOS any
+/// user on the wildcard address, 0.0.0.0:9, which also receives connections
+/// to 127.0.0.1:9. Such a listener would get the engine's proxied requests,
+/// host names included, and could pass them on: ADR 0003 discloses that.
+///
+/// How each engine gets it:
+/// - Windows: wry adds `--proxy-server=http://127.0.0.1:9` to WebView2's
+///   browser arguments, after its defaults (wry 0.57.0:
+///   `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`, and
+///   `--autoplay-policy=no-user-gesture-required` while autoplay is on, its
+///   default). Navaja passes no arguments of its own: they would replace all
+///   three, so they would have to repeat them (docs/architecture.md §5).
+/// - Linux: wry sets it on the web context's `WebsiteDataManager`.
+/// - macOS: Tauri's `macos-proxy` feature sets it on the webview's
+///   `WKWebsiteDataStore` (`proxyConfigurations`). That API needs macOS 14,
+///   which is why tauri.conf.json's `bundle.macOS.minimumSystemVersion` and
+///   `.cargo/config.toml`'s `MACOSX_DEPLOYMENT_TARGET` are 14.0.
+///
+/// The app's own pages and IPC never reach it: they are custom schemes on
+/// Linux and macOS, and on Windows `http://tauri.localhost` and
+/// `http://ipc.localhost`, which wry serves from the app itself.
 const DEAD_PROXY: &str = "http://127.0.0.1:9";
 
 /// What a second launch or the tray asks the window to open, besides
@@ -138,7 +165,6 @@ pub fn create_main<R: Runtime>(
         builder = builder.initialization_script(route_script(id));
     }
     // Not in dev, where the front end comes from the Vite server.
-    #[cfg(target_os = "linux")]
     if !tauri::is_dev()
         && let Ok(proxy) = tauri::Url::parse(DEAD_PROXY)
     {
@@ -146,15 +172,21 @@ pub fn create_main<R: Runtime>(
     }
     let window = builder.build()?;
 
-    // WebKit skips the guard script in `srcdoc` frames, so on macOS WebRTC is
-    // also switched off in the engine (docs/architecture.md §5).
+    // macOS preferences (docs/architecture.md §5): WebKit skips the guard
+    // script in `srcdoc` frames, so WebRTC is also switched off in the
+    // engine; and the fraudulent-website warnings are off, which the app's
+    // own pages never need, so that WebKit has no reason to ask the system's
+    // Safe Browsing service about them (unproven on CI; ADR 0003).
     #[cfg(target_os = "macos")]
     if let Err(error) = window.with_webview(|webview| {
         if !crate::platform::disable_peer_connections(webview.inner()) {
             tracing::warn!("this WebKit has no switch to turn WebRTC off");
         }
+        if !crate::platform::disable_fraudulent_website_warnings(webview.inner()) {
+            tracing::warn!("could not turn WebKit's fraudulent-website warnings off");
+        }
     }) {
-        tracing::warn!(%error, "could not reach the webview to turn WebRTC off");
+        tracing::warn!(%error, "could not reach the webview to set its preferences");
     }
 
     // The toggles read focus from the window's own events, not is_focused():
@@ -387,6 +419,16 @@ mod tests {
         assert!(!should_hide(false, false, true, Some(JUST_NOW)));
         assert!(!should_hide(true, true, false, Some(JUST_NOW)));
         assert!(!should_hide(true, true, true, None));
+    }
+
+    #[test]
+    fn the_dead_proxy_is_loopback_port_9() {
+        // create_main skips a proxy that does not parse, and wry needs an
+        // explicit port (Url::port is None for http's default, 80).
+        let proxy = tauri::Url::parse(DEAD_PROXY).expect("DEAD_PROXY parses");
+        assert_eq!(proxy.scheme(), "http");
+        assert_eq!(proxy.host_str(), Some("127.0.0.1"));
+        assert_eq!(proxy.port(), Some(9));
     }
 
     #[test]
