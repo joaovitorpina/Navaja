@@ -185,30 +185,43 @@ mod tests {
         Registry::new(tools).unwrap()
     }
 
+    /// Checked per tool, so a shipped tool that sets `tray` later keeps it
+    /// passing.
     #[test]
     fn only_tray_tools_get_an_entry() {
         let registry = registry();
         let entries = tool_entries(registry.metas());
-        assert_eq!(
-            entries,
-            [("tool:pinned".to_owned(), "Pinned tool".to_owned())]
+        assert!(
+            entries.contains(&("tool:pinned".to_owned(), "Pinned tool".to_owned())),
+            "{entries:?}"
         );
-        let listed = registry.metas().filter(|meta| meta.tray).count();
-        assert_eq!(entries.len(), listed);
+        for meta in registry.metas() {
+            let id = format!("tool:{}", meta.id);
+            let listed = entries.iter().filter(|(entry, _)| *entry == id).count();
+            assert_eq!(listed, usize::from(meta.tray), "{}", meta.id);
+        }
+        assert_eq!(
+            entries.len(),
+            registry.metas().filter(|meta| meta.tray).count()
+        );
     }
 
     #[test]
     fn an_entry_opens_its_tool() {
-        let entries = tool_entries(registry().metas());
+        let registry = registry();
+        let entries = tool_entries(registry.metas());
         assert!(!entries.is_empty());
-        for (id, _) in entries {
-            assert_eq!(
-                menu_action(&id),
-                Some(MenuAction::Open(Request {
-                    tool: Some("pinned".to_owned()),
-                    palette: false,
-                }))
-            );
+        for (id, label) in &entries {
+            let Some(MenuAction::Open(Request {
+                tool: Some(tool),
+                palette: false,
+            })) = menu_action(id)
+            else {
+                panic!("{id} does not open a tool");
+            };
+            let meta = registry.meta(&tool).expect("a registered tool");
+            assert!(meta.tray, "{tool}");
+            assert_eq!(&meta.name, label);
         }
     }
 
