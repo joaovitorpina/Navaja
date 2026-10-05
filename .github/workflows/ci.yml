@@ -74,8 +74,10 @@ jobs:
         with:
           tool: cargo-deny
 
+      # --locked: without it, cargo-deny's cargo metadata call would rewrite a
+      # stale Cargo.lock, and `cargo xtask check` below would pass on it.
       - name: cargo-deny (bans, licenses, sources)
-        run: cargo deny --all-features check bans licenses sources
+        run: cargo deny --locked --all-features check bans licenses sources
 
       # `xtask check` (the ACL snapshot) and `xtask bindings` build the app crate,
       # which links Tauri.

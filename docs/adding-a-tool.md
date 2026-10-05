@@ -306,7 +306,7 @@ pnpm check && pnpm lint && pnpm test  # custom views only: svelte-check, the imp
 
 `cargo fmt` never sees your tool's files: `tools/lib.rs` declares them inside `register_tools!`, and rustfmt does not expand macros. Running rustfmt on `mod.rs` also checks the files it declares, such as `tests.rs`; without `--check`, it formats them. CI runs the same check on every tool folder.
 
-- **If you changed `tools/Cargo.toml`,** a dev-dependency such as proptest included: build once, so that Cargo updates `Cargo.lock`, commit the lockfile with the tool, and run the cargo-deny line above. Nothing else notices a lockfile left behind: `tool-gate` sees committed changes only, and CI does not build with `--locked`.
+- **If you changed `tools/Cargo.toml`,** a dev-dependency such as proptest included: build once, so that Cargo updates `Cargo.lock`, commit the lockfile with the tool, and run the cargo-deny line above. CI catches a lockfile left behind: its checks job runs cargo-deny and `cargo xtask check` with `--locked`, so a stale `Cargo.lock` fails there instead of being rewritten. `tool-gate` sees committed changes only. On your machine, `cargo xtask` runs with `--locked` too, and fails the same way until a build updates the lockfile.
 - **On Windows, keep the checkout path short,** such as `C:\src\Navaja`. With a long one, MSVC's linker failed with LNK1104 on a build script's path over 260 characters, even with long paths turned on in Windows.
 
 Then commit, and check what your PR touches:
