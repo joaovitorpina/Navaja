@@ -14,11 +14,6 @@
   let filter = $state('');
   let hits = $state.raw<SearchHit[] | null>(null);
 
-  // TEMPORARY negative test: keeps the filter in the webview storage.
-  $effect(() => {
-    localStorage.setItem('navaja-filter', filter);
-  });
-
   $effect(() => {
     const query = filter.trim();
     if (!query) {
