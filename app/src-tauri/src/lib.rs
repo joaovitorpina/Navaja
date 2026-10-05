@@ -93,12 +93,7 @@ pub fn run() -> Result<i32, StartError> {
     let state = Arc::new(state::AppState::new(registry, settings, app_dir));
 
     let initial_tool = args.tool.filter(|id| state.registry.meta(id).is_some());
-    let tray_tools: Vec<(String, String)> = state
-        .registry
-        .metas()
-        .filter(|meta| meta.tray)
-        .map(|meta| (meta.id.to_string(), meta.name.clone()))
-        .collect();
+    let tray_tools = tray::tool_entries(state.registry.metas());
 
     let builder = tauri::Builder::default()
         // First, so a second launch hands its arguments over and exits.

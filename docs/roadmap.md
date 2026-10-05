@@ -279,7 +279,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
 **Local commands:**
 ```sh
 pnpm install --frozen-lockfile
-cargo xtask check                    # crate edges, dependency closures, release config, ACL snapshot, version parity
+cargo xtask check                    # crate edges, dependency closures, release config (CSP, features, hidden windows), ACL snapshot, version parity
 cargo xtask acl                      # after a command or capability change: rewrite acl.lock.json, then review its diff
 cargo xtask bindings --check         # ts-rs output == committed bindings
 cargo xtask tool-gate origin/main    # tool PR touches only what architecture §4 allows

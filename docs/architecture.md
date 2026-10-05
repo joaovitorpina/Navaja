@@ -62,7 +62,7 @@ navaja (app) ─► navaja-tools ─► navaja-ports ─► navaja-core
 - Crates under `crates/*` depend only on `navaja-core`. The one exception is `navaja-docker`, which also depends on `navaja-ports` for the `ContainerEngine` trait and the model types.
 - Tools may use any `crates/navaja-*` crate except `navaja-docker`.
 - Nothing depends on `tools/` or on the app.
-- **No networking outside `navaja-docker` and the app.** Only their dependency trees may contain Tauri, tokio, mio, socket2, an HTTP client or bollard. `cargo xtask check` asserts this, and cargo-deny `wrappers` back it up.
+- **No networking outside `navaja-docker` and the app.** Only their dependency trees may contain Tauri, tokio, mio, socket2, an HTTP client or bollard. The one other exception is xtask, a repository tool that never ships: it resolves the app's ACL with tauri-utils (§5). `cargo xtask check` asserts this over the normal dependencies of every other workspace crate, at any depth, and names the path to each one it finds. cargo-deny `wrappers` back it up for reqwest, hyper and bollard, and they cover xtask too.
 - **Two network dependencies, each with one owner.** Only `navaja-docker` pulls in bollard and hyper, and only `tauri-plugin-updater` pulls in reqwest.
   - **Test builds only:** hyper also comes in through axum, the WebDriver server inside `tauri-plugin-wdio-webdriver`. That plugin is part of the app's test-only `e2e` feature (§5), never of a release build, and cargo-deny allows axum under it alone.
 - **Lints** ban printing, `exit`, `unsafe` outside FFI modules, socket and resolver calls, and `Command::new`.
@@ -129,7 +129,8 @@ register_tools! {
 - every declared action, passed to `invoke` with a pre-cancelled `Ctx` and the junk input `{"__navaja_probe__": true}`, returns `core.invalid_input` or `core.cancelled` (tools parse with `typed()` and call `ctx.check()` before any side effect);
 - the generic views' inputs are accepted: defaults, every choice, both toggle values and both integer bounds;
 - every `ErrorCode::from_static` literal in a tool's folder is in the tool's namespace;
-- `Registry::run` refuses an undeclared action with `core.unknown_action`.
+- `Registry::run` refuses an undeclared action with `core.unknown_action`;
+- searching "uid" ranks uuid first (roadmap M2a exit).
 
 ## 4. Extensibility contract
 
@@ -230,7 +231,7 @@ Rust never runs a destructive action from argv.
 - **Window:** one Rust builder creates it with:
   - incognito mode;
   - new windows denied;
-  - hidden until ready;
+  - hidden until ready. `cargo xtask check` requires `"create": false` and `"visible": false` on every window in `tauri.conf.json`. Tauri reads a missing key as true, and would then build the window at start, without this builder, and show it before the front end is ready;
   - no devtools in release builds.
 - **`navaja-guard` plugin:**
   - **Navigation allowlist:** only this OS's app origin, `tauri://localhost` on macOS and Linux and `http://tauri.localhost` on Windows. The Vite dev server is allowed only when `tauri::is_dev()` is true. A blocked navigation is logged by its scheme, never its URL.
