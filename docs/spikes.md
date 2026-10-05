@@ -9,7 +9,7 @@ A spike is a short, time-boxed experiment. It settles a question before the code
 - A gating spike runs before the work it gates.
 - A fallback you take becomes an ADR in `docs/adr/`.
 - Keep raw outputs (captures, logs, numbers) next to the entry or in `crates/*/tests/fixtures/`, as UTF-8 text such as redacted dumps or JSON. Redact arguments and anything secret. gitleaks checks fixtures and snapshots for secrets, but skips binary captures, archives, UTF-16 text, symlinks and the paths it allowlists, such as an image, a `.bin` or a lockfile (roadmap §2, "Secrets in fixtures").
-- Every `spikes.yml` job names what removes it: a `Lifetime:` line ends the comment above the job, and its entry here has a **The job's lifetime** line. When that happens, the job is deleted with its scripts in `scripts/spikes/`, unless the line promotes it into `ci.yml` (or, for `s2-7`, into the release checks, roadmap M6). The PR that deletes or moves a job also updates the docs that name it, such as roadmap §2's `spikes.yml` row and the ADRs. The entry here stays as the record.
+- Every `spikes.yml` job names what removes it: a `Lifetime:` line ends the comment above the job, and its entry here has a **The job's lifetime** line. When that happens, the job is deleted with its scripts in `scripts/spikes/`, unless the line moves it into the release checks (only `s2-7`'s does, roadmap M6). The PR that deletes or moves a job also updates the docs that name it, such as roadmap §2's `spikes.yml` row and the ADRs. The entry here stays as the record.
 
 ## Template
 
@@ -27,7 +27,7 @@ Copy this for each spike and fill it in.
 - **Result:** PASS / FAIL (date)
 - **Numbers and evidence:** tables, links to fixtures
 - **Decision:** what changes in the code or docs (ADR link if a fallback was taken)
-  - **The job's lifetime:** for a spike with a `spikes.yml` job, what deletes the job or moves it into `ci.yml` (Rules)
+  - **The job's lifetime:** for a spike with a `spikes.yml` job, what deletes the job, or moves it into the release checks (Rules)
 ```
 
 ## Results
@@ -243,8 +243,8 @@ Copy this for each spike and fill it in.
   | Capture | Menu bar background | Icon: ink, glyph size | Icon core | Clock's text core |
   |---|---|---|---|---|
   | Before the app starts, at the icon's later rectangle | `#dadada` | none: 0 % ink, contrast 0 | — | — |
-  | Shipped build, light | `#dadada` | 10.3 % of a 34 × 30 pixel item, 13 × 13 pixels | `#2f2f2f`, saturation 0 | `#3b3b3b`, saturation 0 |
-  | Shipped build, dark | `#202020` | 10.3 %, 13 × 13 pixels | `#d9d9d9`, saturation 0 | `#d1d1d1`, saturation 0 |
+  | Template-icon build, light | `#dadada` | 10.3 % of a 34 × 30 pixel item, 13 × 13 pixels | `#2f2f2f`, saturation 0 | `#3b3b3b`, saturation 0 |
+  | Template-icon build, dark | `#202020` | 10.3 %, 13 × 13 pixels | `#d9d9d9`, saturation 0 | `#d1d1d1`, saturation 0 |
   | Not-template build, light | `#dadada` | 9.5 %, 13 × 12 pixels | `#111111` | `#3b3b3b` |
   | Not-template build, dark | `#202020` | none: contrast 32, under the 48 that counts as ink | — | `#d1d1d1` |
 
@@ -262,7 +262,7 @@ Copy this for each spike and fill it in.
   - The blades are light grey in the source (`#e6e8eb` and `#d0d7de`). They come out within about 30 levels of the taskbar's grey, so they barely show. That is the placeholder art's colour, not scaling; the final art is roadmap M2b, item 3.
 
   **Windows scales, by a person.** On Windows 11 (not Server), with a display that offers 100, 125, 150, 175 and 200 % under Settings > System > Display > Scale. Windows lists 200 % only for a display with enough pixels, typically 4K (3840 × 2160). Custom scaling does not count: it is a different code path.
-  1. Build the app as shipped, a release build: `pnpm tauri build --no-bundle` at the repository root ([manual-qa.md](manual-qa.md), "Windows 11" setup), and start `target\release\navaja.exe`. CI's job uses the debug build, whose tray code and icons are the same. If the icon is behind the chevron, turn Navaja on under Settings > Personalization > Taskbar > Other system tray icons.
+  1. Build the app as shipped, a release build: `pnpm tauri build --no-bundle` at the repository root, in a PowerShell window prepared as in [manual-qa.md](manual-qa.md)'s "Windows 11" setup (its `Set-ExecutionPolicy` line first), and start `target\release\navaja.exe`. CI's job uses the debug build, whose tray code and icons are the same. If the icon is behind the chevron, turn Navaja on under Settings > Personalization > Taskbar > Other system tray icons.
   2. For each of 100, 125, 150, 175 and 200 %: quit Navaja from its tray menu, set the scale, and start it again. Move the pointer away from the notification area, since hovering the icon highlights its button and changes the background around it. Then press Win+PrtScn: it saves a full-screen PNG at the display's physical pixels to Pictures\Screenshots. PrtScn alone opens the Snipping Tool's overlay on current Windows 11. At one scale, also change the scale while Navaja runs and capture again, since Windows may then rescale the icon it already has.
   3. Open each PNG in Paint, zoom to 800 % and look at the icon. Windows draws a small icon at 16 pixels at 100 %, 20 at 125 %, 24 at 150 %, 28 at 175 % and 32 at 200 %. Only 200 % uses the 32-pixel PNG one to one.
   4. "Crisp" means the edges of the handle and pivot change colour within one or two pixels, as they do at 100 % on the runner: not smeared over three or more, and not blocky with doubled pixels. Compare with the 200 % capture.
@@ -501,7 +501,7 @@ Not a spike: one of M2a's exit criteria (roadmap M2a, Exit), checked the same wa
   - Run [37161147668](https://github.com/joaovitorpina/Navaja/actions/runs/37161147668), on `e4cb742`, gave the same results again with the canary `c20f0605-3573-4261-8d68-f1643319caee`, in 3 min 34 s. The three history steps were skipped, with `enabled=false`.
 - **By a person**, on Windows 11, not Server. Each step uses a fresh UUID, so a failure in one step can't hide behind another.
   1. Note the edition, version, OS build and channel (a general release or an Insider build) that `winver` shows.
-  2. Build Navaja at the commit to test, as [manual-qa.md](manual-qa.md) sets up Windows 11: at the repository root, `pnpm install --frozen-lockfile`, then `pnpm tauri build --no-bundle`. Quit any Navaja that runs, an installed one included: a second Navaja hands its arguments over and exits.
+  2. Build Navaja at the commit to test, as [manual-qa.md](manual-qa.md) sets up Windows 11, in a PowerShell window prepared there (its `Set-ExecutionPolicy` line first): at the repository root, `pnpm install --frozen-lockfile`, then `pnpm tauri build --no-bundle`. Quit any Navaja that runs, an installed one included: a second Navaja hands its arguments over and exits.
   3. Turn on Settings > System > Clipboard > Clipboard history. If the switch is greyed out ("managed by your organization"), stop: this machine can't answer the check.
   4. Control: in Notepad, type a word nobody else would copy, such as `navaja-control-` and the time. Select it and press Ctrl+C. Press Win+V: it must be listed at the top.
   5. The Copy button: in PowerShell at the repository root, run `.\target\release\navaja.exe --tool uuid`. The UUID generator opens with a new UUID in its "UUIDs" output. Press the output's Copy button: its label must change to "Copied", not "Copy failed". In Notepad, press Ctrl+V: that UUID must appear. Press Win+V: it must not be listed.
@@ -511,4 +511,4 @@ Not a spike: one of M2a's exit criteria (roadmap M2a, Exit), checked the same wa
   9. The rule. PASS: steps 4 and 8 are listed, steps 5 and 6 paste the right UUID, and no UUID copied through Navaja is listed. FAIL: Win+V lists a UUID copied through Navaja. Inconclusive, so redo it: step 4 or 8 is not listed, or a paste does not give back the UUID.
   10. Record here, in the Result line and below this list: the Windows details from step 1, the Navaja commit, the date, and for each step whether its text was listed. Optionally clear the test items afterwards (Win+V > Clear all).
 - **Formats guarded on every PR** (since PR #23): the test `copy_carries_the_privacy_markers` (`app/src-tauri/tests/clipboard`), which nextest runs in `ci.yml`'s os job, copies a random canary through `copy_text`'s own call and reads the clipboard back through Win32, never arboard. The text must round-trip, and the three formats must be there, with the two DWORDs 0. An ordinary arboard copy of another canary must carry none of them. It fails when any one of the three is removed from `clipboard.rs`. Deleting this job after the check by a person loses the history part, which no runner can check. It also loses the only press of the real Copy button in a built app, through the webview, IPC, the ACL and `copy_text`: the nextest test calls `AppState::clipboard` directly, and the Vitest tests mock `invoke`.
-- **The job's lifetime:** `exit-clipboard-history` moves into `ci.yml` only if a GitHub-hosted runner ever has clipboard history, so that its history checks can gate. Otherwise it is deleted from `spikes.yml` once the check by a person above is recorded.
+- **The job's lifetime:** `spikes.yml`'s `exit-clipboard-history` job is deleted, with `scripts/spikes/exit-clipboard-check.sh` and `clipboard-history.ps1`, once a person records the Windows 11 Win+V check above. `copy_carries_the_privacy_markers` (nextest, since PR #23) keeps guarding the exclusion formats.

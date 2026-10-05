@@ -1,12 +1,13 @@
 # Spike S2.3 (docs/spikes.md): the Windows half of the tray-icon check in
-# .github/workflows/spikes.yml, in Windows PowerShell 5.1. It runs the app as
-# shipped, finds its icon in the notification area through UI Automation,
-# captures the taskbar at the display's own scale, and checks that the
-# icon's button has an icon drawn in it. It changes no display setting. The
-# macOS half is s2-3-check.sh.
+# .github/workflows/spikes.yml, in Windows PowerShell 5.1. It runs the plain
+# debug build (no e2e overlay), finds its icon in the notification area
+# through UI Automation, captures the taskbar at the display's own scale, and
+# checks that the icon's button has an icon drawn in it. It changes no
+# display setting. The macOS half is s2-3-check.sh.
 #
 # Usage, from anywhere in the repository, after
-# `pnpm tauri build --debug --no-bundle` (the shipped configuration):
+# `pnpm tauri build --debug --no-bundle` (the plain debug build, whose tray
+# code and icons are the release build's):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/spikes/s2-3-tray.ps1 <mode>
 #   before           negative control: no notification-area button named Navaja yet
 #   launch           starts target\debug\navaja.exe, promotes its icon out of the

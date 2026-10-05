@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Spike S2.3 (docs/spikes.md): the macOS half of the tray-icon check in
-# .github/workflows/spikes.yml. It runs the app as shipped, captures the menu
-# bar in the light and the dark appearance, and checks that the template icon
-# is drawn, monochrome, and tinted like the system's own menu bar items.
+# .github/workflows/spikes.yml. It runs the plain debug build (no e2e
+# overlay), captures the menu bar in the light and the dark appearance, and
+# checks that the template icon is drawn, monochrome, and tinted like the
+# system's own menu bar items.
 # Windows' half is s2-3-tray.ps1.
 #
 # Usage, on macOS, from anywhere in the repository, after
-# `pnpm tauri build --debug --no-bundle` (the shipped configuration):
+# `pnpm tauri build --debug --no-bundle` (the plain debug build, whose tray
+# code and icons are the release build's):
 #   bash scripts/spikes/s2-3-check.sh helper           # compiles s2-3-menubar.swift; the display's size and scale
 #   bash scripts/spikes/s2-3-check.sh baseline         # light appearance; captures the menu bar before the app starts
 #   bash scripts/spikes/s2-3-check.sh launch           # starts target/debug/navaja; waits for its status item
@@ -26,7 +28,7 @@
 # control-build edits app/src-tauri/src/tray.rs to pass false to
 # icon_as_template, builds, keeps the binary in the folder above as
 # navaja-not-template, and puts tray.rs back, pass or fail. It overwrites
-# target/debug/navaja, so it runs after the checks on the shipped build.
+# target/debug/navaja, so it runs after the checks on the first build.
 # The copy of tray.rs it keeps in that folder lasts only while the edit
 # does. `stop` puts it back only when tray.rs is still exactly that copy
 # with the edit, so it never overwrites changes made to tray.rs since.
