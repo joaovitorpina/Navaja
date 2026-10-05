@@ -1,13 +1,14 @@
-// Roadmap §2, "the webview data folder holds no input text", on every PR
-// (.github/workflows/ci.yml, os job, right after the end-to-end tests).
+// Roadmap §2, "the webview data folder holds no input text", on every PR.
 //
-// The last spec, app/e2e/last/data-folder.e2e.ts, types a fresh canary into
-// every text field the app has, quits the app through its `quit` command,
-// and records the canary in app/e2e/output/data-folder.json. This script
-// then searches every folder where the end-to-end build keeps data on this
-// OS, listed with the reason for each in `locations` below.
+// The suite's last spec, app/e2e/last/data-folder.e2e.ts, types a fresh
+// canary into every text field the app has, quits the app through its
+// `quit` command, and records the canary in app/e2e/output/data-folder.json.
+// This script then searches every folder where the end-to-end build keeps
+// data on this OS, listed with the reason for each in `locations` below. The
+// spec runs it in both modes once the app has quit, so `pnpm e2e` (and CI's
+// end-to-end step on each OS) includes the check.
 //
-// Usage, from anywhere in the repository, after `pnpm e2e`:
+// It can also be run alone, from anywhere in the repository, after `pnpm e2e`:
 //   node app/e2e/data-folder-check.mjs           # no file in those folders holds the canary
 //   node app/e2e/data-folder-check.mjs control   # negative control: plants the canary in each
 //                                                # folder, must find every copy, then removes them
@@ -70,6 +71,10 @@ const READ_TRIES = 10;
 
 let failed = false;
 
+/**
+ * Records a failure. The `::error::` prefix is GitHub's annotation syntax for
+ * a run of its own, and the line the spec picks out for its failure message.
+ */
 function fail(message) {
   console.log(`::error::data folder: ${message}`);
   failed = true;

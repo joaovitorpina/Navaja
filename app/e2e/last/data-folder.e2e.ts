@@ -1,6 +1,9 @@
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { $, browser, expect } from '@wdio/globals';
 import { accepting, dataFolderRecord, port } from '../wdio.conf';
 import { goHome } from '../support/app';
@@ -8,11 +11,24 @@ import { goHome } from '../support/app';
 // Roadmap §2: the webview data folder holds no input text. This spec types a
 // fresh canary into every text field the app has, then quits the app the
 // normal way, so the webview writes what it keeps on exit. It records the
-// canary for app/e2e/data-folder-check.mjs, which then searches every folder
-// the end-to-end build keeps data in (.github/workflows/ci.yml, os job).
+// canary for app/e2e/data-folder-check.mjs and runs that script twice, once
+// the app is gone: it must find the canary in no folder where the end-to-end
+// build keeps data, and then, as a negative control, find every copy it
+// plants in those folders itself. The check is part of the suite, so every
+// `pnpm e2e` runs it, on all three OSes in CI (on Linux, inside the strace
+// guard's run).
 //
 // It quits the app, so it runs last: wdio.conf.ts lists it after the other
 // specs, from a folder their glob does not reach.
+
+/** The search, a script of its own so it can also be run alone after a suite. */
+const CHECK = fileURLToPath(new URL('../data-folder-check.mjs', import.meta.url));
+
+/**
+ * How long the script may run. It waits up to a minute for the folders to
+ * stop changing after the quit, then reads every file in them.
+ */
+const CHECK_MS = 150_000;
 
 /** What a person can type text into. Number fields can't hold the canary. */
 const TEXT_FIELDS = [
@@ -106,12 +122,49 @@ function appLog(appDir: string): string {
   }
 }
 
+/**
+ * Runs data-folder-check.mjs in `mode` and prints its report. Throws with the
+ * problems it found when it fails, so they show in the test's failure.
+ */
+async function runCheck(mode: 'check' | 'control'): Promise<void> {
+  let output: { stdout?: string; stderr?: string };
+  let failure: unknown = null;
+  try {
+    output = await promisify(execFile)(process.execPath, [CHECK, mode], {
+      encoding: 'utf8',
+      timeout: CHECK_MS,
+    });
+  } catch (error) {
+    // A non-zero exit or a timeout; the error carries what the script printed.
+    output = error as { stdout?: string; stderr?: string };
+    failure = error;
+  }
+  const report = `${output.stdout ?? ''}${output.stderr ?? ''}`;
+  console.log(report.trimEnd());
+  if (failure !== null) {
+    const problems = report
+      .split('\n')
+      .filter((line) => line.startsWith('::error::'))
+      .map((line) => line.slice('::error::'.length));
+    throw new Error(
+      problems.length > 0
+        ? problems.join('\n')
+        : `data-folder-check.mjs ${mode} failed: ${String(failure)}`,
+    );
+  }
+}
+
 describe('webview data folder', () => {
+  /** Set once the first test has quit the app and recorded the canary. */
+  let recorded = false;
+
   before(goHome);
 
   it('takes a canary in every text field, then quits the app', async () => {
     const appDir = process.env.NAVAJA_APP_DIR;
     if (!appDir) throw new Error('NAVAJA_APP_DIR is not set; wdio.conf.ts sets it for each run');
+    // A record left by an earlier run names another canary and app folder.
+    rmSync(dataFolderRecord, { force: true });
 
     const canary = freshCanary();
     const fields: string[] = [];
@@ -207,5 +260,18 @@ describe('webview data folder', () => {
       )}\n`,
     );
     console.log(`data folder: typed a fresh canary into ${fields.join(', ')}, then quit the app.`);
+    recorded = true;
   });
+
+  it('finds the canary in no folder where the app keeps data', async () => {
+    if (!recorded) throw new Error('the app did not quit with a recorded canary (test above)');
+    await runCheck('check');
+  }).timeout(CHECK_MS + 30_000);
+
+  // The negative control: a search that finds nothing proves something only
+  // if it would have found the canary there.
+  it('finds a canary planted in each of those folders', async () => {
+    if (!recorded) throw new Error('the app did not quit with a recorded canary (test above)');
+    await runCheck('control');
+  }).timeout(CHECK_MS + 30_000);
 });
