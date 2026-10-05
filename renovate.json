@@ -11,8 +11,18 @@
       "minimumReleaseAge": "3 days"
     },
     {
-      "description": "Every major update waits for approval on the Dependency Dashboard, toolchains included: pnpm (packageManager in package.json), Node (node-version in the workflows) and Rust (rust-toolchain.toml). A major can drop a platform or change defaults, so someone reads its notes before a PR opens",
+      "description": "Every major update waits for approval on the Dependency Dashboard, toolchain majors included: pnpm (packageManager in package.json) and Node (node-version in the workflows). A major can drop a platform or change defaults, so someone reads its notes before a PR opens",
       "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "An update that is breaking by its versioning's own rules waits too, for the same reason. Renovate calls a Cargo 0.x minor, such as libloading 0.7 to 0.9, a minor, so the major rule misses it; matchIsBreaking does not",
+      "matchIsBreaking": true,
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Every Rust release (rust-toolchain.toml) waits for approval. Renovate keeps Rust's major at 1, so the major rule never holds one, yet a release can add clippy lints that fail -D warnings or raise platform minimums; someone reads its notes before a PR opens",
+      "matchManagers": ["rust-toolchain"],
       "dependencyDashboardApproval": true
     },
     {

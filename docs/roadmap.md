@@ -325,7 +325,7 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
 **CI hygiene:**
 - Runner labels are pinned, never `-latest`; `ubuntu-latest` moves to 26.04 in Oct-Nov 2026. A label moves by hand, in every workflow at once: Renovate does not propose runner labels (`renovate.json`).
 - Required checks match by job name, and the os jobs are named after their runner label, such as `os (macos-26)`. So a runner label change in the os matrix must update branch protection's required checks in the same change, or every PR waits for a check that never reports.
-- Renovate holds every major update, toolchains included (pnpm, Node, Rust), and the `wdio` group for approval on its Dependency Dashboard. Each rule in `renovate.json` says why.
+- Renovate waits for approval on its Dependency Dashboard before it opens a PR for these: every major or otherwise breaking update, such as a Cargo 0.x minor (pnpm and Node majors included); every Rust release in `rust-toolchain.toml`, which Renovate never counts as a major; and the `wdio` group. Each rule in `renovate.json` says why. The hold applies only to a branch that does not exist yet, so a Renovate PR that is already open stays open.
 - Actions are pinned by SHA.
 - A tool that no pinned action installs is downloaded at a pinned version and checked against its published SHA-256 before use (gitleaks). Renovate does not bump these; update the version and checksum together.
 - Swatinem/rust-cache with a per-OS key, saved only on main.
