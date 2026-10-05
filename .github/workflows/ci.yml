@@ -231,6 +231,11 @@ jobs:
         shell: bash
         run: pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
 
+      # TEMPORARY: marks the start, for the sweep below.
+      - name: TEMPORARY mark the end-to-end start
+        shell: bash
+        run: node -e "require('fs').writeFileSync(process.argv[1], String(Date.now() - 1000))" "$RUNNER_TEMP/e2e-start"
+
       - name: End-to-end tests
         if: runner.os != 'Linux'
         run: pnpm e2e
@@ -242,3 +247,25 @@ jobs:
         env:
           WEBKIT_DISABLE_DMABUF_RENDERER: '1'
         run: dbus-run-session -- xvfb-run -a bash app/e2e/strace-guard.sh
+
+      # Roadmap §2: the webview data folder holds no input text. The suite's
+      # last spec (app/e2e/last/data-folder.e2e.ts) typed a fresh canary into
+      # every text field and quit the app the normal way. This searches every
+      # folder where the end-to-end build keeps data on this OS for it, and
+      # fails closed: a folder that must exist and is missing, or zero files
+      # searched, fails too.
+      - name: The webview data folder holds no input text
+        shell: bash
+        run: node app/e2e/data-folder-check.mjs
+
+      # Negative control: the same search must find the canary once it is
+      # planted in each of those folders, in each form it looks for. The
+      # planted files are removed again.
+      - name: The data folder check finds a planted canary (negative control)
+        shell: bash
+        run: node app/e2e/data-folder-check.mjs control
+
+      - name: TEMPORARY sweep for files the run changed
+        if: success() || failure()
+        shell: bash
+        run: node app/e2e/data-folder-sweep.mjs "$RUNNER_TEMP/e2e-start" app/e2e/output/data-folder.json
