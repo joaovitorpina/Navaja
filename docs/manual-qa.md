@@ -63,7 +63,7 @@ One block per OS. Each ends with a release build, and with the path of its binar
   Set-ExecutionPolicy -Scope Process RemoteSigned -Force   # this window only; see below
   git switch main; git pull --ff-only; git rev-parse --short HEAD
   rustup toolchain install       # the toolchain rust-toolchain.toml pins
-  corepack enable pnpm           # in an administrator PowerShell if Node is installed for all users
+  corepack enable pnpm           # nodejs.org installs Node for all users: run this line in an administrator PowerShell, then go on here
   pnpm install --frozen-lockfile
   pnpm tauri build --no-bundle   # writes target\release\navaja.exe
   $exe = (Resolve-Path .\target\release\navaja.exe).Path
@@ -163,7 +163,7 @@ Recorded on Windows 11, Ubuntu Wayland, Ubuntu X11 and macOS 26, which the M2a E
 3. **Warm start:** quit from the tray, then record another start the same way.
 4. **Theme override:** set the OS to light mode. In Navaja, set Settings > Theme to Dark, quit from the tray, and record a start. Then set Theme back to "Same as the system" and the OS back to dark mode.
 5. **A first launch with a tool:** with Navaja quit, record a start with `--tool uuid`: on Windows, Win+R and `"<the path in $exe>" --tool uuid`; on macOS, `open target/release/bundle/macos/Navaja.app --args --tool uuid`, which works because Navaja is not running; on Linux, `"$NAVAJA" --tool uuid`.
-6. On Ubuntu Wayland, while the window shows, run `xwininfo -root -tree | grep -c '"Navaja"'`. It must print 0, which shows Navaja runs on Wayland itself; a match means it runs under XWayland, and the Wayland run does not count. On X11 the same command lists the window.
+6. On Ubuntu Wayland, while the window shows, run `xwininfo -root -tree | grep -c '"Navaja"'`. It must print 0, which shows Navaja runs on Wayland itself; a match means it runs under XWayland, and the Wayland run does not count. On X11 the same command prints 1 or more.
 7. Step through each recording frame by frame, from the last frame without a Navaja window to the first frames with one.
 8. Read the log. Each start wrote a `starting` line. Search it for `did not report ready`: on Windows, `Select-String -Path "$env:APPDATA\Navaja\logs\navaja.*.log" -Pattern 'starting','did not report ready'`; on macOS and Linux, `grep -h -e starting -e 'did not report ready'` on the log files.
 9. On Linux with an NVIDIA GPU, if the content stays blank, record that, then try `WEBKIT_DISABLE_DMABUF_RENDERER=1 "$NAVAJA"` and record that as a separate finding.
