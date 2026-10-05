@@ -47,7 +47,7 @@ Navaja/
 ├── xtask/                check · acl · tool-gate · bindings · licenses · icons · notices · capture-ports · measure · verify-release · manifests
 ├── assets/brand/         navaja.svg · tray-template.svg · tray-color.svg · GUIDELINES.md
 ├── packaging/            winget / scoop / homebrew templates · dryrun.json (scratch repo only)
-├── scripts/              check-eol.sh · check-identifiers.sh · check-fixture-secrets.sh (CI) · spikes/ (spikes.yml)
+├── scripts/              check-eol.sh · check-identifiers.sh · check-fixture-secrets.sh (CI) · advisories/ (advisories.yml) · spikes/ (spikes.yml)
 └── docs/                 adr/ · architecture.md · roadmap.md · spikes.md · adding-a-tool.md · install.md · privacy.md · wayland-shortcut.md · release.md
 ```
 
