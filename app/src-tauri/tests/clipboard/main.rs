@@ -15,9 +15,11 @@
 //!   Windows and macOS only.
 //!
 //! It replaces what is on the clipboard with two random canaries, and leaves
-//! the second, Navaja's own copy, there. The clipboard belongs to the whole
-//! machine, so this binary holds one test, and `.config/nextest.toml` runs
-//! it in a test group of one thread and shows its output on a pass too.
+//! the second, Navaja's own copy, there. The first, the ordinary copy, can
+//! reach a clipboard history like any other copy. The clipboard belongs to
+//! the whole machine, so this binary holds one test, and
+//! `.config/nextest.toml` runs it in a test group of one thread and shows
+//! its output on a pass too.
 
 #![cfg(any(windows, target_os = "macos", target_os = "linux"))]
 
