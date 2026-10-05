@@ -1,0 +1,33 @@
+# Spike S2.7's disclosed list (docs/adr/0003-webview-network.md): traffic the
+# app sets off that nothing it controls can stop. The check reports what an
+# entry covers as "disclosed", in a summary row of its own, instead of
+# failing on it. docs/privacy.md discloses each entry in the words of
+# ADR 0003's text for it (section 4; roadmap M6, item 6). Anything an entry
+# does not cover still fails, and so does an entry's traffic in an OS or
+# phase it does not name. An entry names only the phases its traffic was
+# seen in. No entry may cover the app's own process tree (navaja, WebKit's
+# processes, msedgewebview2.exe).
+#
+# One entry a line, five tab-separated fields:
+#   os       macos or windows
+#   phases   idle, in-use, or both, separated by a space
+#   service  the system service that sent it. macOS: the process the packet
+#            was for, as pktap names it (its eproc, else its proc).
+#            Windows: the service's identity, as the review list names it
+#            ("svchost.exe [wlidsvc]").
+#   hosts    the DNS names its lookups asked for, comma-separated. Every name
+#            a packet is tied to must be one of them:
+#            - macOS: a DNS packet, the name it asks for; any other packet,
+#              the names that mDNSResponder looked up for the same process
+#              (name and PID), in the phase, before the connection began,
+#              and that gave its remote address. A name stands for the
+#              names whose CNAMEs lead to it, as far as the job's captures
+#              show, so an entry may list a CNAME's target too.
+#            - Windows: the names its process asked the DNS client for (its
+#              log's event 3008), in the phase, before the connection, in
+#              lookups that gave its remote address.
+#   purpose  what it is for, in short, for the check's output; what
+#            privacy.md says is ADR 0003's text
+macos	idle	webprivacyd	wps.apple.com	the data that macOS's webprivacyd service fetches from Apple when WebKit asks it for its storage-access quirk lists (fixes for particular websites, for how they reach their cookies across sites)
+macos	idle	webprivacyd	ocsp2.apple.com, ocsp2.g.aaplimg.com	the certificate check (OCSP) that macOS's trustd makes for webprivacyd's connection to wps.apple.com
+windows	idle	svchost.exe [wlidsvc]	login.live.com	Windows' Microsoft-account sign-in service, which contacts Microsoft's sign-in server within seconds of the app's start, though no log names the app or WebView2 as asking for it
