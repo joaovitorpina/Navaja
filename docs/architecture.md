@@ -49,7 +49,7 @@ Navaja/
 ├── assets/brand/         navaja.svg · tray-template.svg · tray-color.svg · GUIDELINES.md
 ├── packaging/            winget / scoop / homebrew templates · dryrun.json (scratch repo only)
 ├── scripts/              check-eol.sh · check-identifiers.sh · check-fixture-secrets.sh (CI) · advisories/ (advisories.yml) · spikes/ (spikes.yml)
-└── docs/                 adr/ · architecture.md · roadmap.md · spikes.md · adding-a-tool.md · install.md · privacy.md · wayland-shortcut.md · release.md
+└── docs/                 adr/ · architecture.md · roadmap.md · spikes.md · manual-qa.md · adding-a-tool.md · install.md · privacy.md · wayland-shortcut.md · release.md
 ```
 
 ### Dependency rules
@@ -294,7 +294,7 @@ Rust never runs a destructive action from argv.
   - Linux: the menu only, since click events do not arrive. When no appindicator library loads, there is no tray: a warning is logged and the app runs without it.
 - **Single instance:** forwards `--toggle`, `--show` and `--tool <id>`.
   - It is keyed on the app identifier. A dev or debug launch while another Navaja runs, an installed one included, hands its arguments to that instance and exits with code 0. End-to-end builds use their own identifier, set in `e2e.conf.json`.
-  - **Wayland:** a second launch cannot yet raise a window that is visible but unfocused, because the launcher's activation token is not forwarded (roadmap M2b, item 8). Tray-menu actions cannot take focus there at all.
+  - **Wayland:** a second launch cannot yet focus the window, whether it is visible but unfocused, minimized or hidden. The launcher's activation token is not forwarded, and xdg-shell has no request that restores a minimized window; only the compositor does, when it activates the window (roadmap M2b, item 8). Until then, a second launch there only opens the requested tool and shows a hidden window again. Tray-menu actions cannot take focus or restore a minimized window there at all, and M2b keeps that as a known limitation: the shell draws the menu, so the app never gets a token for the click.
 - **Elevated or root start:** shows a "not needed" banner. On Linux and macOS, Navaja refuses to start as root unless given `--allow-root`.
 
 ## 6. Front end
