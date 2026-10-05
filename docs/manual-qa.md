@@ -28,6 +28,7 @@ Record each result in [the results table](#m2a-results) at the end. Attach recor
 - **A release build.** Every check below uses the release build, as it ships. A debug build does not count: on Windows it also opens a console window, it logs to stderr, and it honours `NAVAJA_APP_DIR`.
 - **One Navaja at a time.** Quit any other Navaja first, a `pnpm dev` one included. Navaja runs as a single instance, so a second one hands its arguments over and exits.
 - **Its files.** A release build keeps its settings and logs in the real app folder: `%APPDATA%\Navaja` on Windows, `~/Library/Application Support/Navaja` on macOS, `~/.config/navaja` on Linux. The logs are `logs/navaja.<date>.log`, one file per UTC day.
+- **After signing in again,** for check 1's cold start, a switch between Ubuntu's Wayland and Xorg sessions, or KDE's optional X11 pass, the terminal that held `$exe` or `$NAVAJA` is gone. Open a new one at the repository root and run the last line of your OS's build block again: `$exe = (Resolve-Path .\target\release\navaja.exe).Path` on Windows (and its first line too, before any `pnpm`), the `ls` and `export NAVAJA=...` lines on macOS, `export NAVAJA="$PWD/target/release/navaja"` on Linux. macOS's `open target/release/...` commands need that folder too.
 - **Home** is the Navaja wordmark at the top of the sidebar. Its page's heading is "Navaja" too.
 - **A check fails** when a step does not behave as written. Record what happened, with the frames or a screenshot, and go on with the next check.
 
@@ -36,7 +37,7 @@ Record each result in [the results table](#m2a-results) at the end. Attach recor
 These are known, and are not failures:
 - **Closing the window quits the app,** on every OS: nothing handles a close request yet (close behaviour per OS is roadmap M2b, item 1). Only the tray's Quit, and the start-failure view's Quit button, write a `quit` line to the log.
 - **`--toggle` never quits.** It hides the window if it is shown and focused, and otherwise shows it.
-- **On Wayland, a second launch can't focus the window.** The launcher's activation token is not forwarded yet, so GNOME and KDE won't raise, restore or focus it (roadmap M2b, item 8). Tray-menu actions can't take focus there either.
+- **On Wayland, a second launch can't focus the window.** The launcher's activation token is not forwarded yet, so GNOME and KDE won't raise, restore or focus it, whether it is visible but unfocused, minimized or hidden (roadmap M2b, item 8). Tray-menu actions can't take focus or restore a minimized window there either. In M2a, on Wayland, a second launch or the tray's Open only has to open what was asked for and show a hidden window again.
 - **On macOS, `open -a Navaja --args --tool uuid` does not reach a running Navaja.** LaunchServices activates the running app and drops the arguments, and the app handles no Dock reopen yet. For a second launch, run the bundle's binary, `"$NAVAJA"` below.
 - **The tray menu is in English** whatever the language: its labels are literals in `tray.rs` (an exception until roadmap M2b, item 1). No shipped tool sets `tray: true`, so the menu has no tool entries.
 - **Clicks on the tray icon:** on Windows a left click toggles the window and a right click opens the menu. On macOS and Linux any click opens the menu; Linux delivers no click events.
@@ -59,6 +60,7 @@ One block per OS. Each ends with a release build, and with the path of its binar
 - **Build,** in PowerShell at the repository root:
 
   ```powershell
+  Set-ExecutionPolicy -Scope Process RemoteSigned   # this window only; see below
   git switch main; git pull --ff-only; git rev-parse --short HEAD
   rustup toolchain install       # the toolchain rust-toolchain.toml pins
   corepack enable pnpm           # in an administrator PowerShell if Node is installed for all users
@@ -67,7 +69,9 @@ One block per OS. Each ends with a release build, and with the path of its binar
   $exe = (Resolve-Path .\target\release\navaja.exe).Path
   ```
 
-  Keep this PowerShell window open: the checks use `$exe`.
+  corepack's `pnpm` comes with a PowerShell script, `pnpm.ps1`, which PowerShell runs in place of `pnpm.cmd`. A fresh Windows 11 runs no PowerShell scripts, so without the first line `pnpm install` stops with "running scripts is disabled on this system". `-Scope Process` lasts until this window closes and changes no lasting setting. Calling `pnpm.cmd` in place of `pnpm` works too.
+
+  Keep this PowerShell window open: the checks use `$exe`. After signing out, set it again ("After signing in again", above).
 - **The newest log:** `Get-ChildItem "$env:APPDATA\Navaja\logs\navaja.*.log" | Sort-Object LastWriteTime | Select-Object -Last 1`.
 - **Promote the tray icon now,** before any check hides the window. Run `Start-Process $exe`. Windows 11 puts a new icon behind the ^ overflow first. Turn Navaja on under Settings > Personalization > Taskbar > Other system tray icons (it may be listed as `navaja.exe`), check that the icon now shows on the taskbar, then quit Navaja from its menu.
 - **Recording:** in OBS, set Settings > Video > Common FPS Values to 60 and add a Display Capture source for the screen Navaja opens on. VLC steps through a recording frame by frame with the E key.
@@ -88,7 +92,7 @@ One block per OS. Each ends with a release build, and with the path of its binar
   export NAVAJA="$PWD/target/release/bundle/macos/Navaja.app/Contents/MacOS/<the name ls printed>"
   ```
 
-  Keep this Terminal window open. `pgrep -x "$(basename "$NAVAJA")"` lists the running Navaja.
+  Keep this Terminal window open. After signing out, set `NAVAJA` again ("After signing in again", above). `pgrep -x "$(basename "$NAVAJA")"` lists the running Navaja.
 - **Keyboard navigation:** turn on System Settings > Keyboard > Keyboard navigation. Without it, Tab in a web view skips links and buttons, and check 5 can't pass.
 - **Logs:** `~/Library/Application Support/Navaja/logs/`.
 - **Recording:** Cmd+Shift+5 > Record Entire Screen. QuickTime Player steps through a paused recording frame by frame with the arrow keys.
@@ -119,7 +123,7 @@ One block per OS. Each ends with a release build, and with the path of its binar
   ```
 
 - **The tray host:** `gnome-extensions list --enabled | grep ubuntu-appindicators` must print `ubuntu-appindicators@ubuntu.com`.
-- **Sessions:** at the login screen, pick the user, then the gear button: "Ubuntu" is the Wayland session, "Ubuntu on Xorg" the X11 one. After signing in, `echo $XDG_SESSION_TYPE` prints `wayland` or `x11`. In the Wayland session, `echo $GDK_BACKEND` must print nothing. Do every Ubuntu check once in each session.
+- **Sessions:** at the login screen, pick the user, then the gear button: "Ubuntu" is the Wayland session, "Ubuntu on Xorg" the X11 one. After signing in, `echo $XDG_SESSION_TYPE` prints `wayland` or `x11`. In the Wayland session, `echo $GDK_BACKEND` must print nothing. Do every Ubuntu check once in each session. After each switch, set `NAVAJA` again in a new terminal ("After signing in again", above).
 - **Logs:** `~/.config/navaja/logs/`.
 - **Recording:** in OBS, set 60 fps and add a "Screen Capture (PipeWire)" source in the Wayland session, or "Screen Capture (XSHM)" in the X11 one.
 
@@ -155,7 +159,7 @@ In the steps, "start Navaja" means: on Windows `Start-Process $exe`, on macOS `o
 Recorded on Windows 11, Ubuntu Wayland, Ubuntu X11 and macOS 26, which the M2a Exit names. On Fedora and KDE, watch steps 2 and 3 without recording, and record what you saw.
 
 1. Set the OS to dark mode: Windows, Settings > Personalization > Colors > Choose your mode; macOS, System Settings > Appearance; Ubuntu, Settings > Appearance > Style. Navaja's Settings > Theme stays at "Same as the system", the default.
-2. **Cold start:** right after signing in, before Navaja has run in this session, start recording. Start Navaja the way a person would: on Windows, double-click `target\release\navaja.exe` in Explorer; on macOS, `open target/release/bundle/macos/Navaja.app`; on Linux, `"$NAVAJA"` in a terminal. Stop recording once the shell shows.
+2. **Cold start:** right after signing in, before Navaja has run in this session, set `$exe` or `NAVAJA` again ("After signing in again", above), then start recording. Start Navaja the way a person would: on Windows, double-click `target\release\navaja.exe` in Explorer; on macOS, `open target/release/bundle/macos/Navaja.app`; on Linux, `"$NAVAJA"` in a terminal. Stop recording once the shell shows.
 3. **Warm start:** quit from the tray, then record another start the same way.
 4. **Theme override:** set the OS to light mode. In Navaja, set Settings > Theme to Dark, quit from the tray, and record a start. Then set Theme back to "Same as the system" and the OS back to dark mode.
 5. **A first launch with a tool:** with Navaja quit, record a start with `--tool uuid`: on Windows, Win+R and `"<the path in $exe>" --tool uuid`; on macOS, `open target/release/bundle/macos/Navaja.app --args --tool uuid`, which works because Navaja is not running; on Linux, `"$NAVAJA" --tool uuid`.
@@ -192,12 +196,16 @@ Then click Home before the next case.
    - Run the probe. Also note whether Home shows for a frame before the UUID generator.
 2. **Minimized.** Minimize Navaja: on Windows its title-bar button, on macOS Cmd+M, on GNOME Super+H, on KDE its title-bar button. Click the terminal, and run the probe.
 3. **Covered.** Click the terminal, so that it is in front and Navaja is visible behind it but not focused, and run the probe.
-4. **Early.** Quit Navaja from the tray. Start it and hand it a tool before its front end is ready:
+4. **Early.** Quit Navaja from the tray. Start recording the screen with the terminal in view, as in check 1 (where OBS is not installed, the desktop's own screen recorder will do). Then start Navaja and hand it a tool before its front end is ready:
    - Windows: `Start-Process $exe; Start-Sleep -Milliseconds 300; $p = Start-Process $exe -ArgumentList '--tool','uuid' -PassThru -Wait; $p.ExitCode`
    - macOS: `open target/release/bundle/macos/Navaja.app; sleep 0.3; "$NAVAJA" --tool uuid; echo $?`
    - Linux: `"$NAVAJA" & sleep 0.3; "$NAVAJA" --tool uuid; echo $?`
 
-   The window must appear once, directly on the UUID generator, and the second launch must print 0. Then check the focus and the process count as in the probe. If the second launch does not return, it started before the first one and became the running Navaja: the try does not count. Quit it, and retry with a 0.5 s pause.
+   Nothing in the log says whether the hand-off came before the front end was ready, so the recording decides whether the try counts. Step through it: the try counts only when the window's first frame comes after the terminal shows the second launch's exit code. The window stays hidden until the front end is ready, so the hand-off was then sent before that, and the running Navaja kept the tool until then.
+   - If the window was already showing when the exit code appeared, the try does not count: retry with a shorter pause, such as 0.1 s.
+   - If the second launch does not return, it started before the first one and became the running Navaja: the try does not count. Quit it, and retry with a 0.5 s pause.
+
+   In a try that counts, the window appears once and opens the UUID generator without another launch, and the second launch prints 0. Note whether Home shows for a frame first: Navaja shows the window, then opens the tool, as in case 1. Then check the focus and the process count as in the probe.
 5. **`--toggle` on a window that is not focused.** Click the terminal, as in case 3, and run `"$NAVAJA" --toggle` (on Windows, `Start-Process $exe -ArgumentList '--toggle'`). Navaja must come to the front, not hide. Then hide it as in case 1, and run the same command again: the window must show.
 6. **Windows only, the way a shortcut starts it.** Cover Navaja with another window, press Win+R, and enter `"<the path in $exe>" --tool uuid`. Check the probe's points, apart from the exit code.
 7. Read the log: it must have no `could not handle a second launch` line.
@@ -217,14 +225,14 @@ On Windows 11, Ubuntu Wayland, Ubuntu X11, KDE and macOS 26. Fedora has its own 
 2. Open the menu: right-click on Windows, any click elsewhere. It must read, in order: Open Navaja, Search tools…, a separator, Quit Navaja. Take a screenshot of the open menu.
 3. Choose Search tools…: the window shows with the command palette open and its search box focused. Type `uid`: the UUID generator is listed first. Press Esc.
 4. Open a page other than Home, such as Settings. Hide the window: on Windows, click Navaja's title bar, then left-click the icon; elsewhere, `sleep 3; "$NAVAJA" --toggle`, clicking inside Navaja within the 3 s. Check that the window is gone, then choose Open Navaja: the window shows, on Settings.
-5. Minimize the window, then choose Open Navaja: the window is restored.
+5. Minimize the window, then choose Open Navaja: the window is restored. On Ubuntu Wayland and KDE, whether it comes back is recorded only (roadmap M2b, item 8): xdg-shell has no request that restores a minimized window, and the tray gets no activation token.
 6. **Windows only, the left click.** With Navaja focused, a left click on the icon hides the window. Another left click shows it, and Ctrl+K then opens Navaja's palette without a click. With Navaja covered by another window for more than half a second, a left click brings it to the front instead of hiding it. With Navaja minimized, a left click restores it.
 7. **The icon on light and dark.** On Windows, repeat steps 1, 2 and 6 with the taskbar light and dark (Settings > Personalization > Colors > Choose your mode). The placeholder's light blades barely show on a light taskbar; the final art is roadmap M2b, item 3. On macOS, in both Light and Dark (System Settings > Appearance), the icon is grey like the clock's text.
 8. Hide the window as in step 4, then choose Quit Navaja. The process ends (`Get-Process navaja` fails on Windows; `pgrep` prints nothing elsewhere), and the icon goes. The log's last line is `quit` with `from="tray"`, and the log has no `no tray icon` warning.
 
-On Ubuntu Wayland and KDE, Open Navaja and Search tools… may show the window without focus. That passes if the window shows and the action happens. On Ubuntu X11, the window must also take focus: Ctrl+K reaches Navaja without a click.
+On Ubuntu Wayland and KDE, Open Navaja and Search tools… may show the window without focus, and may leave a minimized window minimized (step 5). A hidden window must show, and the action must happen; focus is recorded only. If the window has no keyboard focus there, click the palette's search box before typing in step 3. On Ubuntu X11, the window must also take focus: Ctrl+K reaches Navaja without a click.
 
-**Pass:** every step behaves as written, on Windows on both taskbar colours, and on macOS in both appearances.
+**Pass:** every step behaves as written, on Windows on both taskbar colours, and on macOS in both appearances. On Ubuntu Wayland and KDE, focus and step 5 are recorded only, as above.
 
 **Fedora GNOME (no tray):**
 1. Start Navaja. No icon shows in the top bar, and the window shows as usual. Record any `no tray icon` line in the log.
