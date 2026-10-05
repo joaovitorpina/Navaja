@@ -484,11 +484,13 @@ fn tauri_config_problems(config: &Value) -> Vec<String> {
     // `e2e` into release builds behind the back of release_feature_problems.
     if !config["build"]["features"].is_null() {
         problems.push(
-            "tauri.conf.json: build.features must not be set; release builds use the              crate's default features only"
+            "tauri.conf.json: build.features must not be set; release builds use the \
+             crate's default features only"
                 .to_owned(),
         );
     }
     let app = &config["app"];
+    problems.extend(window_problems(app));
     if app["withGlobalTauri"].as_bool().unwrap_or(false) {
         problems.push("tauri.conf.json: app.withGlobalTauri must be false".to_owned());
     }
@@ -520,6 +522,48 @@ fn tauri_config_problems(config: &Value) -> Vec<String> {
                     }
                 }
             }
+        }
+    }
+    problems
+}
+
+/// The window `window::create_main` builds from its tauri.conf.json entry.
+const MAIN_WINDOW: &str = "main";
+
+/// Release builds start hidden (roadmap M2a exit; docs/architecture.md §5,
+/// "Startup"). Tauri reads both keys below as true when they are missing, so
+/// every entry in `app.windows` must set them:
+/// - `"create": false`: Rust builds the window (`window::create_main` for
+///   "main"), with the builder's hardening. Otherwise Tauri builds it before
+///   setup runs, and shows it unless `visible` is false.
+/// - `"visible": false`: `window::ready` shows the main window once the front
+///   end has drawn, so no blank or unthemed window flashes first.
+///
+/// The main window must be there. An entry without a label is the main
+/// window: Tauri's default label is "main". e2e.conf.json may not touch
+/// `app.windows`, so end-to-end builds start the same way.
+fn window_problems(app: &Value) -> Vec<String> {
+    let windows = app["windows"].as_array().map_or(&[][..], Vec::as_slice);
+    let label = |window: &Value| window["label"].as_str().unwrap_or(MAIN_WINDOW).to_owned();
+    let mut problems = Vec::new();
+    if !windows.iter().any(|window| label(window) == MAIN_WINDOW) {
+        problems.push(format!(
+            "tauri.conf.json: app.windows must define the \"{MAIN_WINDOW}\" window"
+        ));
+    }
+    for window in windows {
+        let label = label(window);
+        if window["create"] != Value::Bool(false) {
+            problems.push(format!(
+                "tauri.conf.json: window \"{label}\" must set \"create\": false; \
+                 Rust builds it, not Tauri at start"
+            ));
+        }
+        if window["visible"] != Value::Bool(false) {
+            problems.push(format!(
+                "tauri.conf.json: window \"{label}\" must set \"visible\": false; \
+                 it shows once the front end is ready, so release builds start hidden"
+            ));
         }
     }
     problems
@@ -745,6 +789,83 @@ mod tests {
     }
 
     #[test]
+    fn every_window_starts_hidden() {
+        let ok = json!({ "windows": [{ "label": "main", "create": false, "visible": false }] });
+        assert!(window_problems(&ok).is_empty());
+        // Tauri's default label is "main".
+        let unlabelled = json!({ "windows": [{ "create": false, "visible": false }] });
+        assert!(window_problems(&unlabelled).is_empty());
+
+        for (window, problem) in [
+            (
+                json!({ "label": "main", "create": false, "visible": true }),
+                r#"window "main" must set "visible": false;"#,
+            ),
+            (
+                json!({ "label": "main", "create": false }),
+                r#"window "main" must set "visible": false;"#,
+            ),
+            (
+                json!({ "create": false, "visible": "false" }),
+                r#"window "main" must set "visible": false;"#,
+            ),
+            (
+                json!({ "label": "main", "create": true, "visible": false }),
+                r#"window "main" must set "create": false;"#,
+            ),
+            (
+                json!({ "label": "main", "visible": false }),
+                r#"window "main" must set "create": false;"#,
+            ),
+        ] {
+            let problems = window_problems(&json!({ "windows": [window] }));
+            assert_eq!(problems.len(), 1, "{window}: {problems:?}");
+            assert!(
+                problems[0].starts_with(&format!("tauri.conf.json: {problem}")),
+                "{problems:?}"
+            );
+        }
+
+        // Tauri would build a second window at start and show it.
+        let second = json!({ "windows": [
+            { "label": "main", "create": false, "visible": false },
+            { "label": "about" },
+        ] });
+        let problems = window_problems(&second);
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(
+            problems
+                .iter()
+                .all(|p| p.starts_with(r#"tauri.conf.json: window "about" must set"#)),
+            "{problems:?}"
+        );
+
+        for app in [
+            json!({}),
+            json!({ "windows": [] }),
+            json!({ "windows": [{ "label": "other", "create": false, "visible": false }] }),
+        ] {
+            assert_eq!(
+                window_problems(&app),
+                [r#"tauri.conf.json: app.windows must define the "main" window"#],
+                "{app}"
+            );
+        }
+
+        // Through tauri_config_problems, which config_problems runs on the
+        // real tauri.conf.json (the_app_sources_call_generate_context_plainly).
+        let config = json!({ "app": { "windows": [{ "label": "main", "create": false }],
+            "security": { "capabilities": ["main"], "csp": { "default-src": "'self'" } } } });
+        assert_eq!(
+            tauri_config_problems(&config),
+            [
+                "tauri.conf.json: window \"main\" must set \"visible\": false; \
+                 it shows once the front end is ready, so release builds start hidden"
+            ]
+        );
+    }
+
+    #[test]
     fn exact_versions() {
         assert_eq!(parse_exact("2.12.1"), Some((2, 12)));
         for bad in ["^2.12.1", "~2.12.1", "2.12", "2.x", "", "2.12.1-beta.1"] {
@@ -754,10 +875,12 @@ mod tests {
 
     #[test]
     fn csp_rejects_network_sources() {
-        let good = json!({ "app": { "withGlobalTauri": false, "security": {
-            "capabilities": ["main"],
-            "csp": { "default-src": "'self'", "img-src": "'self' data:",
-                     "connect-src": "ipc: http://ipc.localhost" } } } });
+        let good = json!({ "app": { "withGlobalTauri": false,
+            "windows": [{ "label": "main", "create": false, "visible": false }],
+            "security": {
+                "capabilities": ["main"],
+                "csp": { "default-src": "'self'", "img-src": "'self' data:",
+                         "connect-src": "ipc: http://ipc.localhost" } } } });
         assert!(
             tauri_config_problems(&good).is_empty(),
             "{:?}",
