@@ -178,9 +178,9 @@ The top-level `ToolMeta` fields. `Registry::new` rejects a tool that breaks a ru
 | `spec_version`, `id` | `SPEC_VERSION`, and the id from §1. |
 | `name`, `description` | English fallbacks, not empty. The app shows `tool.<id>.name` and `tool.<id>.description` when a translation exists. |
 | `category` | `Category::ENCODERS`, `FORMATTERS`, `GENERATORS` or `SYSTEM`. Any other `[a-z][a-z0-9_]*` id is accepted, but the app shows it as a group labelled with the raw id, after the built-in ones. Adding a category is a `host-change` PR. |
-| `keywords` | Extra search terms, each non-empty and lower case. Search already matches the name, the id and the category label, so add other words, like uuid's `guid`. |
+| `keywords` | Extra search terms, each non-empty and lower case. Search already matches the name, the id and the category label, so add other words, like uuid's `guid`. `registry_test.rs` checks that searching "uid" still ranks uuid first, so a name or keyword that contains "uid" can fail it. |
 | `capabilities` | The host services the tool uses, such as `Capability::PROCESS_INSPECT`. Empty for a text tool. |
-| `tray` | `true` lists the tool in the tray menu. |
+| `tray` | `true` lists the tool in the tray menu, labelled with `name`. |
 | `icon` | `include_str!("icon.svg").into()`, checked as in §1. |
 | `actions` | `ActionMeta::new(id, label)`, plus `.destructive()` when the shell must ask before running it. At least one; ids follow the id grammar and are unique; each must be reachable from `ui`. |
 | `ui` | See below. |

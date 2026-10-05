@@ -36,7 +36,9 @@ navaja-core = { workspace = true }
 navaja-tools = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tauri = { workspace = true, features = ["tray-icon", "image-png"] }
+# macos-proxy: the dead proxy on macOS too (window.rs, DEAD_PROXY). It needs
+# macOS 14, the minimum set in tauri.conf.json and .cargo/config.toml.
+tauri = { workspace = true, features = ["tray-icon", "image-png", "macos-proxy"] }
 # Called from Rust only, through its free functions (src/opener.rs). Never
 # registered, so the webview has none of its commands.
 tauri-plugin-opener = "2.7.0"

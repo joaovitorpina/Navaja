@@ -50,6 +50,19 @@ fn registry_accepts_every_tool() {
     assert_eq!(registry().len(), MODULES.len());
 }
 
+/// Roadmap M2a exit: searching "uid" ranks the UUID generator first, on the
+/// registry the app ships rather than a fixture. A new tool that outranks it
+/// fails here.
+#[test]
+fn uid_finds_uuid_first() {
+    let hits = registry().search("uid");
+    assert_eq!(
+        hits.first().map(|hit| hit.id.as_str()),
+        Some("uuid"),
+        "search(\"uid\") returned {hits:?}"
+    );
+}
+
 #[test]
 fn ids_equal_folder_names() {
     for (tool, module) in all().iter().zip(MODULES) {

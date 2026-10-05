@@ -484,11 +484,13 @@ fn tauri_config_problems(config: &Value) -> Vec<String> {
     // `e2e` into release builds behind the back of release_feature_problems.
     if !config["build"]["features"].is_null() {
         problems.push(
-            "tauri.conf.json: build.features must not be set; release builds use the              crate's default features only"
+            "tauri.conf.json: build.features must not be set; release builds use the \
+             crate's default features only"
                 .to_owned(),
         );
     }
     let app = &config["app"];
+    problems.extend(window_problems(app));
     if app["withGlobalTauri"].as_bool().unwrap_or(false) {
         problems.push("tauri.conf.json: app.withGlobalTauri must be false".to_owned());
     }
@@ -520,6 +522,48 @@ fn tauri_config_problems(config: &Value) -> Vec<String> {
                     }
                 }
             }
+        }
+    }
+    problems
+}
+
+/// The window `window::create_main` builds from its tauri.conf.json entry.
+const MAIN_WINDOW: &str = "main";
+
+/// Release builds start hidden (roadmap M2a exit; docs/architecture.md §5,
+/// "Startup"). Tauri reads both keys below as true when they are missing, so
+/// every entry in `app.windows` must set them:
+/// - `"create": false`: otherwise Tauri builds the window itself before setup
+///   runs, without `window::create_main`'s hardening, and shows it unless
+///   `visible` is false. `create_main` builds "main" from its entry.
+/// - `"visible": false`: `window::ready` shows the main window once the front
+///   end has drawn, so no blank or unthemed window flashes first.
+///
+/// The main window must be there. An entry without a label is the main
+/// window: Tauri's default label is "main". e2e.conf.json may not touch
+/// `app.windows`, so end-to-end builds start the same way.
+fn window_problems(app: &Value) -> Vec<String> {
+    let windows = app["windows"].as_array().map_or(&[][..], Vec::as_slice);
+    let label = |window: &Value| window["label"].as_str().unwrap_or(MAIN_WINDOW).to_owned();
+    let mut problems = Vec::new();
+    if !windows.iter().any(|window| label(window) == MAIN_WINDOW) {
+        problems.push(format!(
+            "tauri.conf.json: app.windows must define the \"{MAIN_WINDOW}\" window"
+        ));
+    }
+    for window in windows {
+        let label = label(window);
+        if window["create"] != Value::Bool(false) {
+            problems.push(format!(
+                "tauri.conf.json: window \"{label}\" must set \"create\": false; \
+                 otherwise Tauri builds it at start, outside window.rs"
+            ));
+        }
+        if window["visible"] != Value::Bool(false) {
+            problems.push(format!(
+                "tauri.conf.json: window \"{label}\" must set \"visible\": false; \
+                 it shows once the front end is ready, so release builds start hidden"
+            ));
         }
     }
     problems
@@ -642,6 +686,7 @@ mod tests {
             "tokio",
             "tauri",
             "tauri-runtime-wry",
+            "hyper",
             "hyper-util",
             "reqwest",
             "bollard",
@@ -651,6 +696,180 @@ mod tests {
         for name in ["serde", "uuid", "roxmltree", "tauri_like"] {
             assert!(!is_forbidden(name), "{name}");
         }
+    }
+
+    /// A `cargo metadata` graph. `packages` are names, with whether each is
+    /// a workspace member; `edges` are (from, to, kind), the kind as cargo
+    /// writes it: null for a normal dependency, "dev" or "build".
+    fn graph(packages: &[(&str, bool)], edges: &[(&str, &str, Option<&str>)]) -> Metadata {
+        let id = |name: &str| format!("path+file:///ws/{name}#1.0.0");
+        let nodes: Vec<Value> = packages
+            .iter()
+            .map(|(name, _)| {
+                let out = edges.iter().filter(|(from, _, _)| from == name);
+                let deps: Vec<Value> = out
+                    .clone()
+                    .map(|(_, to, kind)| {
+                        json!({ "name": to.replace('-', "_"), "pkg": id(to),
+                                "dep_kinds": [{ "kind": kind, "target": null }] })
+                    })
+                    .collect();
+                let dependencies: Vec<String> = out.map(|(_, to, _)| id(to)).collect();
+                json!({ "id": id(name), "deps": deps, "dependencies": dependencies,
+                        "features": [] })
+            })
+            .collect();
+        let manifests: Vec<Value> = packages
+            .iter()
+            .map(|(name, _)| {
+                json!({ "name": name, "version": "1.0.0", "id": id(name),
+                        "dependencies": [], "targets": [], "features": {},
+                        "manifest_path": format!("/ws/{name}/Cargo.toml") })
+            })
+            .collect();
+        let members: Vec<String> = packages
+            .iter()
+            .filter(|(_, member)| *member)
+            .map(|(name, _)| id(name))
+            .collect();
+        serde_json::from_value(json!({
+            "packages": manifests, "workspace_members": members,
+            "resolve": { "nodes": nodes, "root": null },
+            "workspace_root": "/ws", "target_directory": "/ws/target", "version": 1,
+        }))
+        .expect("a valid cargo metadata graph")
+    }
+
+    /// Roadmap M2a item 5: tokio, hyper or tauri under navaja-tools fails the
+    /// check, through any chain of normal dependencies. Dev-dependencies do
+    /// not reach a build. The app, navaja-docker and xtask are exempt
+    /// (docs/architecture.md §2), so their tokio, tauri, hyper and
+    /// tauri-utils are not reported.
+    #[test]
+    fn forbidden_crates_under_navaja_tools_fail_the_check() {
+        let metadata = graph(
+            &[
+                (TOOLS, true),
+                (APP, true),
+                (CORE, true),
+                (DOCKER, true),
+                (XTASK, true),
+                ("mid", false),
+                ("serde", false),
+                ("tokio", false),
+                ("hyper", false),
+                ("tauri", false),
+                ("tauri-utils", false),
+            ],
+            &[
+                (TOOLS, CORE, None),
+                (TOOLS, "hyper", None),
+                (TOOLS, "mid", None),
+                (TOOLS, "tauri", Some("dev")),
+                ("mid", "serde", None),
+                ("mid", "tokio", None),
+                (CORE, "serde", None),
+                (APP, TOOLS, None),
+                (APP, "tokio", None),
+                (APP, "tauri", None),
+                (DOCKER, "hyper", None),
+                (XTASK, "tauri-utils", None),
+            ],
+        );
+        assert_eq!(
+            closure_problems(&metadata),
+            [
+                "navaja-tools reaches hyper: navaja-tools -> hyper",
+                "navaja-tools reaches tokio: navaja-tools -> mid -> tokio",
+            ]
+        );
+
+        // The same tauri as a normal dependency, one level down.
+        let metadata = graph(
+            &[(TOOLS, true), ("mid", false), ("tauri", false)],
+            &[(TOOLS, "mid", None), ("mid", "tauri", None)],
+        );
+        assert_eq!(
+            closure_problems(&metadata),
+            ["navaja-tools reaches tauri: navaja-tools -> mid -> tauri"]
+        );
+    }
+
+    #[test]
+    fn every_window_starts_hidden() {
+        let ok = json!({ "windows": [{ "label": "main", "create": false, "visible": false }] });
+        assert!(window_problems(&ok).is_empty());
+        // Tauri's default label is "main".
+        let unlabelled = json!({ "windows": [{ "create": false, "visible": false }] });
+        assert!(window_problems(&unlabelled).is_empty());
+
+        for (window, problem) in [
+            (
+                json!({ "label": "main", "create": false, "visible": true }),
+                r#"window "main" must set "visible": false;"#,
+            ),
+            (
+                json!({ "label": "main", "create": false }),
+                r#"window "main" must set "visible": false;"#,
+            ),
+            (
+                json!({ "create": false, "visible": "false" }),
+                r#"window "main" must set "visible": false;"#,
+            ),
+            (
+                json!({ "label": "main", "create": true, "visible": false }),
+                r#"window "main" must set "create": false;"#,
+            ),
+            (
+                json!({ "label": "main", "visible": false }),
+                r#"window "main" must set "create": false;"#,
+            ),
+        ] {
+            let problems = window_problems(&json!({ "windows": [window] }));
+            assert_eq!(problems.len(), 1, "{window}: {problems:?}");
+            assert!(
+                problems[0].starts_with(&format!("tauri.conf.json: {problem}")),
+                "{problems:?}"
+            );
+        }
+
+        // Tauri would build a second window at start and show it.
+        let second = json!({ "windows": [
+            { "label": "main", "create": false, "visible": false },
+            { "label": "about" },
+        ] });
+        let problems = window_problems(&second);
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(
+            problems
+                .iter()
+                .all(|p| p.starts_with(r#"tauri.conf.json: window "about" must set"#)),
+            "{problems:?}"
+        );
+
+        for app in [
+            json!({}),
+            json!({ "windows": [] }),
+            json!({ "windows": [{ "label": "other", "create": false, "visible": false }] }),
+        ] {
+            assert_eq!(
+                window_problems(&app),
+                [r#"tauri.conf.json: app.windows must define the "main" window"#],
+                "{app}"
+            );
+        }
+
+        // Through tauri_config_problems, which config_problems runs on the
+        // real tauri.conf.json (the_app_sources_call_generate_context_plainly).
+        let config = json!({ "app": { "windows": [{ "label": "main", "create": false }],
+            "security": { "capabilities": ["main"], "csp": { "default-src": "'self'" } } } });
+        assert_eq!(
+            tauri_config_problems(&config),
+            [
+                "tauri.conf.json: window \"main\" must set \"visible\": false; \
+                 it shows once the front end is ready, so release builds start hidden"
+            ]
+        );
     }
 
     #[test]
@@ -663,10 +882,12 @@ mod tests {
 
     #[test]
     fn csp_rejects_network_sources() {
-        let good = json!({ "app": { "withGlobalTauri": false, "security": {
-            "capabilities": ["main"],
-            "csp": { "default-src": "'self'", "img-src": "'self' data:",
-                     "connect-src": "ipc: http://ipc.localhost" } } } });
+        let good = json!({ "app": { "withGlobalTauri": false,
+            "windows": [{ "label": "main", "create": false, "visible": false }],
+            "security": {
+                "capabilities": ["main"],
+                "csp": { "default-src": "'self'", "img-src": "'self' data:",
+                         "connect-src": "ipc: http://ipc.localhost" } } } });
         assert!(
             tauri_config_problems(&good).is_empty(),
             "{:?}",
