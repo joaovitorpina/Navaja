@@ -228,7 +228,7 @@ Rust never runs a destructive action from argv.
   - **Runtime grants:** Tauri's default `dynamic-acl` feature compiles in `Manager::add_capability`, which adds a capability after start. `clippy.toml` bans it.
 - **Plugins never used:** http, fs, shell, dialog, clipboard-manager and store.
 - **Window:** one Rust builder creates it with:
-  - incognito mode;
+  - incognito mode: WebView2's InPrivate mode, a non-persistent WebKit data store, an ephemeral WebKitGTK context. The data-folder canary checks on every PR that text typed into the app reaches none of the end-to-end build's data folders (roadmap §2);
   - new windows denied;
   - hidden until ready;
   - no devtools in release builds.
@@ -306,6 +306,7 @@ Rust never runs a destructive action from argv.
 - **Lint:** `pnpm lint` checks which files `tools/` holds (§4), then runs ESLint (the recommended JavaScript, TypeScript and Svelte rules, plus the custom-view allowlist from §4) and Prettier over `app/` and `tools/*/ui/`. `pnpm format` applies Prettier.
 - **Tests:** Vitest with `mockIPC` and axe, and WebdriverIO end-to-end tests on all three OSes **(S2.6)**.
   - The end-to-end tests drive the real debug app through its embedded WebDriver server (§5). On Linux they run under the strace network guard (roadmap §2).
+  - Their last spec types a canary into every text field and quits the app; `app/e2e/data-folder-check.mjs` then searches the build's data folders for it (roadmap §2).
   - axe is not wired in yet. It joins Vitest in M3 (roadmap M3, item 3).
 
 ## 7. Port inspector (`navaja-ports`, `navaja-docker`, `tools/ports`)
