@@ -20,6 +20,7 @@
 #   bash scripts/spikes/s2-7-egress.sh in-use          # the end-to-end suite under capture
 #   bash scripts/spikes/s2-7-egress.sh check in-use
 #   bash scripts/spikes/s2-7-egress.sh teardown        # undoes setup
+#   bash scripts/spikes/s2-7-egress.sh self-test       # the checks' own rules, on made-up input
 # On Windows every mode runs scripts/spikes/s2-7-egress.ps1 instead. The
 # modes idle-app and in-use-app are the parts that run as the app's user,
 # inside the namespace on Linux; idle and in-use call them.
@@ -42,8 +43,18 @@
 #   Click Measurement) or webpushd (Web Push). WebKit starts them for the
 #   app, outside its process tree. A daemon counts only if it started within
 #   15 s after a start of the app: the VM starts some by itself.
-# On both, a DNS question for one of the egress canary's hosts is a finding
-# too, whichever process asks.
+# A DNS question for one of the egress canary's hosts is a finding too,
+# whichever process asks, wherever a capture sees it: on Linux on the
+# namespace's veth and loopback and on the host's uplink (a host daemon
+# that resolves a name for the app asks from there); on macOS in any
+# process's DNS packets.
+#
+# A phase counts only if each of its captures covered all of it: tcpdump
+# was still running when the script stopped it, the kernel dropped none of
+# its packets (in idle and in use; the control and the baseline only warn),
+# and it holds the packets the script sends at the phase's end
+# (end_markers). On macOS the tree's WebKit processes must also be gone by
+# then. Otherwise a capture that ended early would read as "nothing sent".
 #
 # Traffic from those daemons that an entry of s2-7-disclosed.tsv covers
 # (service, host, phase) is reported as disclosed and fails nothing
@@ -106,6 +117,9 @@ NS_IF=s27-ns
 NET4=10.27.0
 NET6=fd00:27::
 RESOLVER=8.8.8.8
+# The name the host looks up at a phase's end (end_markers), with the phase
+# after it.
+MARKER_NAME=s27-end-of
 
 # What the kernel sends on a link by itself: ARP; IPv6 router and neighbour
 # solicitations and advertisements and redirects (ICMPv6 133-137); and MLD
@@ -146,6 +160,10 @@ DAEMON_WINDOW=15
 # the PIDs (" 1 2 ") of those not counted as the app's.
 MAC_DAEMONS=''
 MAC_EXCLUDED=' '
+# Set by capture_row for the phase being checked: the captures that did not
+# cover all of it, and those whose kernel dropped packets (" a b").
+CAPTURES_SHORT=''
+CAPTURES_DROPPED=''
 
 fail() {
   echo "::error::S2.7 $*"
@@ -218,17 +236,37 @@ start_capture() {
   fail "capture $name: tcpdump did not start listening within 10 s"
 }
 
-# Stops a capture with SIGINT, so tcpdump writes out what it holds.
+# Whether a PID is still a running tcpdump (and not a process that reused
+# the PID of one that exited).
+tcpdump_running() {
+  case "$(ps -p "$1" -o comm= 2> /dev/null || true)" in
+    *tcpdump) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Stops a capture with SIGINT, so tcpdump writes out what it holds. A
+# capture whose tcpdump had already exited is marked <name>.dead: its file
+# ends early, and capture_row fails the phase on it.
 stop_capture() {
-  local pidfile=$1 pid i
+  local pidfile=$1 pid i name
   [ -f "$pidfile" ] || return 0
   pid=$(cat "$pidfile")
+  name=$(basename "$pidfile" .pid)
+  if ! tcpdump_running "$pid"; then
+    echo "::warning::S2.7 capture $name: tcpdump had already exited when the script came to stop it"
+    : > "$OUT/$name.dead"
+    rm -f "$pidfile"
+    return 0
+  fi
   sudo kill -INT "$pid" 2> /dev/null || true
   for ((i = 0; i < 100; i++)); do
-    sudo kill -0 "$pid" 2> /dev/null || break
+    tcpdump_running "$pid" || break
     sleep 0.1
   done
-  sudo kill -KILL "$pid" 2> /dev/null || true
+  if tcpdump_running "$pid"; then
+    sudo kill -KILL "$pid" 2> /dev/null || true
+  fi
   rm -f "$pidfile"
 }
 
@@ -275,8 +313,12 @@ start_captures() {
     macos)
       # pktap,all: every interface, each packet with its process. 512 bytes
       # keep the headers and a DNS question, not whole payloads: the capture
-      # holds the whole runner's traffic, and it is uploaded.
-      start_capture "$phase" tcpdump -i pktap,all -P -n -U -s 512 -w "$OUT/$phase.pcapng"
+      # holds the whole runner's traffic, and it is uploaded. A 32 MiB
+      # buffer (or the kernel's maximum, debug.bpf_maxbufsize, if lower):
+      # the kernel dropped packets in the baselines of runs 37160662987,
+      # 37162299733 and 37172832953, in bursts of the VM's own downloads,
+      # and a drop fails idle and in use.
+      start_capture "$phase" tcpdump -i pktap,all -P -n -U -B 32768 -s 512 -w "$OUT/$phase.pcapng"
       ;;
   esac
 }
@@ -358,18 +400,43 @@ stop_watch() {
   WATCH_PID=''
 }
 
-# Waits until the run has left nothing behind, so the capture covers the
-# tree's whole life. Whatever is still there after 30 s is listed and killed
-# (it was captured until then). On macOS that is the app; WebKit's processes
-# are XPC services that outlive it by a moment, so they get 10 s more, and
-# are never killed (other programs may use them).
+# The tree's processes still running: on Linux every process in the
+# namespace; on macOS the app.
+tree_pids() {
+  case $OS in
+    linux) ns_pids ;;
+    macos) pgrep -f "$BINARY" || true ;;
+  esac
+}
+
+# macOS: the WebKit processes running now that were not running when the
+# phase began (<phase>-webkit-before.txt, from webkit_before): the app's.
+new_webkit_pids() {
+  local pid
+  for pid in $(pgrep -f 'com\.apple\.WebKit' || true); do
+    grep -qx "$pid" "$OUT/$1-webkit-before.txt" 2> /dev/null || echo "$pid"
+  done
+}
+
+# macOS: the WebKit processes running as a phase begins, which are not the
+# app's (the baselines so far had none).
+webkit_before() {
+  [ "$OS" = macos ] || return 0
+  pgrep -f 'com\.apple\.WebKit' > "$OUT/$1-webkit-before.txt" || true
+}
+
+# settle <phase>: waits until the run has left nothing behind, so the
+# capture covers the tree's whole life. Whatever is still there after 30 s
+# is listed and killed (it was captured until then). On macOS that is the
+# app; WebKit's processes are XPC services that outlive it by a moment, so
+# they get 10 s more, and are never killed. Whatever of the tree still runs
+# after that goes to <phase>-tree-left.txt, and the phase's check fails on
+# it: the capture stops next, so their later packets would go unseen.
 settle() {
-  local i left
+  local phase=$1 i left
+  rm -f "$OUT/$phase-tree-left.txt"
   for ((i = 0; i < 60; i++)); do
-    case $OS in
-      linux) left=$(ns_pids) ;;
-      macos) left=$(pgrep -f "$BINARY" || true) ;;
-    esac
+    left=$(tree_pids)
     [ -n "$left" ] || break
     sleep 0.5
   done
@@ -379,19 +446,72 @@ settle() {
     ps -o pid=,args= -p "$(echo $left | tr ' ' ,)" || true
     # shellcheck disable=SC2086
     sudo kill -KILL $left 2> /dev/null || true
+    for ((i = 0; i < 10; i++)); do
+      left=$(tree_pids)
+      [ -n "$left" ] || break
+      sleep 0.5
+    done
   fi
   if [ "$OS" = macos ]; then
     for ((i = 0; i < 20; i++)); do
-      pgrep -f 'com\.apple\.WebKit' > /dev/null || break
+      [ -n "$(new_webkit_pids "$phase")" ] || break
       sleep 0.5
     done
-    if pgrep -f 'com\.apple\.WebKit' > /dev/null; then
-      echo "WebKit processes still running (captured until now):"
-      pgrep -fl 'com\.apple\.WebKit' || true
-    fi
+    left="$left $(new_webkit_pids "$phase")"
+  fi
+  # shellcheck disable=SC2086
+  left=$(echo $left)
+  if [ -n "$left" ]; then
+    echo "::warning::S2.7 $phase: still running as the capture stops, so their later packets would go unseen (the check fails on it):"
+    # shellcheck disable=SC2086
+    ps -o pid=,args= -p "$(echo $left | tr ' ' ,)" | tee "$OUT/$phase-tree-left.txt" || true
+    [ -s "$OUT/$phase-tree-left.txt" ] || echo "$left" > "$OUT/$phase-tree-left.txt"
   fi
   # A moment for anything still in flight.
   sleep 2
+}
+
+# end_markers <phase>: packets of the script's own at the phase's end, just
+# before its captures stop, which each capture must hold (capture_row):
+# otherwise it may have stopped early, and an early end reads as "nothing
+# sent". Each phase uses its own addresses and name, so one phase's markers
+# never stand in for another's.
+# - Linux: the host sends to $NET4.<n> (marker_octet), which nobody holds,
+#   so the host end of the veth carries its ARP requests (link-layer noise,
+#   never a finding); the namespace pings 127.27.0.<n> on its loopback; and
+#   the host looks <MARKER_NAME>-<phase>.example.com up, which its resolver
+#   asks for on the uplink (not in the control, which has no uplink capture).
+# - macOS: a ping to 127.0.0.1, which pktap tags with ping's PID on lo0.
+end_markers() {
+  local phase=$1 n
+  case $OS in
+    linux)
+      n=$(marker_octet "$phase")
+      sudo ping -n -c 1 -W 1 "$NET4.$n" > /dev/null 2>&1 || true
+      ns ping -n -c 1 -W 1 "127.27.0.$n" > /dev/null 2>&1 || true
+      if [ "$phase" != control ]; then
+        getent ahosts "$MARKER_NAME-$phase.example.com" > /dev/null 2>&1 || true
+      fi
+      ;;
+    macos)
+      ping -n -c 1 -t 2 127.0.0.1 > /dev/null 2>&1 &
+      echo "$!" > "$OUT/$phase-marker-pid"
+      wait "$!" || true
+      ;;
+  esac
+  # A moment for the captures to write them.
+  sleep 1
+}
+
+# Linux: the last octet of the addresses of a phase's end markers.
+marker_octet() {
+  case $1 in
+    control) echo 200 ;;
+    baseline) echo 201 ;;
+    idle) echo 202 ;;
+    in-use) echo 203 ;;
+    *) fail "no end marker for the phase $1" ;;
+  esac
 }
 
 port_open() {
@@ -407,6 +527,8 @@ setup() {
       # pktap needs Apple's tcpdump.
       tcpdump --version 2>&1 | awk 'NR <= 3'
       sw_vers
+      # The ceiling on tcpdump's -B (start_captures).
+      sysctl debug.bpf_bufsize debug.bpf_maxbufsize 2> /dev/null || true
       echo "macOS needs no setup: pktap is built in."
       ;;
   esac
@@ -571,6 +693,83 @@ join_lines() {
   mv "$1.joined" "$1"
 }
 
+# The packets a capture's kernel dropped, from tcpdump's statistics in its
+# log ("N packets dropped by kernel", and "by interface" where libpcap
+# reports it), or "?" if the log has no statistics: tcpdump prints them as
+# it stops, so then it did not stop cleanly.
+dropped_packets() {
+  if [ ! -f "$1" ]; then
+    echo '?'
+    return 0
+  fi
+  awk '
+    / packets? captured$/ { stats = 1 }
+    / packets? dropped by (kernel|interface)$/ { dropped += $1 }
+    END { if (stats) print dropped + 0; else print "?" }
+  ' "$1"
+}
+
+# capture_row <capture> <end markers it holds, or "-" for a capture with
+# none>: the capture's row of the phase's table of captures. It adds the
+# capture to CAPTURES_SHORT if it did not cover the whole phase: its tcpdump
+# had exited before the script stopped it (<capture>.dead, see
+# stop_capture), its log has a capture error ("pcap_loop:") or no
+# statistics, or it lacks its end markers (end_markers). And to
+# CAPTURES_DROPPED if its kernel dropped packets.
+capture_row() {
+  local name=$1 markers=$2 log=$OUT/$1.tcpdump.log ran=yes dropped
+  dropped=$(dropped_packets "$log")
+  if [ -f "$OUT/$name.dead" ]; then
+    ran="no: tcpdump had exited before the end"
+  elif grep -q 'pcap_loop:' "$log" 2> /dev/null; then
+    ran="no: $(grep -m 1 'pcap_loop:' "$log")"
+  elif [ "$dropped" = '?' ]; then
+    ran="no statistics in its log"
+  elif [ "$markers" = 0 ]; then
+    ran="no: its end markers are missing"
+  fi
+  [ "$ran" = yes ] || CAPTURES_SHORT="$CAPTURES_SHORT $name"
+  if [ "$dropped" != '?' ] && [ "$dropped" -gt 0 ]; then
+    CAPTURES_DROPPED="$CAPTURES_DROPPED $name"
+  fi
+  echo "| \`$name\` | $ran | $dropped | $markers |"
+}
+
+# The header of the phase's table of captures; capture_row writes its rows.
+captures_header() {
+  CAPTURES_SHORT=''
+  CAPTURES_DROPPED=''
+  echo "| Capture | Covered the whole phase | Packets the kernel dropped | End markers it holds |"
+  echo "|---|---|---|---|"
+}
+
+# assert_captures <phase> <findings md>: fails the phase, after printing its
+# table, if a capture did not cover all of it, or if processes of the tree
+# still ran when its captures stopped (settle): an empty capture would then
+# prove nothing. Dropped packets fail idle and in use, where they could be
+# the tree's; in the control and the baseline they only warn, as they hide
+# nothing of the app's there.
+assert_captures() {
+  local phase=$1 md=$2
+  if [ -n "$CAPTURES_SHORT" ]; then
+    cat "$md"
+    fail "$phase: capture(s)$CAPTURES_SHORT did not cover the whole phase, so what they hold proves nothing; see the table of captures above"
+  fi
+  if [ -s "$OUT/$phase-tree-left.txt" ]; then
+    cat "$md"
+    fail "$phase: processes of the tree still ran when the captures stopped: $(tr '\n' ' ' < "$OUT/$phase-tree-left.txt")"
+  fi
+  if [ -n "$CAPTURES_DROPPED" ]; then
+    case $phase in
+      idle | in-use)
+        cat "$md"
+        fail "$phase: the kernel dropped packets of capture(s)$CAPTURES_DROPPED, which could have been the tree's; see the table of captures above"
+        ;;
+      *) echo "::warning::S2.7 $phase: the kernel dropped packets of capture(s)$CAPTURES_DROPPED (the app does not run in this phase, so they hide none of its traffic); see the table of captures" ;;
+    esac
+  fi
+}
+
 # check <phase>: lists what the phase's capture holds from the process tree,
 # writes <phase>-findings.md and -findings.tsv, and fails on any finding. The
 # control calls it too, where findings are expected. In the baseline, which
@@ -687,11 +886,12 @@ record_daemons() {
 }
 
 check_linux() {
-  local phase=$1 veth=$OUT/$1-veth.pcap lo=$OUT/$1-lo.pcap mac start
+  local phase=$1 veth=$OUT/$1-veth.pcap lo=$OUT/$1-lo.pcap mac start n canary=0
   local total noise sent hostside lodns findings webdriver md=$OUT/$1-findings.md tsv=$OUT/$1-findings.tsv
   [ -f "$veth" ] && [ -f "$lo" ] || fail "check $phase: no capture; run the $phase mode first"
   mac=$(cat "$OUT/namespace-mac")
   start=$(cat "$OUT/$phase-start")
+  n=$(marker_octet "$phase")
 
   # Everything, for the artifact; then each class.
   packets "$veth" '' "$OUT/$phase-veth.txt" -e -v
@@ -708,6 +908,10 @@ check_linux() {
   # The same packets in tcpdump's long form, which shows DNS questions.
   packets "$veth" "ether src $mac and not ($NOISE)" "$OUT/$phase-veth-sent-long.txt" -v
   packets "$lo" 'port 53' "$OUT/$phase-lo-dns-long.txt" -v
+  # The phase's end markers (end_markers): the host's ARP requests for an
+  # address nobody holds, and the namespace's ping on its loopback.
+  packets "$veth" "arp and host $NET4.$n" "$OUT/$phase-veth-marker.txt" -q
+  packets "$lo" "icmp and host 127.27.0.$n" "$OUT/$phase-lo-marker.txt" -q
 
   # The harness's and the phase's own connections to the app's WebDriver:
   # they show that the app ran in this namespace.
@@ -717,7 +921,16 @@ check_linux() {
   sent=$(lines "$OUT/$phase-veth-sent.txt")
   hostside=$(lines "$OUT/$phase-veth-host.txt")
   lodns=$(lines "$OUT/$phase-lo-dns.txt")
-  findings=$((sent + lodns))
+  # The host's own questions for the canary's hosts, on its uplink: a host
+  # daemon that resolves a name for the app asks from there. The control has
+  # no uplink capture.
+  : > "$OUT/$phase-uplink-canary.txt"
+  if [ "$phase" != control ]; then
+    uplink_flows "$phase"
+    grep -F "$CANARY" "$OUT/$phase-uplink-dns-long.txt" > "$OUT/$phase-uplink-canary.txt" || true
+    canary=$(lines "$OUT/$phase-uplink-canary.txt")
+  fi
+  findings=$((sent + lodns + canary))
   # The disclosed list has no entry for Linux: everything the namespace
   # sends is a finding.
   echo 0 > "$OUT/$phase-disclosed.count"
@@ -734,21 +947,37 @@ check_linux() {
     echo "|---|---|---|---|---|"
     echo "| Host end of the veth (\`$HOST_IF\`) | $total | $noise | $sent sent by the namespace | $hostside |"
     echo "| Namespace loopback | $(lines "$OUT/$phase-lo.txt") | - | $lodns DNS (port 53) | - |"
+    if [ "$phase" != control ]; then
+      echo "| Host's uplink (\`$(cat "$OUT/uplink")\`), DNS the host sent | $(lines "$OUT/$phase-uplink-dns-sent.txt") | - | $canary for the canary's hosts | - |"
+    fi
     echo
     echo "Connection attempts on the namespace's loopback, which never leave it: $(loopback_summary "$OUT/$phase-lo-syn.txt")."
     echo
-    echo "Link-layer noise, by kind: ARP $(lines "$OUT/$phase-veth-arp.txt"), IPv6 neighbour discovery $(lines "$OUT/$phase-veth-nd.txt"), MLD $(lines "$OUT/$phase-veth-mld.txt")."
+    echo "Link-layer noise, by kind: ARP $(lines "$OUT/$phase-veth-arp.txt") ($(lines "$OUT/$phase-veth-marker.txt") of them the host's end marker), IPv6 neighbour discovery $(lines "$OUT/$phase-veth-nd.txt"), MLD $(lines "$OUT/$phase-veth-mld.txt")."
     echo
     if [ "$findings" -eq 0 ]; then
-      echo "No packet from the process tree."
+      echo "No packet from the process tree, and no question for the canary's hosts."
     else
-      echo "| Sent by | Remote end | Port | Protocol | Packets | First, from the phase's start |"
-      echo "|---|---|---|---|---|---|"
-      finding_rows "$start" "$tsv"
-      dns_lines "$OUT/$phase-veth-sent-long.txt" "$OUT/$phase-lo-dns-long.txt"
+      if [ -s "$tsv" ]; then
+        echo "| Sent by | Remote end | Port | Protocol | Packets | First, from the phase's start |"
+        echo "|---|---|---|---|---|---|"
+        finding_rows "$start" "$tsv"
+      fi
+      dns_lines "$OUT/$phase-veth-sent-long.txt" "$OUT/$phase-lo-dns-long.txt" "$OUT/$phase-uplink-canary.txt"
+    fi
+    echo
+    echo "Each capture must cover the whole phase (see the script's header):"
+    echo
+    captures_header
+    capture_row "$phase-veth" "$(lines "$OUT/$phase-veth-marker.txt")"
+    capture_row "$phase-lo" "$(lines "$OUT/$phase-lo-marker.txt")"
+    if [ "$phase" != control ]; then
+      capture_row "$phase-uplink" -
+      capture_row "$phase-uplink-dns" "$(grep -cF "$MARKER_NAME-$phase." "$OUT/$phase-uplink-dns-long.txt" || true)"
     fi
     echo
   } > "$md"
+  assert_captures "$phase" "$md"
   case $phase in
     idle | in-use)
       if [ "$webdriver" -eq 0 ]; then
@@ -761,14 +990,11 @@ check_linux() {
       fi
       ;;
   esac
-  if [ "$phase" != control ]; then
-    uplink_flows "$phase"
-    if [ "$phase" != baseline ]; then
-      suspects_linux "$phase"
-      cat "$OUT/$phase-suspects.md" >> "$md"
-    fi
+  if [ "$phase" != control ] && [ "$phase" != baseline ]; then
+    suspects_linux "$phase"
+    cat "$OUT/$phase-suspects.md" >> "$md"
   fi
-  report "$phase" "$md" "$findings" "$OUT/$phase-veth-sent-long.txt" "$OUT/$phase-lo-dns-long.txt"
+  report "$phase" "$md" "$findings" "$OUT/$phase-veth-sent-long.txt" "$OUT/$phase-lo-dns-long.txt" "$OUT/$phase-uplink-canary.txt"
 }
 
 # Linux: what the host itself sent on its uplink in the phase, by remote end
@@ -782,9 +1008,14 @@ uplink_flows() {
   packets "$OUT/$phase-uplink.pcap" "src host $ip" "$OUT/$phase-uplink-sent.txt" -q
   packets "$OUT/$phase-uplink-dns.pcap" "src host $ip" "$OUT/$phase-uplink-dns-sent.txt" -q
   packets "$OUT/$phase-uplink-dns.pcap" "src host $ip" "$OUT/$phase-uplink-dns-long.txt" -v
+  # One line a packet, its time stamp first, for the canary's findings.
+  join_lines "$OUT/$phase-uplink-dns-long.txt"
   cat "$OUT/$phase-uplink-sent.txt" "$OUT/$phase-uplink-dns-sent.txt" |
     awk '{ print "host\t" $0 }' | group | sort -t "$(printf '\t')" -k7,7n > "$OUT/$phase-uplink.tsv"
-  questions < "$OUT/$phase-uplink-dns-long.txt" > "$OUT/$phase-uplink-names.txt"
+  # Not the script's own end marker (end_markers), which each phase names
+  # differently, so the review list would always show it.
+  questions < "$OUT/$phase-uplink-dns-long.txt" |
+    awk -v marker="$MARKER_NAME-" '!index($0, marker)' > "$OUT/$phase-uplink-names.txt"
   echo "$phase: the host sent $(lines "$OUT/$phase-uplink-sent.txt") packet(s) and $(lines "$OUT/$phase-uplink-dns-sent.txt") DNS packet(s) on its uplink, to $(lines "$OUT/$phase-uplink.tsv") remote end(s)."
 }
 
@@ -1298,7 +1529,7 @@ disclosed_rows() {
 # check_macos <phase> <process regex> <pid or empty>
 check_macos() {
   local phase=$1 want=$2 pid=$3 pcap=$OUT/$1.pcapng listing=$OUT/$1-packets.txt
-  local start total outside tree lo0 canary findings disclosed md=$OUT/$1-findings.md tsv=$OUT/$1-findings.tsv
+  local start total outside tree lo0 canary findings disclosed marker md=$OUT/$1-findings.md tsv=$OUT/$1-findings.tsv
   [ -f "$pcap" ] || fail "check $phase: no capture; run the $phase mode first"
   start=$(cat "$OUT/$phase-start")
   mac_listing "$pcap" "$listing"
@@ -1337,6 +1568,9 @@ check_macos() {
   group "$OUT/$phase-undisclosed.txt" > "$tsv"
   # The tree's DNS packets in long form, which shows their questions.
   mac_select "$OUT/$phase-dns-long.txt" "$want" "$pid" | cut -f 2 > "$OUT/$phase-tree-dns.txt"
+  # The phase's end marker (end_markers): the script's ping on lo0.
+  marker=$(cat "$OUT/$phase-marker-pid" 2> /dev/null || echo none)
+  grep -E "^[0-9.]+ \(lo0, proc ping:$marker[:,]" "$listing" > "$OUT/$phase-marker.txt" || true
 
   {
     echo "#### $phase: $(os_label)"
@@ -1379,7 +1613,13 @@ check_macos() {
       fi
     fi
     echo
+    echo "The capture must cover the whole phase (see the script's header):"
+    echo
+    captures_header
+    capture_row "$phase" "$(lines "$OUT/$phase-marker.txt")"
+    echo
   } > "$md"
+  assert_captures "$phase" "$md"
   # The app's own WebDriver traffic on lo0 shows that pktap saw the app and
   # named it.
   if { [ "$phase" = idle ] || [ "$phase" = in-use ]; } && [ "$lo0" -eq 0 ]; then
@@ -1430,7 +1670,8 @@ control_linux() {
   # ICMP echo, which the noise filter must not swallow.
   ns ping -c 1 -W 2 "$NET4.1" > /dev/null || status=1
   ns ping -6 -c 1 -W 2 "${NET6}1" > /dev/null || status=1
-  settle
+  settle control
+  end_markers control
   stop_captures
   capture_counts control
   [ "$status" -eq 0 ] || fail "control: the requests from the namespace failed; it has no working route or resolver"
@@ -1465,6 +1706,7 @@ control_macos() {
   code=$(cat "$OUT/control-curl.txt")
   echo "curl (PID $pid) https://github.com: HTTP $code"
   sleep 2
+  end_markers control
   stop_captures
   capture_counts control
   check_macos control '^curl$' "$pid"
@@ -1490,6 +1732,7 @@ baseline() {
   echo "Baseline: capturing $IDLE_SECONDS s with nothing of Navaja running."
   sleep "$IDLE_SECONDS"
   stop_watch
+  end_markers baseline
   stop_captures
   capture_counts baseline
   echo "Baseline: done; the capture is checked in the next step."
@@ -1526,6 +1769,7 @@ idle() {
   local status=0 alive=0
   [ -x "$BINARY" ] || fail "idle: no $BINARY; build it first (see the top of this script)"
   record_daemons idle
+  webkit_before idle
   start_captures idle
   watch_processes idle
   case $OS in
@@ -1535,8 +1779,9 @@ idle() {
       ;;
     macos) bash "$SELF" idle-app || status=$? ;;
   esac
-  settle
+  settle idle
   stop_watch
+  end_markers idle
   stop_captures
   capture_counts idle
   [ "$OS" != linux ] || namespace_alive idle || alive=1
@@ -1549,6 +1794,7 @@ in_use() {
   local status=0 alive=0
   [ -x "$BINARY" ] || fail "in use: no $BINARY; build it first (see the top of this script)"
   record_daemons in-use
+  webkit_before in-use
   start_captures in-use
   watch_processes in-use
   case $OS in
@@ -1560,8 +1806,9 @@ in_use() {
       ;;
     macos) bash "$SELF" in-use-app || status=$? ;;
   esac
-  settle
+  settle in-use
   stop_watch
+  end_markers in-use
   stop_captures
   capture_counts in-use
   [ "$OS" != linux ] || namespace_alive in-use || alive=1
@@ -1687,6 +1934,65 @@ in_use_app() {
   fi
 }
 
+# --- Self-test ----------------------------------------------------------------
+
+# The rules that decide whether a capture covered its phase (capture_row,
+# assert_captures), on made-up tcpdump logs: a capture that stopped early,
+# lost its end markers or had packets dropped must not pass idle. spikes.yml
+# runs this before the capture, so a broken rule fails fast.
+self_test() {
+  local dir stats
+  dir=$(mktemp -d)
+  OUT=$dir
+  stats=$'tcpdump: listening on eth0, link-type EN10MB (Ethernet), snapshot length 96 bytes\n10 packets captured\n10 packets received by filter'
+  printf '%s\n0 packets dropped by kernel\n' "$stats" > "$dir/ok.tcpdump.log"
+  printf '%s\n12 packets dropped by kernel\n' "$stats" > "$dir/dropped.tcpdump.log"
+  printf '%s\n0 packets dropped by kernel\n1 packet dropped by interface\n' "$stats" > "$dir/interface.tcpdump.log"
+  printf 'tcpdump: pcap_loop: The interface disappeared\n%s\n0 packets dropped by kernel\n' "$stats" > "$dir/error.tcpdump.log"
+  printf '%s\n0 packets dropped by kernel\n' "$stats" > "$dir/dead.tcpdump.log"
+  : > "$dir/dead.dead"
+  printf 'tcpdump: listening on eth0\n' > "$dir/killed.tcpdump.log"
+
+  # self_case <capture> <markers> <expected: ok, short or dropped>
+  self_case() {
+    local got=ok
+    captures_header > /dev/null
+    capture_row "$1" "$2" > /dev/null
+    [ -z "$CAPTURES_DROPPED" ] || got=dropped
+    [ -z "$CAPTURES_SHORT" ] || got=short
+    [ "$got" = "$3" ] || fail "self-test: capture $1 with $2 end marker(s) read as $got, not $3"
+    echo "self-test: capture $1, $2 end marker(s): $got, as expected."
+  }
+  self_case ok 1 ok
+  self_case ok - ok
+  self_case ok 0 short
+  self_case dropped 2 dropped
+  self_case interface 2 dropped
+  self_case error 1 short
+  self_case dead 1 short
+  self_case killed 1 short
+  self_case missing 1 short
+
+  : > "$dir/md"
+  captures_header > /dev/null
+  capture_row dropped 1 > /dev/null
+  if (assert_captures idle "$dir/md") > /dev/null 2>&1; then
+    fail "self-test: idle passed with packets dropped"
+  fi
+  (assert_captures baseline "$dir/md") > /dev/null 2>&1 ||
+    fail "self-test: the baseline failed on dropped packets, which should only warn"
+  captures_header > /dev/null
+  capture_row ok 1 > /dev/null
+  (assert_captures in-use "$dir/md") > /dev/null 2>&1 ||
+    fail "self-test: in use failed with every capture whole"
+  echo "123 /path/to/com.apple.WebKit.Networking" > "$dir/in-use-tree-left.txt"
+  if (assert_captures in-use "$dir/md") > /dev/null 2>&1; then
+    fail "self-test: in use passed with a process of the tree left running"
+  fi
+  echo "self-test: drops fail idle and only warn in the baseline; a process of the tree left running fails in use."
+  rm -rf "$dir"
+}
+
 case "${1:-}" in
   setup) setup ;;
   control) control ;;
@@ -1705,8 +2011,9 @@ case "${1:-}" in
     esac
     ;;
   teardown) teardown ;;
+  self-test) self_test ;;
   *)
-    echo "usage: $0 setup|control|baseline|check baseline|idle|check idle|in-use|check in-use|teardown" >&2
+    echo "usage: $0 setup|control|baseline|check baseline|idle|check idle|in-use|check in-use|teardown|self-test" >&2
     exit 2
     ;;
 esac

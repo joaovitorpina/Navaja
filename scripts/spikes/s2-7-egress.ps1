@@ -18,8 +18,10 @@
 # The process tree is every navaja.exe started in the phase and every process
 # it starts, at any depth: WebView2's msedgewebview2.exe processes included.
 # A connection from the tree to an address other than loopback is a finding,
-# and so are a DNS query from it and a BITS job it created. So is a DNS query
-# for one of the egress canary's hosts, whichever process asks.
+# and so are a DNS query from it and a BITS job it created. So is a DNS
+# question for one of the egress canary's hosts, whichever process asks: in
+# the DNS client's log, or in pktmon's DNS packets (below), which also hold
+# the lookups a process sends without the DNS client.
 #
 # Two services seem to act for the tree without any log naming it: WAM's
 # account broker and its sign-in service ($WokenServices). Their connections
@@ -32,17 +34,25 @@
 #
 # Other services may act for the tree too, so a baseline, 5 min without the
 # app, gives each process outside the tree an identity (its image, plus the
-# services it hosts or the COM server it is), and each later phase lists the
-# connections from identities that made none in the baseline, and those in
-# the 15 s after each of those starts from any identity that does not poll
-# all through the baseline. That list is for a person to review, and
-# fails nothing: the runner's own scheduled tasks and services come and go.
+# services it hosts or the COM server it is; Get-Identities), and each later
+# phase lists the connections from identities that made none in the
+# baseline, and those in the 15 s after each of those starts from any
+# identity that does not poll all through the baseline. That list is for a
+# person to review, and fails nothing: the runner's own scheduled tasks and
+# services come and go.
 #
 # pktmon, built into Windows, also captures the NICs' packets for each phase
 # (cut to 512 bytes). It names no process, but its DNS packets
 # (s2-7-dns.mjs) name the hosts behind the findings: WebView2's network
 # service sends DNS queries itself, which the DNS client's log never sees.
-# The copy kept for the artifact holds only the headers of other packets.
+# The copy kept for the artifact holds only the headers of other packets,
+# and the raw capture is deleted however the phase ends (Stop-Capture,
+# Invoke-Teardown).
+#
+# A phase counts only if its logs and capture covered all of it: none of
+# them wrapped, pktmon lost no events (in idle and in use; the control and
+# the baseline only warn), each holds what the script does at the phase's
+# end (Send-EndMarkers), and no process of the tree is still running then.
 param(
   [Parameter(Mandatory = $true, Position = 0)][string]$Mode,
   [Parameter(Position = 1)][string]$Phase = ''
@@ -126,9 +136,21 @@ function Save-Json([string]$Path, $Value) {
   ConvertTo-Json -InputObject @($Value) -Depth 4 | Set-Content -Path $Path -Encoding utf8
 }
 
+# The parentheses enumerate the array that Windows PowerShell 5.1's
+# ConvertFrom-Json returns as one object, so that the self-test runs there
+# too; pwsh enumerates it already.
 function Read-Json([string]$Path) {
   if (-not (Test-Path $Path)) { Fail "no $Path; run the phase first" }
-  return @(Get-Content -Raw -Path $Path | ConvertFrom-Json)
+  return @((Get-Content -Raw -Path $Path | ConvertFrom-Json))
+}
+
+# A property of an object as it is, $null when it has none: Get-Field's
+# string of a time that ConvertFrom-Json has turned into a DateTime would
+# lose its milliseconds.
+function Get-Value($Object, [string]$Name) {
+  $property = $Object.PSObject.Properties[$Name]
+  if ($null -eq $property) { return $null }
+  return $property.Value
 }
 
 # The port of an "address:port" pair (IPv6 addresses hold colons too).
@@ -191,6 +213,7 @@ function Invoke-Setup {
 
 function Invoke-Teardown {
   pktmon stop 2>&1 | Out-Null
+  Remove-RawCaptures
   Get-Process -Name navaja -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -eq $Binary } |
     Stop-Process -Force -ErrorAction SilentlyContinue
@@ -207,6 +230,37 @@ function Invoke-Teardown {
   Hide-CommandLines
   # A native command's exit status must not become this script's.
   exit 0
+}
+
+# pktmon's raw captures that a phase left behind: it failed, or its job timed
+# out, between Start-Capture and Stop-Capture (run 37170350998 left
+# idle.etl in its artifact). They hold the first 512 bytes of every packet
+# on the VM, the agent's plain-text exchanges with Azure's WireServer
+# included, and the artifact is public: each is stripped as Stop-Capture
+# strips it, if it can be, and deleted whatever happens. No Fail here:
+# teardown must go on to restore the audit policy.
+function Remove-RawCaptures {
+  foreach ($etl in @(Get-ChildItem -Path $Out -Filter '*.etl' -File -ErrorAction SilentlyContinue)) {
+    $name = $etl.BaseName
+    try {
+      if (-not (Test-Path "$Out\$name.pcapng")) {
+        pktmon etl2pcap $etl.FullName --out "$Out\$name.full.pcapng" | Out-Host
+        if ($LASTEXITCODE -eq 0) {
+          & node scripts/spikes/s2-7-dns.mjs "$Out\$name.full.pcapng" --strip "$Out\$name.pcapng" |
+            Set-Content -Path "$Out\$name-dns-packets.json" -Encoding utf8
+        }
+      }
+    } catch {
+      Write-Host "::warning::S2.7 teardown: could not strip $($etl.Name): $_"
+    } finally {
+      Remove-Item -LiteralPath $etl.FullName, "$Out\$name.full.pcapng" -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "Teardown: deleted $($etl.Name), a capture its phase never stopped; a stripped copy kept: $(Test-Path "$Out\$name.pcapng")."
+  }
+  foreach ($full in @(Get-ChildItem -Path $Out -Filter '*.full.pcapng' -File -ErrorAction SilentlyContinue)) {
+    Remove-Item -LiteralPath $full.FullName -Force -ErrorAction SilentlyContinue
+    Write-Host "Teardown: deleted $($full.Name), a conversion its phase never stripped."
+  }
 }
 
 # The exported 4688 events keep a command line only for the tree's images,
@@ -295,17 +349,35 @@ function Assert-LogCovers([string]$Name, [string]$Log, $Marks) {
   }
 }
 
-# A lookup of a name of this script's own at the end of each phase. The DNS
-# client's log must hold it, or it stopped recording during the phase, and
-# the tree's queries could be missing for that reason alone.
-function Send-DnsMarker([string]$Name) {
+# A lookup and a connection of this script's own at the end of each phase,
+# which Export-Phase requires: the DNS client's log and pktmon's DNS packets
+# must hold the lookup, and the Security log the connection's 5156 (a
+# loopback one, to a listener of the script's own). Otherwise a log or the
+# capture stopped recording during the phase, and the tree's events could be
+# missing for that reason alone.
+function Send-EndMarkers([string]$Name) {
   $marker = "s27-end-of-$Name.example.com"
   try { [System.Net.Dns]::GetHostAddresses($marker) | Out-Null } catch { }
-  return $marker
+  $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+  $listener.Start()
+  try {
+    $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    $client = New-Object System.Net.Sockets.TcpClient
+    try { $client.Connect([System.Net.IPAddress]::Loopback, $port) } finally { $client.Dispose() }
+  } finally {
+    $listener.Stop()
+  }
+  return [pscustomobject]@{ Name = $marker; Port = $port }
 }
 
-# The processes running now, with the services each one hosts, into
-# <name>-processes-<when>.json: the identities of processes outside the tree.
+# The processes running now into <name>-processes-<when>.json, each with
+# when it started and its identity (Format-Identity): the services it hosts
+# (Win32_Service), else the service (-s) or COM server (-ServerName:) that
+# its command line names. Only that part of a command line is kept, as
+# Hide-CommandLines keeps it: the artifact is public. Without the command
+# line, a COM server such as WAM's account provider would read as a bare
+# backgroundtaskhost.exe. Older artifacts' snapshots have neither field;
+# Get-Identities reads them too.
 function Save-Snapshot([string]$Name, [string]$When) {
   $services = @{}
   foreach ($service in @(Get-CimInstance Win32_Service | Where-Object { $_.ProcessId -gt 0 })) {
@@ -317,7 +389,15 @@ function Save-Snapshot([string]$Name, [string]$When) {
       $key = [int64]$_.ProcessId
       $hosted = ''
       if ($services.ContainsKey($key)) { $hosted = (@($services[$key] | Sort-Object) -join ',') }
-      [pscustomobject]@{ ProcessId = $key; Name = $_.Name; Services = $hosted }
+      $started = ''
+      if ($null -ne $_.CreationDate) { $started = $_.CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') }
+      [pscustomobject]@{
+        ProcessId = $key
+        Name = $_.Name
+        Services = $hosted
+        Started = $started
+        Identity = Format-Identity $_.Name $hosted $_.CommandLine
+      }
     })
   Save-Json "$Out\$Name-processes-$When.json" $list
 }
@@ -333,36 +413,55 @@ function Start-Capture([string]$Name) {
 
 # Stops pktmon, converts its log to a pcapng, and writes the DNS messages in
 # it to <name>-dns-packets.json. <name>.pcapng keeps only the headers of the
-# other packets.
+# other packets; the raw files are deleted whatever happens (see
+# Remove-RawCaptures). The events pktmon reports lost go to
+# <name>-pktmon-lost.txt, -1 if its report can't be read: Export-Phase
+# judges them.
 function Stop-Capture([string]$Name) {
-  pktmon stop | Out-Host
-  Assert-Exit 'pktmon stop'
-  pktmon etl2pcap "$Out\$Name.etl" --out "$Out\$Name.full.pcapng" | Out-Host
-  Assert-Exit 'pktmon etl2pcap'
-  Remove-Item "$Out\$Name.etl" -ErrorAction SilentlyContinue
-  & node scripts/spikes/s2-7-dns.mjs "$Out\$Name.full.pcapng" --strip "$Out\$Name.pcapng" |
-    Set-Content -Path "$Out\$Name-dns-packets.json" -Encoding utf8
-  Assert-Exit 's2-7-dns.mjs'
-  $full = (Get-Item "$Out\$Name.full.pcapng").Length
-  Remove-Item "$Out\$Name.full.pcapng"
+  try {
+    $stopped = @(pktmon stop | ForEach-Object { "$_" })
+    $stopped | Out-Host
+    Assert-Exit 'pktmon stop'
+    # "Log file: <path> (No events lost)", or how many were.
+    $lost = [int64]-1
+    foreach ($line in @($stopped | Where-Object { $_ -match 'events? lost' })) {
+      if ($line -match 'No events lost') { $lost = [math]::Max($lost, 0) }
+      elseif ($line -match '(\d+)\s+events? lost') { $lost = [math]::Max($lost, 0) + [int64]$Matches[1] }
+    }
+    Set-Content -Path "$Out\$Name-pktmon-lost.txt" -Value $lost -Encoding ascii
+    pktmon etl2pcap "$Out\$Name.etl" --out "$Out\$Name.full.pcapng" | Out-Host
+    Assert-Exit 'pktmon etl2pcap'
+    & node scripts/spikes/s2-7-dns.mjs "$Out\$Name.full.pcapng" --strip "$Out\$Name.pcapng" |
+      Set-Content -Path "$Out\$Name-dns-packets.json" -Encoding utf8
+    Assert-Exit 's2-7-dns.mjs'
+    $full = (Get-Item "$Out\$Name.full.pcapng").Length
+  } finally {
+    Remove-Item -LiteralPath "$Out\$Name.etl", "$Out\$Name.full.pcapng" -Force -ErrorAction SilentlyContinue
+  }
   $messages = @(Read-Json "$Out\$Name-dns-packets.json")
   Write-Host ("${Name}: pktmon captured $full bytes; $($messages.Count) DNS messages over UDP in them. " +
     "The copy kept, headers only but for DNS: $((Get-Item "$Out\$Name.pcapng").Length) bytes.")
 }
 
 # Writes <name>-security.json, -dns.json and -bits.json: every event of the
-# phase, from any process, so that a person can check what the analysis kept.
-function Export-Phase([string]$Name, $Marks, [datetime]$Start, [datetime]$End, [string]$Marker) {
+# phase, from any process, so that a person can check what the analysis
+# kept. Then fails unless the logs and the capture covered the whole phase:
+# each holds the phase's end markers (Send-EndMarkers), and pktmon lost no
+# events, which only warns in the control and the baseline, where the app
+# does not run.
+function Export-Phase([string]$Name, $Marks, [datetime]$Start, [datetime]$End, $Markers) {
   Assert-LogCovers $Name 'Security' $Marks
   Assert-LogCovers $Name $DnsLog $Marks
   Assert-LogCovers $Name $BitsLog $Marks
   $security = @(Read-Events @{ LogName = 'Security'; Id = 4688, 5156, 5157, 5158, 5159; StartTime = $Start; EndTime = $End })
   $dns = @(Read-Events @{ LogName = $DnsLog; StartTime = $Start; EndTime = $End })
   $bits = @(Read-Events @{ LogName = $BitsLog; StartTime = $Start; EndTime = $End })
+  $marker = $Markers.Name
   $window = [ordered]@{
     Start = $Start.ToUniversalTime().ToString('o')
     End = $End.ToUniversalTime().ToString('o')
-    Marker = $Marker
+    Marker = $marker
+    MarkerPort = $Markers.Port
   }
   Save-Json "$Out\$Name-window.json" $window
   Save-Json "$Out\$Name-security.json" $security
@@ -373,9 +472,31 @@ function Export-Phase([string]$Name, $Marks, [datetime]$Start, [datetime]$End, [
   if ($dns.Count -eq 0) {
     Fail "${Name}: the DNS client log holds no event from the phase, though the runner looks names up all the time; it is not recording"
   }
-  if (@($dns | Where-Object { (Get-Field $_ 'QueryName') -like "$Marker*" }).Count -eq 0) {
-    Fail "${Name}: the DNS client log does not hold this script's lookup of $Marker at the phase's end; it stopped recording, so the tree's queries could be missing"
+  if (@($dns | Where-Object { (Get-Field $_ 'QueryName') -like "$marker*" }).Count -eq 0) {
+    Fail "${Name}: the DNS client log does not hold this script's lookup of $marker at the phase's end; it stopped recording, so the tree's queries could be missing"
   }
+  $port = "$($Markers.Port)"
+  $connection = @($security | Where-Object {
+      $_.Id -eq 5156 -and (ConvertTo-ProcessId (Get-Field $_ 'ProcessID')) -eq $PID -and
+      ((Get-Field $_ 'DestPort') -eq $port -or (Get-Field $_ 'SourcePort') -eq $port)
+    })
+  if ($connection.Count -eq 0) {
+    Fail "${Name}: the Security log does not hold this script's loopback connection to port $port at the phase's end (5156, PID $PID); auditing stopped, so the tree's connections could be missing"
+  }
+  $asked = @(Read-Json "$Out\$Name-dns-packets.json" | Where-Object {
+      -not $_.response -and @($_.questions | Where-Object { "$($_.name)" -like "$marker*" }).Count -gt 0
+    })
+  if ($asked.Count -eq 0) {
+    Fail "${Name}: pktmon's DNS packets do not hold this script's lookup of $marker at the phase's end; the capture stopped early, so the canary's questions and the findings' names could be missing"
+  }
+  $lost = [int64](Get-Content -Raw "$Out\$Name-pktmon-lost.txt").Trim()
+  if ($lost -ne 0) {
+    $what = "pktmon reported $lost events lost"
+    if ($lost -lt 0) { $what = 'pktmon''s report of lost events could not be read' }
+    if (@('idle', 'in-use') -contains $Name) { Fail "${Name}: $what, so the capture may lack packets of the tree's" }
+    Write-Host "::warning::S2.7 ${Name}: $what (the app does not run in this phase, so they hide none of its traffic)"
+  }
+  Write-Host "${Name}: the DNS client's and the Security logs and pktmon's capture hold the phase's end markers; pktmon lost no events: $($lost -eq 0)."
 }
 
 # --- Analysis ---------------------------------------------------------------------
@@ -395,28 +516,47 @@ function Get-Created($Security) {
     })
 }
 
-# The tree, from 4688: each process whose image is one of $Roots (and,
-# if $RootPids is given, whose PID is in it), and each process started by one
-# already in the tree, at any depth, and not before it: Windows reuses PIDs
-# (see Get-LiveTree). Keyed by PID.
+# The tree's processes, from 4688, oldest first: each process whose image is
+# one of $Roots (and, if $RootPids is given, whose PID is in it), and each
+# process started by one in the tree, at any depth. Windows reuses PIDs (see
+# Get-LiveTree), so a process's parent is the process that held its parent
+# PID when it started: the latest one started by then. If none started in
+# the phase, the parent ran from before it, and was not the tree's. The
+# events come newest first (Read-Events), so they are sorted first: keyed
+# by PID in that order, a second WebView2 browser process given its first
+# one's PID would hide the first one's children.
 function Get-Tree($Created, [string[]]$Roots, [int64[]]$RootPids) {
-  $tree = @{}
-  foreach ($process in $Created) {
-    $image = Split-Path -Leaf $process.Image
-    if ($Roots -notcontains $image.ToLowerInvariant()) { continue }
-    if ($RootPids -and $RootPids -notcontains $process.ProcessId) { continue }
-    $tree[$process.ProcessId] = $process
+  $sorted = @($Created | Sort-Object { (ConvertTo-Time $_.Time).ToUniversalTime() })
+  $times = @($sorted | ForEach-Object { (ConvertTo-Time $_.Time).ToUniversalTime() })
+  # Each PID's processes, as indexes into $sorted, oldest first.
+  $byPid = @{}
+  for ($i = 0; $i -lt $sorted.Count; $i++) {
+    $id = $sorted[$i].ProcessId
+    if (-not $byPid.ContainsKey($id)) { $byPid[$id] = @() }
+    $byPid[$id] += $i
   }
+  $parent = @(for ($i = 0; $i -lt $sorted.Count; $i++) {
+      $found = -1
+      if ($byPid.ContainsKey($sorted[$i].Parent)) {
+        foreach ($j in $byPid[$sorted[$i].Parent]) {
+          if ($j -ne $i -and $times[$j] -le $times[$i]) { $found = $j }
+        }
+      }
+      $found
+    })
+  $inTree = @(for ($i = 0; $i -lt $sorted.Count; $i++) {
+      $image = (Split-Path -Leaf $sorted[$i].Image).ToLowerInvariant()
+      ($Roots -contains $image) -and (-not $RootPids -or $RootPids -contains $sorted[$i].ProcessId)
+    })
   do {
     $added = 0
-    foreach ($process in $Created) {
-      if ($tree.ContainsKey($process.ProcessId) -or -not $tree.ContainsKey($process.Parent)) { continue }
-      if ((ConvertTo-Time $process.Time) -lt (ConvertTo-Time $tree[$process.Parent].Time)) { continue }
-      $tree[$process.ProcessId] = $process
+    for ($i = 0; $i -lt $sorted.Count; $i++) {
+      if ($inTree[$i] -or $parent[$i] -lt 0 -or -not $inTree[$parent[$i]]) { continue }
+      $inTree[$i] = $true
       $added++
     }
   } while ($added -gt 0)
-  return $tree
+  return @(for ($i = 0; $i -lt $sorted.Count; $i++) { if ($inTree[$i]) { $sorted[$i] } })
 }
 
 # The name a process outside the tree keeps across phases: its image, plus
@@ -430,23 +570,98 @@ function Format-Identity([string]$Image, [string]$Services, [string]$CommandLine
   return $name
 }
 
-# PID -> identity, from the phase's snapshots and its 4688 events: the
-# snapshot at the start, the processes started since, the snapshot at the
-# end, each overriding the one before (a PID can be reused).
+# Adds what one source says of a process to $ByPid (Get-Identities), as an
+# identity with the source's rank: to the PID's process of the same image
+# that started within 2 s of $Started; with -Latest, for a snapshot that
+# kept no start time, to the PID's newest process of that image; with
+# -Distinct (4688), never to another. Else as a process of its own, started
+# at $Started, or with -Latest after the PID's others: it runs at the
+# phase's end.
+function Add-ProcessRecord([hashtable]$ByPid, [int64]$ProcessId, [string]$Image, $Started, [string]$Identity,
+  [int]$Rank, [switch]$Latest, [switch]$Distinct) {
+  if (-not $ByPid.ContainsKey($ProcessId)) { $ByPid[$ProcessId] = New-Object System.Collections.Generic.List[object] }
+  $processes = $ByPid[$ProcessId]
+  $same = $null
+  if (-not $Distinct) {
+    foreach ($process in $processes) {
+      if ($process.Image -ne $Image) { continue }
+      if ($Latest) {
+        if ($null -eq $same -or $process.Started -gt $same.Started) { $same = $process }
+      } elseif ([math]::Abs(($process.Started - $Started).TotalSeconds) -le 2) {
+        $same = $process
+      }
+    }
+  }
+  if ($null -eq $same) {
+    if ($Latest) {
+      $Started = [datetime]::MinValue
+      foreach ($process in $processes) { if ($process.Started -ge $Started) { $Started = $process.Started.AddTicks(1) } }
+    }
+    $same = [pscustomobject]@{ Image = $Image; Started = $Started; Sources = New-Object System.Collections.Generic.List[object] }
+    $processes.Add($same)
+  }
+  $same.Sources.Add([pscustomobject]@{ Rank = $Rank; Identity = $Identity })
+}
+
+# PID -> the processes it stood for in the phase, oldest first, each with
+# the time it started and its identity. From the processes started in the
+# phase (4688), the snapshot at its start and the snapshot at its end. A
+# process two sources saw keeps the identity that names a service or COM
+# server, the end snapshot's before the start snapshot's before 4688's: a
+# shared svchost.exe's 4688 names none of its services, and a snapshot from
+# before Save-Snapshot kept command lines reads WAM's account provider as a
+# bare backgroundtaskhost.exe (run 37173797683, PID 5228). A process from
+# before the phase starts at [datetime]::MinValue when its snapshot kept no
+# start time. A connection takes the identity of the process that held its
+# PID at the time (Get-IdentityAt).
 function Get-Identities([string]$Name, $Created) {
-  $identity = @{}
+  $byPid = @{}
+  foreach ($process in $Created) {
+    $image = [IO.Path]::GetFileName($process.Image).ToLowerInvariant()
+    $identity = Format-Identity $process.Image '' $process.CommandLine
+    Add-ProcessRecord $byPid $process.ProcessId $image (ConvertTo-Time $process.Time).ToUniversalTime() $identity 2 -Distinct
+  }
   foreach ($when in @('start', 'end')) {
     $path = "$Out\$Name-processes-$when.json"
-    if (Test-Path $path) {
-      foreach ($process in (Read-Json $path)) {
-        $identity[[int64]$process.ProcessId] = Format-Identity $process.Name $process.Services ''
+    if (-not (Test-Path $path)) { continue }
+    $rank = 1
+    if ($when -eq 'end') { $rank = 0 }
+    foreach ($process in (Read-Json $path)) {
+      $identity = Get-Field $process 'Identity'
+      if (-not $identity) { $identity = Format-Identity $process.Name $process.Services '' }
+      $image = ([string]$process.Name).ToLowerInvariant()
+      $id = [int64]$process.ProcessId
+      $started = Get-Value $process 'Started'
+      if ($started) {
+        Add-ProcessRecord $byPid $id $image (ConvertTo-Time $started).ToUniversalTime() $identity $rank
+      } elseif ($when -eq 'start') {
+        Add-ProcessRecord $byPid $id $image ([datetime]::MinValue) $identity $rank
+      } else {
+        Add-ProcessRecord $byPid $id $image $null $identity $rank -Latest
       }
     }
-    if ($when -eq 'start') {
-      foreach ($process in $Created) {
-        $identity[$process.ProcessId] = Format-Identity $process.Image '' $process.CommandLine
-      }
-    }
+  }
+  $identities = @{}
+  foreach ($id in @($byPid.Keys)) {
+    $identities[$id] = @($byPid[$id] | Sort-Object Started | ForEach-Object {
+        $sources = @($_.Sources | Sort-Object Rank)
+        $named = @($sources | Where-Object { $_.Identity.Contains(' [') })
+        $chosen = $sources[0].Identity
+        if ($named.Count -gt 0) { $chosen = $named[0].Identity }
+        [pscustomobject]@{ Started = $_.Started; Identity = $chosen }
+      })
+  }
+  return $identities
+}
+
+# The identity of the process that held a PID at a time (Get-Identities):
+# the latest one started by then, else $null.
+function Get-IdentityAt([hashtable]$Identities, [int64]$ProcessId, $Time) {
+  if (-not $Identities.ContainsKey($ProcessId)) { return $null }
+  $at = (ConvertTo-Time $Time).ToUniversalTime()
+  $identity = $null
+  foreach ($process in $Identities[$ProcessId]) {
+    if ($process.Started -le $at) { $identity = $process.Identity }
   }
   return $identity
 }
@@ -566,7 +781,11 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
   $dns = @(Read-Json "$Out\$Name-dns.json")
   $bits = @(Read-Json "$Out\$Name-bits.json")
   $created = Get-Created $security
-  $tree = Get-Tree $created $Roots $RootPids
+  $treeProcesses = @(Get-Tree $created $Roots $RootPids)
+  # By PID, which the logs name processes by. A PID the tree held once
+  # counts as the tree's all through the phase: that errs towards findings.
+  $tree = @{}
+  foreach ($process in $treeProcesses) { $tree[$process.ProcessId] = $process }
   $identities = Get-Identities $Name $created
 
   $connections = @()
@@ -592,7 +811,8 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
     if ($tree.ContainsKey($processId) -or $Images -contains $image) {
       $connections += $connection
     } elseif (-not (Test-Loopback $connection.Remote)) {
-      if ($identities.ContainsKey($processId)) { $connection.Identity = $identities[$processId] }
+      $identity = Get-IdentityAt $identities $processId $entry.Time
+      if ($identity) { $connection.Identity = $identity }
       $others += $connection
     }
   }
@@ -629,8 +849,13 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
 
   # Names from the capture: what each local port asked (a query's source
   # port), and what each address answered for (a response's A or AAAA).
+  # And the questions for the canary's hosts, which are findings whichever
+  # process asks: pktmon names no process, and a lookup sent without the
+  # DNS client (as WebView2's network service sends its own) never reaches
+  # the DNS client's log.
   $asked = @{}
   $answered = @{}
+  $canaryAsked = @()
   $packetsPath = "$Out\$Name-dns-packets.json"
   if (Test-Path $packetsPath) {
     foreach ($message in (Read-Json $packetsPath)) {
@@ -639,6 +864,15 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
           $key = "$($message.src):$($message.sport)"
           if (-not $asked.ContainsKey($key)) { $asked[$key] = @() }
           $asked[$key] += "$($question.name) $($question.type)"
+          if ("$($question.name)" -like "*$Canary*") {
+            $canaryAsked += [pscustomobject]@{
+              Time = [DateTimeOffset]::FromUnixTimeMilliseconds([int64]([double]$message.time * 1000)).UtcDateTime
+              Sender = $key
+              Id = $message.id
+              Name = "$($question.name)"
+              Type = "$($question.type)"
+            }
+          }
         }
       }
       if ($message.response) {
@@ -650,6 +884,11 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
       }
     }
   }
+  # Every packet appears twice in pktmon's capture, so a question counts
+  # once for each sender, ID, name and type.
+  $canaryQuestions = @($canaryAsked | Group-Object Sender, Id, Name, Type | ForEach-Object {
+      $_.Group | Sort-Object Time | Select-Object -First 1
+    })
   foreach ($connection in @($outside + $others)) {
     $names = @()
     if ($connection.Port -eq '53') {
@@ -742,6 +981,7 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
     Start = (Read-Json "$Out\$Name-window.json")[0].Start
     Captured = (Test-Path $packetsPath)
     Tree = $tree
+    TreeProcesses = $treeProcesses
     SecurityEvents = $security.Count
     ConnectionEvents = @($security | Where-Object { $_.Id -eq 5156 -or $_.Id -eq 5157 }).Count
     DnsEvents = $dns.Count
@@ -760,7 +1000,9 @@ function Get-Report([string]$Name, [string[]]$Roots, [string[]]$Images, [int64[]
     Woken = $woken
     Delegated = $delegated
     Disclosed = $disclosed
-    Findings = $outside.Count + $queries.Count + $jobs.Count + $delegated.Count
+    DnsPackets = @($asked.Values | ForEach-Object { $_ }).Count
+    CanaryQuestions = $canaryQuestions
+    Findings = $outside.Count + $queries.Count + $jobs.Count + $delegated.Count + $canaryQuestions.Count
   }
 }
 
@@ -810,14 +1052,15 @@ function Write-Report($Report) {
   $lines.Add("| DNS client (the tree's queries, and the canary's names from any process) | $($Report.DnsEvents) | $($Report.Queries.Count) | - | $($Report.Queries.Count) |")
   $lines.Add("| BITS client (download jobs the tree created) | $($Report.BitsEvents) | $($Report.Jobs.Count) | - | $($Report.Jobs.Count) |")
   $lines.Add("| WFP connections of the services the webview wakes ($($WokenServices -join ', ')), in the $StartupSeconds s after a start of navaja.exe or its WebView2 browser process | - | $($Report.Woken.Count) | - | $($Report.Delegated.Count) ($($Report.Disclosed.Count) disclosed) |")
+  $lines.Add("| pktmon's DNS packets (questions asked; counted: those for the canary's hosts, any process) | $($Report.DnsPackets) | $($Report.CanaryQuestions.Count) | - | $($Report.CanaryQuestions.Count) |")
   $lines.Add('')
-  $kinds = @($Report.Tree.Values | ForEach-Object {
+  $kinds = @($Report.TreeProcesses | ForEach-Object {
       $image = Split-Path -Leaf $_.Image
       if ($_.CommandLine -match '--type=([a-z-]+)') { $image = "$image --type=$($Matches[1])" }
       if ($_.CommandLine -match '--utility-sub-type=([A-Za-z.]+)') { $image = "$image ($($Matches[1]))" }
       $image
     } | Group-Object | Sort-Object Name | ForEach-Object { "$($_.Name) x$($_.Count)" })
-  $lines.Add("Processes in the tree, from 4688: $($Report.Tree.Count) ($($kinds -join '; ')).")
+  $lines.Add("Processes in the tree, from 4688: $($Report.TreeProcesses.Count) ($($kinds -join '; ')).")
   $lines.Add('')
   $remotes = @($Report.Loopback | Group-Object { "$($_.Process) $($_.Direction) $($_.Protocol) $($_.Remote):$($_.Port)" } |
       Sort-Object Name | ForEach-Object { "``$($_.Name)`` x$($_.Count)" })
@@ -836,12 +1079,20 @@ function Write-Report($Report) {
   }
   if ($Report.Findings -eq 0) {
     if ($Report.Disclosed.Count -gt 0) {
-      $lines.Add('No other connection, DNS query or BITS job from the process tree or the services it wakes.')
+      $lines.Add('No other connection, DNS query or BITS job from the process tree or the services it wakes, and no question for the canary''s hosts.')
     } else {
-      $lines.Add('No connection, DNS query or BITS job from the process tree or the services it wakes.')
+      $lines.Add('No connection, DNS query or BITS job from the process tree or the services it wakes, and no question for the canary''s hosts.')
     }
     $lines.Add('')
   } else {
+    if ($Report.CanaryQuestions.Count -gt 0) {
+      $lines.Add('| Sender, from pktmon''s DNS packets | Question | Type | First, from the phase''s start |')
+      $lines.Add('|---|---|---|---|')
+      $Report.CanaryQuestions | Sort-Object Time | ForEach-Object {
+        $lines.Add("| $($_.Sender) | $($_.Name) | $($_.Type) | $(Format-Offset $_.Time $start) |")
+      }
+      $lines.Add('')
+    }
     if ($Report.Outside.Count -gt 0) { Add-ConnectionRows $lines $Report.Outside 'Process' $start }
     if ($Report.Delegated.Count -gt 0) { Add-ConnectionRows $lines $Report.Delegated 'Identity' $start -Asked }
     if ($Report.Queries.Count -gt 0) {
@@ -928,11 +1179,11 @@ function Invoke-Control {
   if ($bitsProc.ExitCode -ne 0) { Fail 'control: the BITS download of https://github.com/robots.txt failed' }
 
   # Events reach the logs a moment after the fact.
-  $marker = Send-DnsMarker 'control'
+  $markers = Send-EndMarkers 'control'
   Start-Sleep -Seconds 3
   $end = Get-Date
   Stop-Capture 'control'
-  Export-Phase 'control' $marks $start $end $marker
+  Export-Phase 'control' $marks $start $end $markers
   $report = Get-Report 'control' @('curl.exe') @() @([int64]$proc.Id)
   Write-Report $report
   $tcp = @($report.Outside | Where-Object { $_.Port -eq '443' -and $_.Protocol -eq 'TCP' -and $_.Process -like "curl.exe ($($proc.Id))" })
@@ -1016,22 +1267,37 @@ function Save-Screenshot([string]$Path) {
   }
 }
 
-# Waits up to 30 s for the given processes to end, then kills those left
-# that run one of the tree's images ($TreeImages). Only those: a PID may have
-# been reused by another process by then.
-function Wait-Gone([int64[]]$ProcessIds) {
-  for ($i = 0; $i -lt 60; $i++) {
-    $left = @($ProcessIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
-    if ($left.Count -eq 0) { return }
-    Start-Sleep -Milliseconds 500
-  }
-  $kill = @($left | Where-Object {
+# Those of the given PIDs that a process with one of the tree's images
+# ($TreeImages) holds now.
+function Get-TreeImageIds([int64[]]$ProcessIds) {
+  return @($ProcessIds | Where-Object {
       $process = Get-Process -Id $_ -ErrorAction SilentlyContinue
       $null -ne $process -and $TreeImages -contains "$($process.ProcessName).exe".ToLowerInvariant()
     })
+}
+
+# Waits up to 30 s for the given processes to end, then kills those left
+# that run one of the tree's images ($TreeImages). Only those: a PID may have
+# been reused by another process by then, and every process of the tree so
+# far ran one of them. Returns those still running 5 s later: the capture
+# stops next, so their later traffic would go unseen, and the phase fails on
+# them.
+function Wait-Gone([int64[]]$ProcessIds) {
+  for ($i = 0; $i -lt 60; $i++) {
+    $left = @($ProcessIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    if ($left.Count -eq 0) { return @() }
+    Start-Sleep -Milliseconds 500
+  }
+  $kill = @(Get-TreeImageIds $left)
   $spared = @($left | Where-Object { $kill -notcontains $_ })
-  Write-Host "::warning::S2.7 still running 30 s after the run: $($left -join ', '). Killed, as the tree's images: $($kill -join ', '); left alone: $($spared -join ', ')"
+  Write-Host "::warning::S2.7 still running 30 s after the run: $($left -join ', '). Killed, as the tree's images: $($kill -join ', '); left alone, as other images now hold those PIDs: $($spared -join ', ')"
   $kill | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+  for ($i = 0; $i -lt 10; $i++) {
+    $alive = @(Get-TreeImageIds $kill)
+    if ($alive.Count -eq 0) { return @() }
+    Start-Sleep -Milliseconds 500
+  }
+  return $alive
 }
 
 # Whether the app's WebDriver server reports ready, as the harness asks it.
@@ -1056,11 +1322,11 @@ function Invoke-Baseline {
   Write-Host "Baseline: capturing $IdleSeconds s with nothing of Navaja running."
   Start-Sleep -Seconds $IdleSeconds
   Save-Snapshot 'baseline' 'end'
-  $marker = Send-DnsMarker 'baseline'
+  $markers = Send-EndMarkers 'baseline'
   Start-Sleep -Seconds 3
   $end = Get-Date
   Stop-Capture 'baseline'
-  Export-Phase 'baseline' $marks $start $end $marker
+  Export-Phase 'baseline' $marks $start $end $markers
   Write-Host 'Baseline: done; the logs are checked in the next step.'
 }
 
@@ -1120,18 +1386,21 @@ function Invoke-Idle {
     $ids = @($tree | ForEach-Object { [int64]$_.ProcessId })
     $ids += @(Get-LiveTree $app.Id | ForEach-Object { [int64]$_.ProcessId })
     & taskkill /PID $app.Id /T /F | Out-Host
-    Wait-Gone ($ids | Sort-Object -Unique)
+    $lingering = @(Wait-Gone ($ids | Sort-Object -Unique))
   }
   Write-Host 'Its output:'
   Get-Content "$Out\idle-app.out.log", "$Out\idle-app.err.log" -ErrorAction SilentlyContinue | ForEach-Object { "  | $_" } | Write-Host
   Save-Snapshot 'idle' 'end'
-  $marker = Send-DnsMarker 'idle'
+  $markers = Send-EndMarkers 'idle'
   # A moment for anything still in flight, and for the logs.
   Start-Sleep -Seconds 3
   $end = Get-Date
   Stop-Capture 'idle'
-  Export-Phase 'idle' $marks $start $end $marker
+  Export-Phase 'idle' $marks $start $end $markers
   if ($failure) { Fail "idle: $failure" }
+  if ($lingering.Count -gt 0) {
+    Fail "idle: processes of the tree still ran when the phase ended, so their later traffic went unseen: $($lingering -join ', ')"
+  }
   Write-Host 'Idle: done; the logs are checked in the next step.'
 }
 
@@ -1149,14 +1418,18 @@ function Invoke-InUse {
       ($_.Name -eq 'navaja.exe' -and $_.ExecutablePath -eq $Binary) -or
       ($_.Name -eq 'msedgewebview2.exe' -and $_.CreationDate -gt $start)
     } | ForEach-Object { [int64]$_.ProcessId })
-  if ($left.Count -gt 0) { Wait-Gone $left }
+  $lingering = @()
+  if ($left.Count -gt 0) { $lingering = @(Wait-Gone $left) }
   Save-Snapshot 'in-use' 'end'
-  $marker = Send-DnsMarker 'in-use'
+  $markers = Send-EndMarkers 'in-use'
   Start-Sleep -Seconds 3
   $end = Get-Date
   Stop-Capture 'in-use'
-  Export-Phase 'in-use' $marks $start $end $marker
+  Export-Phase 'in-use' $marks $start $end $markers
   if ($status -ne 0) { Fail "in use: the end-to-end suite failed (exit $status)" }
+  if ($lingering.Count -gt 0) {
+    Fail "in use: processes of the tree still ran when the phase ended, so their later traffic went unseen: $($lingering -join ', ')"
+  }
   Write-Host 'In use: the suite passed; the logs are checked in the next step.'
 }
 
@@ -1212,16 +1485,186 @@ function Invoke-Check([string]$Name) {
     Write-Host "::notice::S2.7 ${Name}: $disclosed connection(s) covered by the disclosed list (scripts/spikes/s2-7-disclosed.tsv), reported above, not findings"
   }
   if ($report.Findings -gt 0) {
-    Fail "${Name}: $($report.Findings) connection, DNS or BITS event(s) from the process tree or the services it wakes; see the tables above"
+    Fail "${Name}: $($report.Findings) connection, DNS or BITS event(s) from the process tree or the services it wakes, or question(s) for the canary's hosts; see the tables above"
   }
   if ($disclosed -gt 0) {
-    Write-Host "${Name}: no connection, DNS query or BITS job from the process tree or the services it wakes but the $disclosed the disclosed list covers."
+    Write-Host "${Name}: no connection, DNS query or BITS job from the process tree or the services it wakes but the $disclosed the disclosed list covers, and no question for the canary's hosts."
   } else {
-    Write-Host "${Name}: no connection, DNS query or BITS job from the process tree or the services it wakes."
+    Write-Host "${Name}: no connection, DNS query or BITS job from the process tree or the services it wakes, and no question for the canary's hosts."
   }
 }
 
+# --- Self-test --------------------------------------------------------------------
+
+# A 4688 event as Read-Events exports it, $Seconds into a made-up phase.
+function New-TestStart([datetime]$T0, [double]$Seconds, [int64]$ProcessId, [int64]$Parent, [string]$Image, [string]$CommandLine) {
+  return [pscustomobject]@{
+    Time = $T0.AddSeconds($Seconds).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    Id = 4688
+    LoggedBy = 4
+    NewProcessId = ('0x{0:x}' -f $ProcessId)
+    ProcessId = ('0x{0:x}' -f $Parent)
+    ParentProcessName = 'C:\Windows\System32\svchost.exe'
+    NewProcessName = $Image
+    CommandLine = $CommandLine
+  }
+}
+
+# A 5156 event (an outbound TCP connection) as Read-Events exports it.
+function New-TestConnection([datetime]$T0, [double]$Seconds, [int64]$ProcessId, [string]$Image, [string]$Remote) {
+  return [pscustomobject]@{
+    Time = $T0.AddSeconds($Seconds).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    Id = 5156
+    LoggedBy = 4
+    ProcessID = "$ProcessId"
+    Application = "\device\harddiskvolume4\windows\system32\$Image"
+    Direction = '%%14593'
+    SourceAddress = '10.1.0.4'
+    SourcePort = '50000'
+    DestAddress = $Remote
+    DestPort = '443'
+    Protocol = '6'
+  }
+}
+
+# A process as Save-Snapshot records it; without $Started, as snapshots did
+# before they kept start times and identities.
+function New-TestProcess([int64]$ProcessId, [string]$Name, $Started = $null, [string]$Identity = '') {
+  if ($null -eq $Started) { return [pscustomobject]@{ ProcessId = $ProcessId; Name = $Name; Services = '' } }
+  return [pscustomobject]@{
+    ProcessId = $ProcessId; Name = $Name; Services = ''
+    Started = ([datetime]$Started).ToString('yyyy-MM-ddTHH:mm:ss.fffZ'); Identity = $Identity
+  }
+}
+
+# A made-up phase's files, as Export-Phase, Save-Snapshot and Stop-Capture
+# write them.
+function Write-TestPhase([string]$Name, [datetime]$T0, $Security, $AtStart, $AtEnd, $DnsPackets) {
+  Save-Json "$Out\$Name-window.json" ([ordered]@{ Start = $T0.ToString('o'); End = $T0.AddSeconds(60).ToString('o'); Marker = ''; MarkerPort = 0 })
+  Save-Json "$Out\$Name-security.json" $Security
+  Save-Json "$Out\$Name-dns.json" @()
+  Save-Json "$Out\$Name-bits.json" @()
+  Save-Json "$Out\$Name-processes-start.json" $AtStart
+  Save-Json "$Out\$Name-processes-end.json" $AtEnd
+  Save-Json "$Out\$Name-dns-packets.json" $DnsPackets
+}
+
+function Assert-SelfTest([bool]$Holds, [string]$Rule) {
+  if (-not $Holds) { Fail "self-test: this rule does not hold: $Rule" }
+  Write-Host "self-test: $Rule"
+}
+
+# The attribution's rules on made-up phases (spikes.yml runs this before the
+# capture, so a broken rule fails fast): WAM's account provider counts as the
+# app's when its snapshot or a reused PID would have hidden it; a connection
+# takes the identity its PID had at the time; the tree survives a reused
+# PID in the order the events come; and pktmon's questions for the canary's
+# hosts are findings.
+function Invoke-SelfTest {
+  $script:Out = Join-Path ([IO.Path]::GetTempPath()) ('navaja-s2-7-self-test-' + [guid]::NewGuid())
+  New-Item -ItemType Directory -Path $Out | Out-Null
+  $t0 = [datetime]::new(2026, 10, 4, 3, 28, 45, [DateTimeKind]::Utc)
+  $navaja = 'C:\a\navaja\target\debug\navaja.exe'
+  $webview = 'C:\Program Files (x86)\Microsoft\EdgeWebView\Application\153.0.4234.48\msedgewebview2.exe'
+  $taskHost = 'C:\Windows\System32\backgroundTaskHost.exe'
+  $provider = 'backgroundtaskhost.exe [BackgroundTaskHost.WebAccountProvider]'
+  $server = '(hidden) -ServerName:BackgroundTaskHost.WebAccountProvider'
+  $microsoft = '20.190.190.133'
+
+  # Run 37173797683's idle phase: the provider started 3.2 s after the
+  # app's WebView2 and still ran at the phase's end, where the snapshot of
+  # that time named no COM server.
+  Write-TestPhase 'self-wam-end' $t0 @(
+    (New-TestStart $t0 1 1000 900 $navaja "`"$navaja`" --tool uuid"),
+    (New-TestStart $t0 3 1100 1000 $webview "`"$webview`" --embedded-browser-webview=1"),
+    (New-TestStart $t0 5 5228 800 $taskHost $server),
+    (New-TestConnection $t0 6 5228 'backgroundtaskhost.exe' $microsoft)
+  ) @() @(New-TestProcess 5228 'backgroundTaskHost.exe') @()
+  $report = Get-Report 'self-wam-end' $RootImages $TreeImages @() @() $null @()
+  Assert-SelfTest ($report.Delegated.Count -eq 1 -and $report.Delegated[0].Identity -eq $provider -and $report.Findings -eq 1) `
+    'a connection of WAM''s account provider 1 s after its start, which the end snapshot names without its COM server, is a finding'
+
+  # Its in-use phase: the same provider, from the idle phase, connects 1.5 s
+  # after the app starts; no 4688 names it, only the snapshots.
+  $earlier = $t0.AddSeconds(-120)
+  Write-TestPhase 'self-wam-alive' $t0 @(
+    (New-TestStart $t0 1 2000 900 $navaja "`"$navaja`" --tool uuid"),
+    (New-TestConnection $t0 2.5 5228 'backgroundtaskhost.exe' $microsoft)
+  ) @(New-TestProcess 5228 'backgroundTaskHost.exe' $earlier $provider) @(New-TestProcess 5228 'backgroundTaskHost.exe' $earlier $provider) @()
+  $report = Get-Report 'self-wam-alive' $RootImages $TreeImages @() @() $null @()
+  Assert-SelfTest ($report.Delegated.Count -eq 1 -and $report.Findings -eq 1) `
+    'a connection of WAM''s account provider, running since an earlier phase, 1.5 s after the app starts, is a finding'
+
+  # The provider exits and another process gets its PID: each connection
+  # takes the identity of the process that held the PID at the time.
+  Write-TestPhase 'self-pid-reuse' $t0 @(
+    (New-TestStart $t0 1 3000 900 $navaja "`"$navaja`" --tool uuid"),
+    (New-TestStart $t0 2 5228 800 $taskHost $server),
+    (New-TestConnection $t0 4 5228 'backgroundtaskhost.exe' $microsoft),
+    (New-TestStart $t0 8 5228 800 'C:\Windows\System32\taskhostw.exe' '(hidden)'),
+    (New-TestConnection $t0 9 5228 'taskhostw.exe' '20.190.190.134')
+  ) @() @(New-TestProcess 5228 'taskhostw.exe' $t0.AddSeconds(8) 'taskhostw.exe') @()
+  $report = Get-Report 'self-pid-reuse' $RootImages $TreeImages @() @() $null @()
+  $later = @($report.Others | Where-Object { $_.Remote -eq '20.190.190.134' })
+  Assert-SelfTest ($report.Delegated.Count -eq 1 -and $report.Delegated[0].Remote -eq $microsoft -and
+    $later.Count -eq 1 -and $later[0].Identity -eq 'taskhostw.exe') `
+    'a connection takes the identity of the process that held its PID then, not the one at the phase''s end'
+
+  # The negative control: the provider's connection 29 s after the app
+  # started is no finding.
+  Write-TestPhase 'self-wam-late' $t0 @(
+    (New-TestStart $t0 1 4000 900 $navaja "`"$navaja`" --tool uuid"),
+    (New-TestStart $t0 2 5228 800 $taskHost $server),
+    (New-TestConnection $t0 30 5228 'backgroundtaskhost.exe' $microsoft)
+  ) @() @() @()
+  $report = Get-Report 'self-wam-late' $RootImages $TreeImages @() @() $null @()
+  Assert-SelfTest ($report.Woken.Count -eq 0 -and $report.Findings -eq 0) `
+    'a connection of WAM''s account provider 29 s after the app starts is no finding'
+
+  # A question for the canary's hosts that only pktmon saw, from a process
+  # outside the tree, captured twice as pktmon captures every packet.
+  $at = [double](([DateTimeOffset]$t0.AddSeconds(10)).ToUnixTimeMilliseconds()) / 1000
+  $question = [pscustomobject]@{
+    time = $at; src = '10.1.0.4'; sport = 53000; dst = '168.63.129.16'; dport = 53; id = 4242
+    response = $false; rcode = 0; questions = @([pscustomobject]@{ name = 'navigate.navaja-canary.example.com'; type = 'A' }); answers = @()
+  }
+  $answer = [pscustomobject]@{
+    time = $at + 0.002; src = '168.63.129.16'; sport = 53; dst = '10.1.0.4'; dport = 53000; id = 4242
+    response = $true; rcode = 3; questions = @([pscustomobject]@{ name = 'navigate.navaja-canary.example.com'; type = 'A' }); answers = @()
+  }
+  Write-TestPhase 'self-canary' $t0 @(
+    (New-TestStart $t0 1 6000 900 $navaja "`"$navaja`" --tool uuid")
+  ) @() @() @($question, $question, $answer)
+  $report = Get-Report 'self-canary' $RootImages $TreeImages @() @() $null @()
+  Assert-SelfTest ($report.CanaryQuestions.Count -eq 1 -and $report.Findings -eq 1) `
+    'a question for the canary''s hosts in pktmon''s DNS packets, from a process outside the tree, is one finding'
+  Write-Report $report
+
+  # The tree from 4688 events, newest first as Read-Events gives them. The
+  # second WebView2 browser process gets the first one's PID; PID 1000 is
+  # reused by a process outside the tree before it starts another.
+  $created = Get-Created @(
+    (New-TestStart $t0 9 5003 5000 $webview '--type=renderer'),
+    (New-TestStart $t0 8 5000 2000 $webview ''),
+    (New-TestStart $t0 7 2000 900 $navaja ''),
+    (New-TestStart $t0 5 7000 1000 'C:\Windows\System32\conhost.exe' ''),
+    (New-TestStart $t0 4 1000 600 'C:\Windows\System32\conhost.exe' ''),
+    (New-TestStart $t0 3 5002 5000 $webview '--type=utility'),
+    (New-TestStart $t0 2 5000 1000 $webview ''),
+    (New-TestStart $t0 1.5 6000 5000 $webview ''),
+    (New-TestStart $t0 1 1000 900 $navaja '')
+  )
+  $tree = @(Get-Tree $created $RootImages @())
+  $ids = @($tree | ForEach-Object { $_.ProcessId } | Sort-Object -Unique) -join ', '
+  Assert-SelfTest ($tree.Count -eq 6 -and $ids -eq '1000, 2000, 5000, 5002, 5003') `
+    "the tree holds each child of both processes with PID 5000, and neither the child of PID 1000's next holder nor one started before any process with PID 5000 (got $($tree.Count) processes: $ids)"
+
+  Remove-Item -LiteralPath $Out -Recurse -Force -ErrorAction SilentlyContinue
+  Write-Host 'self-test: every rule holds.'
+}
+
 switch ($Mode) {
+  'self-test' { Invoke-SelfTest }
   'setup' { Invoke-Setup }
   'control' { Invoke-Control }
   'baseline' { Invoke-Baseline }
@@ -1233,7 +1676,7 @@ switch ($Mode) {
   }
   'teardown' { Invoke-Teardown }
   default {
-    Write-Host 'usage: s2-7-egress.ps1 setup|control|baseline|check baseline|idle|check idle|in-use|check in-use|teardown'
+    Write-Host 'usage: s2-7-egress.ps1 setup|control|baseline|check baseline|idle|check idle|in-use|check in-use|teardown|self-test'
     exit 2
   }
 }
