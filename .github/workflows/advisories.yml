@@ -1,0 +1,124 @@
+name: advisories
+
+# RustSec advisories against the Rust dependency graph (docs/roadmap.md §2).
+# A new advisory is news about a dependency, not about the PR that happens to
+# be open, so this runs daily and by hand, off the PR gate; ci.yml checks
+# bans, licenses and sources on every PR. A failed run on main, scheduled or
+# by hand, opens an issue, or comments on the open one
+# (scripts/advisories/issue.sh). A run by hand on another branch, say to try
+# a fix in deny.toml or Cargo.lock, checks that branch and reports nothing:
+# the issue is about main.
+#
+# A PR that changes this workflow or scripts/advisories/ runs the check and
+# tests the issue path without writing to any issue: issue.sh against a stub
+# gh, the check against a fixture advisory it must fail on, and issue.sh as a
+# dry run against this repository's issues. No PR requires these jobs.
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/advisories.yml
+      - scripts/advisories/**
+
+permissions: {}
+
+# Every run on main, scheduled or by hand, is in one group, so two report
+# jobs never look the issue up at the same time and open two.
+concurrency:
+  group: advisories-${{ github.ref }}
+  # Cancel superseded PR runs only; a scheduled or manual run keeps its result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: cargo deny advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # First, so the note is there even when the check fails.
+      - name: Note that a run on a branch opens no issue
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: echo "This run checks $GITHUB_REF_NAME. Only a run on main opens or comments on the advisories issue." >>"$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # cargo-deny runs `cargo metadata`, so it needs the pinned toolchain.
+      - name: Install Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      # Installed as in ci.yml's checks job. Renovate moves this pin and
+      # ci.yml's in one branch, so both run the same cargo-deny.
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-deny
+
+      # deny.toml's [graph] gives the 4 targets; --all-features as in ci.yml.
+      - name: cargo-deny (advisories)
+        run: cargo deny --all-features check advisories
+
+  report:
+    name: open or update the advisories issue
+    needs: check
+    # Never on a PR: there the issue path runs as tests (job issue-path).
+    # Only on main: a failed run by hand on a branch would read as main
+    # failing, and no run on main would ever close the issue it opened.
+    if: failure() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write # opens the advisories issue, or comments on it
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Open the advisories issue, or comment on the open one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash scripts/advisories/issue.sh
+
+  issue-path:
+    name: issue path (stub gh, fixture advisory, dry run)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read # the dry run lists the open issues; it writes none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: issue.sh comments on the open issue or opens one, never both (stub gh)
+        run: bash scripts/advisories/issue-test.sh
+
+      - name: Install Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-deny
+
+      - name: The check fails on a fixture advisory for a crate in the graph
+        run: bash scripts/advisories/fixture-check.sh
+
+      - name: issue.sh dry run against this repository's issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DRY_RUN: '1'
+        run: bash scripts/advisories/issue.sh

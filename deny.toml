@@ -1,5 +1,5 @@
-# cargo-deny configuration (docs/roadmap.md §2, "Required gates").
-# Run: cargo deny check bans licenses sources   (advisories run daily, off the PR gate)
+# cargo-deny configuration (docs/roadmap.md §2, "Workflows").
+# Run: cargo deny check bans licenses sources   (advisories run daily in advisories.yml, off the PR gate)
 
 [graph]
 targets = [
