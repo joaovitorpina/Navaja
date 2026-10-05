@@ -2355,6 +2355,8 @@ dependencies = [
  "navaja-core",
  "navaja-tools",
  "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "rustix",
  "serde",
  "serde_json",
@@ -2370,6 +2372,7 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "windows-sys 0.61.2",
+ "x11rb",
 ]
 
 [[package]]

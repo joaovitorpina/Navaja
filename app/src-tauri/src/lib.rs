@@ -29,8 +29,9 @@ mod test_support;
 mod tray;
 mod window;
 
-/// What `tests/privacy.rs` drives: the real panic hook, logger and run path.
-/// Not an API.
+/// What the integration tests drive: the real panic hook, logger and run
+/// path (`tests/privacy.rs`), and the clipboard behind `copy_text`, as
+/// `AppState::clipboard` (`tests/clipboard`). Not an API.
 #[doc(hidden)]
 pub mod testing {
     pub use crate::commands::{RunEnvelope, execute};

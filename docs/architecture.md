@@ -19,6 +19,7 @@ This describes the v1 design accepted in [ADR 0001](adr/0001-stack.md): Tauri 2 
 Navaja/
 ├── Cargo.toml            virtual workspace: crates/*, tools, app/src-tauri, xtask · [workspace.lints]
 ├── rust-toolchain.toml · clippy.toml · deny.toml · js-licenses.toml · release-plz.toml · renovate.json · .gitattributes (eol=lf)
+├── .config/nextest.toml  test groups for tests that share machine state (the clipboard)
 ├── package.json · pnpm-workspace.yaml   (pnpm 11 pinned via packageManager; workspace root lets Vite serve ../tools)
 ├── eslint.config.mjs · prettier.config.mjs · .prettierignore   (load app/'s configs from the root, so they also cover tools/*/ui)
 ├── .github/workflows/    ci · advisories · bundle · spikes · release · release-build
@@ -43,7 +44,7 @@ Navaja/
 │       ├── tauri.conf.json · tauri.release.conf.json (updater artifacts + pubkey) · e2e.conf.json
 │       ├── capabilities/main.json · acl.lock.json · nsis/hooks.nsh
 │       ├── src/          commands · state · paths · window · guard · tray · opener · hotkey · args · clipboard · settings · channel · updater · logging · crash · platform/{mod,unix,linux,macos,windows}.rs
-│       └── tests/        privacy.rs (canary input kept out of logs and crash files)
+│       └── tests/        privacy.rs (canary input kept out of logs and crash files) · clipboard/ (the clipboard privacy markers, one module per OS)
 ├── xtask/                check · acl · tool-gate · bindings · licenses · icons · notices · capture-ports · measure · verify-release · manifests
 ├── assets/brand/         navaja.svg · tray-template.svg · tray-color.svg · GUIDELINES.md
 ├── packaging/            winget / scoop / homebrew templates · dryrun.json (scratch repo only)
@@ -246,6 +247,10 @@ Rust never runs a destructive action from argv.
   - **Windows:** the copy stays out of clipboard history (Win+V), cloud clipboard sync and clipboard monitors.
   - **Linux** (X11 and Wayland): `x-kde-passwordManagerHint: secret` keeps it out of Klipper and other history managers that honour the hint.
   - **macOS:** `org.nspasteboard.ConcealedType` keeps it out of history apps that follow nspasteboard.org. It still reaches Universal Clipboard on the user's own nearby devices; opting out with `currentHostOnly` is an M2b item.
+  - **Tested:** `copy_carries_the_privacy_markers` (`app/src-tauri/tests/clipboard`) copies through `copy_text`'s own call and reads the clipboard back through the OS's own API, not arboard. The markers must be there, and an ordinary copy must carry none of them. It does not check what history apps then do with them: that is manual QA (roadmap §2), and on Windows the M2a exit check (spikes.md).
+    - **Windows**, on every PR (CI's windows-2025): the three formats, the two DWORDs 0, through Win32.
+    - **macOS**, on every PR (CI's macos-26): the `org.nspasteboard.ConcealedType` type, through `NSPasteboard`.
+    - **Linux**, over X11 only: the `x-kde-passwordManagerHint` target, holding `secret`. It needs an X display and no `WAYLAND_DISPLAY`. CI's nextest step has no display, so on CI it prints why it skipped and passes; run it under `xvfb-run` (roadmap §2, local commands). The Wayland copy (arboard's data-control path) is not tested.
 
 **Plugins used:**
 - Tauri core `tray-icon`;

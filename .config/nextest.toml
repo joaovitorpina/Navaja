@@ -1,0 +1,15 @@
+# cargo-nextest settings, for local runs and ci.yml's nextest step alike
+# (docs/roadmap.md §2).
+
+[test-groups]
+# The clipboard belongs to the whole machine, so tests that use it run one at
+# a time.
+clipboard = { max-threads = 1 }
+
+# app/src-tauri/tests/clipboard: the clipboard privacy markers. Its output is
+# shown on a pass too, so a run's log says what each OS's copy carried, or
+# why the check skipped (Linux with no X display, as on CI).
+[[profile.default.overrides]]
+filter = 'package(navaja) & binary(clipboard)'
+test-group = 'clipboard'
+success-output = 'immediate'
