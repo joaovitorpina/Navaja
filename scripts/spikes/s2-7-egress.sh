@@ -314,10 +314,11 @@ start_captures() {
       # pktap,all: every interface, each packet with its process. 512 bytes
       # keep the headers and a DNS question, not whole payloads: the capture
       # holds the whole runner's traffic, and it is uploaded. A 32 MiB
-      # buffer (or the kernel's maximum, debug.bpf_maxbufsize, if lower):
-      # the kernel dropped packets in the baselines of runs 37160662987,
-      # 37162299733 and 37172832953, in bursts of the VM's own downloads,
-      # and a drop fails idle and in use.
+      # buffer, or XNU's cap on it if that is lower (debug.bpf_bufsize_cap;
+      # BIOCSBLEN applies that cap, not debug.bpf_maxbufsize): the kernel
+      # dropped packets in the baselines of runs 37160662987, 37162299733
+      # and 37172832953, in bursts of the VM's own downloads, and a drop
+      # fails idle and in use.
       start_capture "$phase" tcpdump -i pktap,all -P -n -U -B 32768 -s 512 -w "$OUT/$phase.pcapng"
       ;;
   esac
@@ -527,8 +528,9 @@ setup() {
       # pktap needs Apple's tcpdump.
       tcpdump --version 2>&1 | awk 'NR <= 3'
       sw_vers
-      # The ceiling on tcpdump's -B (start_captures).
-      sysctl debug.bpf_bufsize debug.bpf_maxbufsize 2> /dev/null || true
+      # The BPF buffer sizes; bpf_bufsize_cap bounds tcpdump's -B
+      # (start_captures).
+      sysctl debug.bpf_bufsize debug.bpf_maxbufsize debug.bpf_bufsize_cap 2> /dev/null || true
       echo "macOS needs no setup: pktap is built in."
       ;;
   esac
