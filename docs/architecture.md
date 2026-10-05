@@ -38,7 +38,7 @@ Navaja/
 │   ├── src/shell/        Shell · Sidebar · CommandPalette · ToolHost · Home · SettingsView · AboutView · OpenLogsButton · dialogs
 │   ├── src/generic/      GeneratorView · TransformView · OptionControl · OutputView (one renderer per OutputKind)
 │   ├── src/editor/       CodeMirror 6 {@attach} + size thresholds
-│   ├── e2e/              wdio.conf.ts · strace-guard.sh (Linux) · support/ · specs/{launch,smoke,single-instance,egress,json,ports}.e2e.ts
+│   ├── e2e/              wdio.conf.ts · strace-guard.sh (Linux) · data-folder-check.mjs · support/ · specs/{launch,smoke,single-instance,egress,json,ports}.e2e.ts · last/data-folder.e2e.ts
 │   ├── eslint/           config.js (ESLint) · view-imports.js (the custom-view import allowlist, §4) · view-files.js (what tools/ may hold, §4) · their tests
 │   └── src-tauri/        crate navaja · features: default [docker], updater (M6), e2e
 │       ├── tauri.conf.json · tauri.release.conf.json (updater artifacts + pubkey) · e2e.conf.json
@@ -230,7 +230,7 @@ Rust never runs a destructive action from argv.
   - **Runtime grants:** Tauri's default `dynamic-acl` feature compiles in `Manager::add_capability`, which adds a capability after start. `clippy.toml` bans it.
 - **Plugins never used:** http, fs, shell, dialog, clipboard-manager and store.
 - **Window:** one Rust builder creates it with:
-  - incognito mode;
+  - incognito mode: WebView2's InPrivate mode, a non-persistent WebKit data store, an ephemeral WebKitGTK context. The data-folder canary checks on every PR that text entered into the app's text fields reaches none of the end-to-end build's data folders (roadmap §2);
   - new windows denied;
   - hidden until ready. `cargo xtask check` requires `"create": false` and `"visible": false` on every window in `tauri.conf.json`. Tauri reads a missing key as true, and would then build the window at start, without this builder, and show it before the front end is ready;
   - no devtools in release builds.
@@ -320,6 +320,7 @@ Rust never runs a destructive action from argv.
 - **Lint:** `pnpm lint` checks which files `tools/` holds (§4), then runs ESLint (the recommended JavaScript, TypeScript and Svelte rules, plus the custom-view allowlist from §4) and Prettier over `app/` and `tools/*/ui/`. `pnpm format` applies Prettier.
 - **Tests:** Vitest with `mockIPC` and axe, and WebdriverIO end-to-end tests on all three OSes **(S2.6)**.
   - The end-to-end tests drive the real debug app through its embedded WebDriver server (§5). On Linux they run under the strace network guard (roadmap §2).
+  - Their last spec enters a canary into every text field through WebDriver, quits the app, and then runs `app/e2e/data-folder-check.mjs`, which searches the build's data folders for it (roadmap §2).
   - axe is not wired in yet. It joins Vitest in M3 (roadmap M3, item 3).
 
 ## 7. Port inspector (`navaja-ports`, `navaja-docker`, `tools/ports`)
