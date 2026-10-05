@@ -231,11 +231,6 @@ jobs:
         shell: bash
         run: pnpm tauri build --debug --no-bundle --features e2e --config src-tauri/e2e.conf.json
 
-      # TEMPORARY: marks the start, for the sweep below.
-      - name: TEMPORARY mark the end-to-end start
-        shell: bash
-        run: node -e "require('fs').writeFileSync(process.argv[1], String(Date.now() - 1000))" "$RUNNER_TEMP/e2e-start"
-
       - name: End-to-end tests
         if: runner.os != 'Linux'
         run: pnpm e2e
@@ -264,8 +259,3 @@ jobs:
       - name: The data folder check finds a planted canary (negative control)
         shell: bash
         run: node app/e2e/data-folder-check.mjs control
-
-      - name: TEMPORARY sweep for files the run changed
-        if: success() || failure()
-        shell: bash
-        run: node app/e2e/data-folder-sweep.mjs "$RUNNER_TEMP/e2e-start" app/e2e/output/data-folder.json
