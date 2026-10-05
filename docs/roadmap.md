@@ -284,8 +284,11 @@ cargo xtask tool-gate origin/main    # tool PR touches only what architecture §
 cargo fmt --all --check
 rustfmt --edition 2024 --check tools/*/mod.rs  # tool modules, which cargo fmt skips (declared inside a macro)
 cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace        # includes serial live port tests from M4; the clipboard markers check replaces your clipboard's contents
-# Linux: the clipboard markers check reads X11, so it skips without an X display or in a Wayland session
+cargo nextest run --workspace        # includes serial live port tests from M4, and the clipboard markers check (below)
+# The clipboard markers check replaces your clipboard's contents, and on X11 leaves it empty. Its ordinary copy can reach
+# clipboard history (Win+V, Klipper, macOS history apps), and cloud clipboard or Universal Clipboard when they are on.
+# Linux: it reads X11, so it skips with no X display, or where arboard copies over Wayland (KDE, wlroots). On GNOME
+# Wayland arboard falls back to X11, so it runs there. This runs it on a private X server, away from your clipboard:
 env -u WAYLAND_DISPLAY xvfb-run -a cargo nextest run -p navaja --test clipboard
 cargo deny check bans licenses sources
 cargo xtask licenses                 # npm licences vs deny.toml's allowlist + js-licenses.toml (after pnpm install)
@@ -336,11 +339,15 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
   - an egress canary: fetch, image, beacon, WebSocket, `window.open`, top-level navigation, and WebRTC in the page and in the iframes it creates, all blocked. Fetch, image, beacon and WebSocket must each raise their own CSP violation, since a request that fails for some other reason proves nothing;
   - a Linux strace guard: a `connect`, `sendto`, `sendmsg` or `sendmmsg` to any address other than 127.0.0.1 or ::1 fails the run (the 127.0.0.53 DNS stub included). So does an inet call whose address can't be read, or an app process still running after the suite. The suite never opens a URL or the logs folder: strace would follow the browser or file manager that starts (architecture §5, "Hand-offs to other programs");
   - a canary input at `NAVAJA_LOG=trace`, plus a panicking tool, must not appear in logs, crash files or stderr. The integration test `app/src-tauri/tests/privacy.rs`, run by nextest, checks logs and crash files at trace level; it does not capture stderr yet;
-  - the clipboard privacy markers (architecture §5, "Clipboard"): `copy_carries_the_privacy_markers` (`app/src-tauri/tests/clipboard`), run by nextest, copies a random canary through `copy_text`'s own call and reads the markers back through the OS's own API, against an ordinary copy that must carry none. It checks the three Windows formats and macOS's `org.nspasteboard.ConcealedType`. Its Linux part (`x-kde-passwordManagerHint`, over X11) needs an X display, which CI's nextest step does not have, so on CI it prints why it skipped; run it locally under `xvfb-run` (local commands above).
+  - the clipboard privacy markers (architecture §5, "Clipboard"): `copy_carries_the_privacy_markers` (`app/src-tauri/tests/clipboard`), run by nextest, copies a random canary through `copy_text`'s own call and reads the markers back through the OS's own API, against an ordinary copy that must carry none. It checks the three Windows formats and macOS's `org.nspasteboard.ConcealedType`. Its Linux part (`x-kde-passwordManagerHint`, over X11, which is also how arboard copies on GNOME Wayland) needs an X display, which CI's nextest step does not have, so on CI it prints why it skipped. It runs only where a developer runs it with a display, e.g. under `xvfb-run` (local commands above).
 - **In M2a and M6:**
   - a whole-process-tree NIC capture on each OS (S2.7), without opening the repository link or the logs folder, whose browser or file manager may count as part of the tree;
   - the webview data folder holds no input text;
-  - copied tokens are absent from clipboard history and Klipper. The markers are checked on every PR (above); whether the history apps honour them is checked by a person (spikes.md, "M2a exit check").
+  - copied tokens are absent from clipboard history and Klipper:
+    - the markers are checked on every PR on Windows and macOS (above). The Linux one is checked only when a developer runs the check with an X display;
+    - a person checks that Windows clipboard history honours them (spikes.md, "M2a exit check");
+    - a person checks Klipper on KDE Plasma 6 Wayland. Its compositor offers data-control, so arboard copies over Wayland there, which no automated check reads. Copy a UUID with Navaja's Copy button, and again with Ctrl+C on the output: each pastes, and Klipper's history does not list it. An ordinary copy is listed, as the control;
+    - nothing checks the macOS history apps that follow nspasteboard.org yet.
 
 **Manual QA**, at each milestone end, on Windows 11, Ubuntu GNOME Wayland with AppIndicator, Ubuntu X11, Fedora GNOME (no tray), KDE Plasma 6 Wayland and macOS 26:
 - **Shell:** starts hidden; tray menu; close and quit paths; `--toggle` and `--tool`; keyboard-only use; About's repository link opens the browser and Settings' "Open logs folder" opens the file manager (no automated test opens them).
