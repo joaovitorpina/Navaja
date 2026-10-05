@@ -15,13 +15,16 @@ describe('shell', () => {
     // could pass on that list before the "uid" results arrive. Empty the list
     // first with a query that matches nothing; then one Backspace makes the
     // query "uid", and the next list can only be its results.
-    const first = $('[role="dialog"] [role="option"]');
+    const option = '[role="dialog"] [role="option"]';
     await input.setValue('uidx');
     await expect($('[role="dialog"]')).toHaveText(expect.stringContaining('No tools match.'));
-    await expect(first).not.toBeExisting();
+    await expect($(option)).not.toBeExisting();
     await browser.keys('Backspace');
     await expect(input).toHaveValue('uid');
 
+    // Look the option up again: one looked up while the list was empty stays
+    // "not found".
+    const first = $(option);
     await expect(first).toHaveText(expect.stringContaining('UUID generator'));
     await expect(first).toHaveAttribute('aria-selected', 'true');
     await browser.keys('Enter');
