@@ -2,7 +2,8 @@ name: spikes
 
 # Spike steps that need no human (docs/roadmap.md §2; results go in
 # docs/spikes.md). Run by hand from the Actions tab, and on a PR that changes
-# this workflow or scripts/spikes/.
+# this workflow or scripts/spikes/. Each job's comment ends with a Lifetime
+# line: what deletes the job, or moves it (docs/spikes.md, Rules).
 on:
   workflow_dispatch:
   pull_request:
@@ -168,6 +169,8 @@ jobs:
   # they must refuse, and HMR is checked at the dev server and in the app's
   # own webview. A failed check doesn't stop the ones after it, and the last
   # step writes a PASS/FAIL table to the run's summary.
+  # Lifetime: deleted once the ports view (tools/ports/ui/) and its
+  # end-to-end spec run in ci.yml (roadmap M4, item 10).
   s2-2:
     name: S2.2 views outside app/ (${{ matrix.os }})
     strategy:
@@ -362,8 +365,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # S2.3: is the tray icon crisp, and does the macOS template icon work? It
-  # runs the app as shipped (`tauri build --debug --no-bundle`, no e2e
-  # overlay).
+  # runs the plain debug build that ci.yml also makes (`tauri build --debug
+  # --no-bundle`, no e2e overlay), whose tray code and icons are the
+  # release build's.
   # - macOS (scripts/spikes/s2-3-check.sh): the menu bar captured before the
   #   app starts and with it running, in the light and the dark appearance,
   #   then checks on the icon's pixels against a system item's. Two negative
@@ -375,6 +379,8 @@ jobs:
   #   negative control is the same check on an empty stretch of the taskbar.
   #   Other scales need a person (docs/spikes.md).
   # The captures are the run's artifact.
+  # Lifetime: runs once more on the final brand icons (roadmap M2b, item 3),
+  # then is deleted.
   s2-3:
     name: S2.3 tray icon (${{ matrix.os }})
     strategy:
@@ -596,6 +602,10 @@ jobs:
   # skipped, the job stays green with a warning, and the summary says the
   # runner cannot answer. Those three steps have never run with history on.
   # Scripts: scripts/spikes/exit-clipboard-check.sh and clipboard-history.ps1.
+  # Lifetime: deleted once a person records the Windows 11 Win+V check in
+  # docs/spikes.md; nextest's copy_carries_the_privacy_markers keeps guarding
+  # the formats. It moves into ci.yml instead only if a GitHub-hosted runner
+  # ever has clipboard history.
   exit-clipboard-history:
     name: Exit check, copy stays out of clipboard history (windows-2025)
     runs-on: windows-2025
@@ -761,6 +771,8 @@ jobs:
   # process made before it. Nothing opens a URL or the logs folder
   # (architecture §5). The captures go up as an artifact; nothing else
   # leaves the runner.
+  # Lifetime: runs again in M6, with the updater (roadmap M6, item 7), then
+  # moves into the release checks or is deleted.
   s2-7:
     name: S2.7 egress capture (${{ matrix.os }})
     strategy:

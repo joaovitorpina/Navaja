@@ -9,6 +9,7 @@ A spike is a short, time-boxed experiment. It settles a question before the code
 - A gating spike runs before the work it gates.
 - A fallback you take becomes an ADR in `docs/adr/`.
 - Keep raw outputs (captures, logs, numbers) next to the entry or in `crates/*/tests/fixtures/`, as UTF-8 text such as redacted dumps or JSON. Redact arguments and anything secret. gitleaks checks fixtures and snapshots for secrets, but skips binary captures, archives, UTF-16 text, symlinks and the paths it allowlists, such as an image, a `.bin` or a lockfile (roadmap §2, "Secrets in fixtures").
+- Every `spikes.yml` job names what removes it: a `Lifetime:` line ends the comment above the job, and its entry here has a **The job's lifetime** line. When that happens, the job is deleted with its scripts in `scripts/spikes/`, unless the line promotes it into `ci.yml` (or, for `s2-7`, into the release checks, roadmap M6). The PR that deletes or moves a job also updates the docs that name it, such as roadmap §2's `spikes.yml` row and the ADRs. The entry here stays as the record.
 
 ## Template
 
@@ -26,6 +27,7 @@ Copy this for each spike and fill it in.
 - **Result:** PASS / FAIL (date)
 - **Numbers and evidence:** tables, links to fixtures
 - **Decision:** what changes in the code or docs (ADR link if a fallback was taken)
+  - **The job's lifetime:** for a spike with a `spikes.yml` job, what deletes the job or moves it into `ci.yml` (Rules)
 ```
 
 ## Results
@@ -83,7 +85,7 @@ Copy this for each spike and fill it in.
   3. b. In `tools/uuid/mod.rs`, use the same action on `Tool` in `impl Tool for UuidGenerator` (line 52), then on `ToolMeta` in `fn meta(&self) -> ToolMeta` (line 53). PASS: the first opens `crates/navaja-core/src/tool.rs` at `pub trait Tool` (line 14), the second `crates/navaja-core/src/meta.rs` at `pub struct ToolMeta` (line 13).
   4. c. At the end of `tools/lib.rs`, type `fn s21() { let _ = crate::uuid::` and invoke completion (Ctrl+Space) right after the last `::`. PASS: the list offers `TOOL` and `UuidGenerator`. Undo the edit. Then type `fn s21() { let _ = navaja_core::` at the end of `tools/uuid/mod.rs`. PASS: the list offers `Tool`, `ToolMeta` and `Registry`. Undo the edit.
   5. d. In `tools/uuid/mod.rs`, PASS when the editor shows no "File is not included in module tree" banner, and step 2's action (Ctrl+B; Cmd+B on macOS) on `navaja_core` in `use navaja_core::{` (line 3) opens `crates/navaja-core/src/lib.rs`.
-  6. Negative control. In `tools/lib.rs`, change `uuid,` to `uiud,` and wait for the analysis. PASS: `tools/uuid/mod.rs` shows the "not included in module tree" banner, step 3's action on `Tool` no longer opens `tool.rs`, and the action on `uiud` does not open `tools/uuid/mod.rs`. Put the line back (`git checkout tools/lib.rs`), wait, and check that step 3 works again.
+  6. Negative control. In `tools/lib.rs`, change `uuid,` to `uiud,` and wait for the analysis. PASS: `tools/uuid/mod.rs` shows the "not included in module tree" banner, and the action on `uiud` does not open `tools/uuid/mod.rs`. Also record whether step 3's action on `Tool` still opens `tool.rs`: an IDE may resolve some paths in a file outside the module tree, so that alone does not fail the control. Put the line back (`git checkout tools/lib.rs`), wait, and check that step 3 works again.
   7. Record here the RustRover version, the OS, and PASS or FAIL for steps 2 to 6. Attach a screenshot of any failure to the PR; do not commit images (Rules).
 
   Optionally, the same steps in VS Code with the rust-analyzer extension at its defaults (F12 goes to the definition, Ctrl+Space completes; its "unlinked file" warning is the banner) cover what the job leaves out.
@@ -190,6 +192,7 @@ Copy this for each spike and fill it in.
   - ESLint's config is `app/eslint/config.js`, loaded by the root `eslint.config.mjs`. Its patterns are relative to the repository root and cover `app/` and `tools/*/ui/`, so the root must be ESLint's base path. `pnpm lint` runs from the root with `--config eslint.config.mjs`: with `--config` the base path is the working directory, and a config file placed under `tools/` is never used. Editors use config lookup instead, which finds the root `eslint.config.mjs` and takes its folder as the base path. The import allowlist (architecture §4) is in place, and `app/eslint/config.test.ts` runs the real config through ESLint's Node API on a file under `tools/`, so a change that drops `tools/` fails a test.
   - Prettier's config is `app/prettier.config.js`, loaded by the root `prettier.config.mjs`. It resolves the Svelte plugin from `app/`.
   - S2.2 passed on all three OSes, so these settings are the decision: [ADR 0002](adr/0002-views-outside-app.md). No CI job outside `spikes.yml` checks a custom view: the repository holds none, and `ci.yml` runs `pnpm lint` on Linux only. Re-run `spikes.yml` by hand after upgrading Vite, Vitest, svelte-check, ESLint, Prettier or Tailwind.
+  - **The job's lifetime:** `spikes.yml`'s `s2-2` job is deleted once the ports view (`tools/ports/ui/`) and its end-to-end spec run in `ci.yml` (roadmap M4, item 10). `ci.yml` then checks a real custom view: svelte-check, ESLint and Prettier in the checks job and Vitest in the web job, on Linux only, and the build and the ports spec on three OSes. Nothing then checks HMR: after a Vite or vite-plugin-svelte upgrade, check it by hand (`pnpm dev`, then edit the ports view). Until the job goes, the re-run after an upgrade stands.
 
 ## S2.3 Tray icon
 
@@ -197,7 +200,7 @@ Copy this for each spike and fill it in.
 - **Time box:** ½ d
 - **Question:** which icon files keep the tray icon crisp at every scale, and does the macOS template icon work?
 - **Method:** the minimal tray from roadmap M2a, item 9 (`tray.rs`), with its placeholder icons: `icons/tray/template.png` (64 × 64, black on transparent) as a template image on macOS, and `icons/tray/color-32.png` (32 × 32, colour) elsewhere.
-  - **Automated** (`.github/workflows/spikes.yml`, job `s2-3`, on macos-26 and windows-2025): run by hand, and on a PR that changes the workflow or `scripts/spikes/`. Each runner builds the app as shipped, `pnpm tauri build --debug --no-bundle`, without the end-to-end overlay, and starts `target/debug/navaja` with its own `NAVAJA_APP_DIR`. The app creates its window hidden and shows it once the front end is ready (`window.rs`), so the window is on screen too; the checks look only at the tray.
+  - **Automated** (`.github/workflows/spikes.yml`, job `s2-3`, on macos-26 and windows-2025): run by hand, and on a PR that changes the workflow or `scripts/spikes/`. Each runner builds the plain debug build that `ci.yml` also makes, `pnpm tauri build --debug --no-bundle`, without the end-to-end overlay, and starts `target/debug/navaja` with its own `NAVAJA_APP_DIR`. Its tray code and icons are the release build's; a debug build differs in ways the tray does not see, such as a console window on Windows and honouring `NAVAJA_APP_DIR`. The app creates its window hidden and shows it once the front end is ready (`window.rs`), so the window is on screen too; the checks look only at the tray.
   - **macOS** (`scripts/spikes/s2-3-check.sh`, with `s2-3-menubar.swift`, compiled once with `swiftc`), one step per check:
     - The helper prints the display's size and scale. It finds the menu bar's status items through `CGWindowListCopyWindowInfo`: on-screen windows at the status-window level (layer 25), at the top of the display, at most 50 points tall and narrower than 400 points. The Window Server's own windows up there, at layer 2147483630, are not status items. They come and go between steps (in run 37153145013, two before the app started and none by the control build), so the count in the next step leaves them out. The helper's `items` listing in the log prints them too, each with its layer.
     - It sets the light appearance through System Events and reads it back from `defaults read -g AppleInterfaceStyle`. Then it captures the whole display with `screencapture -x` before the app starts.
@@ -258,10 +261,10 @@ Copy this for each spike and fill it in.
   - The handle (`#57606a`) and the orange pivot are solid. Their edges change colour within one or two pixels, more along the handle's slanted top.
   - The blades are light grey in the source (`#e6e8eb` and `#d0d7de`). They come out within about 30 levels of the taskbar's grey, so they barely show. That is the placeholder art's colour, not scaling; the final art is roadmap M2b, item 3.
 
-  **Windows scales, by a person.** On Windows 11 (not Server), with a display that offers 125, 150, 175 and 200 %:
-  1. Build the app as shipped (`pnpm tauri build --debug --no-bundle`) and start `target\debug\navaja.exe`. If the icon is behind the chevron, turn Navaja on under Settings > Personalization > Taskbar > Other system tray icons.
-  2. For each of 100, 125, 150, 175 and 200 % (Settings > System > Display > Scale): quit Navaja from its tray menu, set the scale, start it again, and capture the notification area (PrtScn). At one scale, also change the scale while Navaja runs, since Windows may then rescale the icon it already has.
-  3. Open each capture in Paint, zoom to 800 % and look at the icon. Windows draws a small icon at 16 pixels at 100 %, 20 at 125 %, 24 at 150 %, 28 at 175 % and 32 at 200 %. Only 200 % uses the 32-pixel PNG one to one.
+  **Windows scales, by a person.** On Windows 11 (not Server), with a display that offers 100, 125, 150, 175 and 200 % under Settings > System > Display > Scale. Windows lists 200 % only for a display with enough pixels, typically 4K (3840 × 2160). Custom scaling does not count: it is a different code path.
+  1. Build the app as shipped, a release build: `pnpm tauri build --no-bundle` at the repository root ([manual-qa.md](manual-qa.md), "Windows 11" setup), and start `target\release\navaja.exe`. CI's job uses the debug build, whose tray code and icons are the same. If the icon is behind the chevron, turn Navaja on under Settings > Personalization > Taskbar > Other system tray icons.
+  2. For each of 100, 125, 150, 175 and 200 %: quit Navaja from its tray menu, set the scale, and start it again. Move the pointer away from the notification area, since hovering the icon highlights its button and changes the background around it. Then press Win+PrtScn: it saves a full-screen PNG at the display's physical pixels to Pictures\Screenshots. PrtScn alone opens the Snipping Tool's overlay on current Windows 11. At one scale, also change the scale while Navaja runs and capture again, since Windows may then rescale the icon it already has.
+  3. Open each PNG in Paint, zoom to 800 % and look at the icon. Windows draws a small icon at 16 pixels at 100 %, 20 at 125 %, 24 at 150 %, 28 at 175 % and 32 at 200 %. Only 200 % uses the 32-pixel PNG one to one.
   4. "Crisp" means the edges of the handle and pivot change colour within one or two pixels, as they do at 100 % on the runner: not smeared over three or more, and not blocky with doubled pixels. Compare with the 200 % capture.
   5. Check it on the light and on the dark taskbar (Settings > Personalization > Colors).
   6. Record a table here: scale, the icon's size in pixels, crisp or not, and a note. Attach the crops to the PR.
@@ -282,8 +285,45 @@ Copy this for each spike and fill it in.
 - **Method:** the `os` job in `ci.yml` on GitHub-hosted windows-2025, ubuntu-24.04 and macos-26. A debug build with `--no-bundle --features e2e --config src-tauri/e2e.conf.json` (Tauri 2.12.1), driven by WebdriverIO 9.32.0 and `@wdio/tauri-service` 1.4.0 in embedded mode: the app's own `tauri-plugin-wdio-webdriver` 1.4.0 (git rev `fb4a544`, see `app/src-tauri/Cargo.toml`) serves WebDriver, with no external driver. Linux runs the suite through `app/e2e/strace-guard.sh`, inside `dbus-run-session -- xvfb-run`.
 - **PASS if:** 10 of 10 runs per OS, under 10 min
 - **FAIL then:** macOS end-to-end tests become non-gating, plus a manual smoke test
-- **Result:** not finished (2026-10-03). The first run passed on all three OSes; the 10-of-10 criterion is not measured yet.
-- **Numbers and evidence:** PR #7's first CI run, [37090426812](https://github.com/joaovitorpina/Navaja/actions/runs/37090426812), on commit `78f4ce0` (2026-10-03):
+- **Result:** PASS (2026-10-03). Ten of ten runs passed on each of the three runners. Every `os` job took under 10 minutes: the slowest took 6 min 1 s, on macos-26.
+- **Numbers and evidence:** `ci.yml` run [37149162891](https://github.com/joaovitorpina/Navaja/actions/runs/37149162891) is the push run of `main` at `21e62b9` (PR #12's merge). It was run ten times, attempts 1 to 10, one after another, from 19:47 to 20:42 UTC. Each attempt ran every job again on the same commit. All 50 jobs passed: `checks`, `web` and the three `os` jobs, ten times each.
+
+  | Runner | Passed | `os` job: fastest, median, slowest | End-to-end step: fastest, median, slowest |
+  |---|---|---|---|
+  | windows-2025 | 10 of 10 | 3 min 9 s, 3 min 51 s, 4 min 13 s | 20 s, 23.5 s, 25 s |
+  | ubuntu-24.04 (strace guard) | 10 of 10 | 2 min 24 s, 2 min 41 s, 3 min 21 s | 11 s, 17 s, 21 s |
+  | macos-26 | 10 of 10 | 3 min 17 s, 4 min 59 s, 6 min 1 s | 14 s, 18.5 s, 22 s |
+
+  | Attempt | windows-2025: job, step | ubuntu-24.04: job, step | macos-26: job, step |
+  |---|---|---|---|
+  | 1 | pass, 3 min 48 s, 23 s | pass, 2 min 50 s, 13 s | pass, 3 min 17 s, 14 s |
+  | 2 | pass, 4 min 13 s, 25 s | pass, 2 min 43 s, 11 s | pass, 4 min 57 s, 19 s |
+  | 3 | pass, 3 min 50 s, 23 s | pass, 2 min 42 s, 14 s | pass, 5 min 32 s, 22 s |
+  | 4 | pass, 3 min 52 s, 24 s | pass, 2 min 30 s, 19 s | pass, 3 min 53 s, 17 s |
+  | 5 | pass, 4 min 1 s, 23 s | pass, 3 min 21 s, 20 s | pass, 3 min 19 s, 14 s |
+  | 6 | pass, 3 min 36 s, 22 s | pass, 2 min 40 s, 17 s | pass, 5 min 53 s, 19 s |
+  | 7 | pass, 4 min 4 s, 24 s | pass, 2 min 48 s, 14 s | pass, 5 min 43 s, 19 s |
+  | 8 | pass, 3 min 54 s, 24 s | pass, 2 min 25 s, 17 s | pass, 6 min 1 s, 19 s |
+  | 9 | pass, 3 min 9 s, 20 s | pass, 2 min 24 s, 21 s | pass, 5 min 1 s, 18 s |
+  | 10 | pass, 3 min 50 s, 24 s | pass, 2 min 24 s, 19 s | pass, 4 min 9 s, 15 s |
+
+  - **What the times cover.** The `os` job covers the setup, clippy, nextest, doctests and both app builds, then the end-to-end step.
+    - On Windows and macOS, the end-to-end step is "End-to-end tests".
+    - On Linux it is "End-to-end tests under the network guard (Linux)": the suite under the strace wrapper, plus the guard's checks after it.
+    - GitHub reports step times to the second, so each time is ±1 s.
+  - **No retries.** No retry hides a failure: `app/e2e/wdio.conf.ts` sets no `retries` or `specFileRetries`, and the end-to-end steps in `ci.yml` have no `continue-on-error`.
+  - **Warm cache.** The ten attempts measure how often the harness fails, and how long a job takes with a warm cache.
+    - Each attempt re-ran the same commit, so the Rust cache key matched.
+    - The logs of attempts 1 and 8 were checked on all three OSes. They restored the cache with `full match: true`, ran 151 of 151 nextest tests, report "Spec Files: 4 passed, 4 total (100% completed)", and passed both egress tests.
+    - The runner images in those attempts were ubuntu-24.04 20260927.320.1, windows-2025-vs2026 20260925.250.1 and macos-26-arm64 20260907.0351.1.
+  - **Without a Rust cache.** PR #14's `ci.yml` run [37173797591](https://github.com/joaovitorpina/Navaja/actions/runs/37173797591), on `f08d9d1`, changed the macOS cache key. Its `os (macos-26)` job logged "No cache found." and took 5 min 39 s, under 10 min. Its Windows and Ubuntu jobs, which had a cache, took 3 min 56 s and 3 min 17 s.
+  - **The record.** The tables here are the record. GitHub keeps the run's logs for 90 days, the repository's maximum, so they expire at the start of January 2027.
+  - **The app measured.** The ten attempts ran `main` at `21e62b9`. Nothing under `app/`, `crates/` or `tools/`, in `ci.yml` or in the lockfiles changed from there to `9988b86`.
+    - The PRs that close M2a then changed the app and the suite: #14 put the dead proxy on every OS and set a macOS 14 target, and #22 added a fifth spec file, the data-folder check. S2.6 was not measured again.
+    - The last `ci.yml` run of each of the six PRs (#14, #17, #18, #19, #22, #23) passed, every `os` job in under 10 min. The slowest was 6 min 51 s, macos-26, in [37272545897](https://github.com/joaovitorpina/Navaja/actions/runs/37272545897) on #14's head `7ef40dd`.
+    - Five of their earlier runs failed. #14's [37160662985](https://github.com/joaovitorpina/Navaja/actions/runs/37160662985) and [37161652786](https://github.com/joaovitorpina/Navaja/actions/runs/37161652786) failed only its new minimum-macOS step. Two of #22's runs failed on purpose: their temporary commits made the data-folder check fail. One run failed in the end-to-end step on its own: [37253449385](https://github.com/joaovitorpina/Navaja/actions/runs/37253449385), on Windows, on #17's `bbc6f71`. The reworked smoke spec looked the palette's first option up before the list had emptied, and WebView2 turns the embedded WebDriver's stale-element error into a null result; `f6c8e92` looks it up afterwards.
+
+  Before the ten attempts there was one run: PR #7's first CI run, [37090426812](https://github.com/joaovitorpina/Navaja/actions/runs/37090426812), on commit `78f4ce0` (2026-10-03).
 
   | Runner | Result | e2e build | e2e suite | Whole `os` job |
   |---|---|---|---|---|
@@ -291,8 +331,8 @@ Copy this for each spike and fill it in.
   | ubuntu-24.04 (strace guard) | pass | 53 s | 15 s | 6 min 0 s |
   | macos-26 | pass | 2 min 1 s | 18 s | 5 min 55 s |
 
-  That run tested the suite as first submitted, before the PR #7 review fixes: the smoke spec's route reset, the stronger egress canary, the first-launch `--tool` spec, and the strace guard's signal handling and per-address check. It also still loaded WebdriverIO's front-end bridge (`VITE_NAVAJA_E2E=1`) and used the wider e2e overlay (`withGlobalTauri`, `core:default`), without the later harness changes (the window pin in `before()`, the msedgedriver patch, the env-gated WebDriver server). The Method above describes the setup from the next recorded run on. It is one run per OS, not ten.
-- **Decision:** none yet. S2.6 stays open until 10 runs per OS are recorded here.
+  That run tested the suite as first submitted, before the PR #7 review fixes: the smoke spec's route reset, the stronger egress canary, the first-launch `--tool` spec, and the strace guard's signal handling and per-address check. It also still loaded WebdriverIO's front-end bridge (`VITE_NAVAJA_E2E=1`) and used the wider e2e overlay (`withGlobalTauri`, `core:default`), without the later harness changes (the window pin in `before()`, the msedgedriver patch, the env-gated WebDriver server). The Method above describes the setup from the next recorded run on. Its Windows job restored a partial Rust cache (`full match: false`), so its 7 min 41 s is not a cold-cache time either.
+- **Decision:** the end-to-end tests stay a required check on all three OSes. Branch protection requires `os (windows-2025)`, `os (ubuntu-24.04)` and `os (macos-26)`, and each runs the suite. macOS needs no fallback.
 
 ## S2.7 Egress
 
@@ -433,8 +473,7 @@ Copy this for each spike and fill it in.
   - on Windows, no browser arguments of Navaja's own: with the proxy nothing left the tree, so `--disable-component-update` and `--disable-background-networking` were not needed, and turning off WebView2's single sign-on did not stop `wlidsvc`, so it is not passed either;
   - on macOS, WebKit's fraudulent-website warnings off, which Navaja's own pages never need. Whether that keeps WebKit from asking the Safe Browsing service is not shown (see "Result");
   - the disclosed list, `scripts/spikes/s2-7-disclosed.tsv`. S2.7 reports what it covers in its own summary row and fails on anything else. privacy.md carries ADR 0003's text for that traffic word for word (its section 4; roadmap M6, item 6), not the TSV's short purposes.
-
-  S2.7 runs again in M6, with the updater.
+  - **The job's lifetime:** `spikes.yml`'s `s2-7` job runs again in M6, with the updater (roadmap M6, item 7). Then it moves into the release checks or is deleted, with its scripts. Either way, ADR 0003 keeps the disclosed list, and privacy.md its text (roadmap M6, item 6).
 
 ## M2a exit check: copy stays out of Windows clipboard history
 
@@ -460,11 +499,16 @@ Not a spike: one of M2a's exit criteria (roadmap M2a, Exit), checked the same wa
   - Runs 37149634725 and 37150853141 gave the same results with their own canaries. Run 37148575144 found history off in the same way; its job failed, because the enable step then still failed when history stayed off.
   - Run [37152739410](https://github.com/joaovitorpina/Navaja/actions/runs/37152739410), on `913ef25`, gave the same results with the canary `74b7f23d-3e38-4ed4-8bb8-5a90f1c81689`, in 3 min 24 s. Its summary step got `enabled=false`, for which it writes the history row as "off: inconclusive", and the job carries the enable step's warning.
   - Run [37161147668](https://github.com/joaovitorpina/Navaja/actions/runs/37161147668), on `e4cb742`, gave the same results again with the canary `c20f0605-3573-4261-8d68-f1643319caee`, in 3 min 34 s. The three history steps were skipped, with `enabled=false`.
-- **By a person**, on Windows 11:
-  1. Turn on Settings > System > Clipboard > Clipboard history.
-  2. Control: copy a word in Notepad, press Win+V, and check that it is listed.
-  3. In Navaja, open the UUID generator and press Copy. Paste in Notepad: the UUID must appear. Press Win+V: the UUID must not be listed.
-  4. Select the UUID in the output and press Ctrl+C, which also goes through `copy_text`. Win+V must not list it either.
-  5. Record the Windows build and the result here.
+- **By a person**, on Windows 11, not Server. Each step uses a fresh UUID, so a failure in one step can't hide behind another.
+  1. Note the edition, version, OS build and channel (a general release or an Insider build) that `winver` shows.
+  2. Build Navaja at the commit to test, as [manual-qa.md](manual-qa.md) sets up Windows 11: at the repository root, `pnpm install --frozen-lockfile`, then `pnpm tauri build --no-bundle`. Quit any Navaja that runs, an installed one included: a second Navaja hands its arguments over and exits.
+  3. Turn on Settings > System > Clipboard > Clipboard history. If the switch is greyed out ("managed by your organization"), stop: this machine can't answer the check.
+  4. Control: in Notepad, type a word nobody else would copy, such as `navaja-control-` and the time. Select it and press Ctrl+C. Press Win+V: it must be listed at the top.
+  5. The Copy button: in PowerShell at the repository root, run `.\target\release\navaja.exe --tool uuid`. The UUID generator opens with a new UUID in its "UUIDs" output. Press the output's Copy button: its label must change to "Copied", not "Copy failed". In Notepad, press Ctrl+V: that UUID must appear. Press Win+V: it must not be listed.
+  6. Ctrl+C: press Generate for a new UUID. Select it inside the output only (triple-click it) and press Ctrl+C, which `routeOutputCopies` sends through `copy_text`. In Notepad, press Ctrl+V: the new UUID must appear. Press Win+V: it must not be listed.
+  7. The context menu: press Generate again and right-click the new UUID. No menu is expected: Navaja's guard turns the native context menu off outside text fields (`guard.js`), and the output is not one. Record what happened. If a menu opens and offers Copy, choose it, paste in Notepad, and check that Win+V does not list that UUID either.
+  8. Lookup control: in Notepad, select the UUID pasted in step 6 and press Ctrl+C. Press Win+V: it must now be listed. This shows that a UUID copied the ordinary way does reach the history, so its absence in step 6 means something.
+  9. The rule. PASS: steps 4 and 8 are listed, steps 5 and 6 paste the right UUID, and no UUID copied through Navaja is listed. FAIL: Win+V lists a UUID copied through Navaja. Inconclusive, so redo it: step 4 or 8 is not listed, or a paste does not give back the UUID.
+  10. Record here, in the Result line and below this list: the Windows details from step 1, the Navaja commit, the date, and for each step whether its text was listed. Optionally clear the test items afterwards (Win+V > Clear all).
 - **Formats guarded on every PR** (since PR #23): the test `copy_carries_the_privacy_markers` (`app/src-tauri/tests/clipboard`), which nextest runs in `ci.yml`'s os job, copies a random canary through `copy_text`'s own call and reads the clipboard back through Win32, never arboard. The text must round-trip, and the three formats must be there, with the two DWORDs 0. An ordinary arboard copy of another canary must carry none of them. It fails when any one of the three is removed from `clipboard.rs`. Deleting this job after the check by a person loses the history part, which no runner can check. It also loses the only press of the real Copy button in a built app, through the webview, IPC, the ACL and `copy_text`: the nextest test calls `AppState::clipboard` directly, and the Vitest tests mock `invoke`.
 - **The job's lifetime:** `exit-clipboard-history` moves into `ci.yml` only if a GitHub-hosted runner ever has clipboard history, so that its history checks can gate. Otherwise it is deleted from `spikes.yml` once the check by a person above is recorded.
