@@ -11,14 +11,26 @@
       "minimumReleaseAge": "3 days"
     },
     {
+      "description": "Every major update waits for approval on the Dependency Dashboard, toolchains included: pnpm (packageManager in package.json), Node (node-version in the workflows) and Rust (rust-toolchain.toml). A major can drop a platform or change defaults, so someone reads its notes before a PR opens",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Runner labels are pinned and moved by hand, every job in one change, with branch protection's required checks (roadmap §2, CI hygiene). Renovate reads only literal runs-on labels, not ci.yml's os matrix, so its PRs would split jobs across OS releases",
+      "matchDatasources": ["github-runners"],
+      "enabled": false
+    },
+    {
       "description": "Tauri crates and npm packages move together (xtask check enforces parity; xtask pins tauri-utils to tauri's)",
       "groupName": "tauri",
       "matchPackageNames": ["tauri", "tauri-build", "tauri-utils", "tauri-plugin-*", "@tauri-apps/*"]
     },
     {
-      "description": "WebDriver test stack moves together",
+      "description": "The WebDriver test stack moves together, in one branch even for a major, and waits for approval on the Dependency Dashboard. The tauri-plugin-wdio-webdriver git pin (app/src-tauri/Cargo.toml) is matched by its repository URL: matchPackageNames matches packageName, which for a Cargo git dependency is the URL, not the crate name. Whoever approves re-keys or drops the @wdio/tauri-service patch in pnpm-workspace.yaml, which is keyed to 1.4.0 and follows that pin, in the same branch",
       "groupName": "wdio",
-      "matchPackageNames": ["@wdio/*", "tauri-plugin-wdio*"]
+      "matchPackageNames": ["@wdio/*", "tauri-plugin-wdio*", "https://github.com/webdriverio/desktop-mobile"],
+      "separateMajorMinor": false,
+      "dependencyDashboardApproval": true
     },
     {
       "description": "TypeScript 7 is not supported by svelte-check yet (ADR 0001)",
