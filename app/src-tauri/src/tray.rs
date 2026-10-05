@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use navaja_core::ToolMeta;
 use tauri::image::Image;
 use tauri::menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -25,7 +26,44 @@ const ICON: &[u8] = include_bytes!("../icons/tray/template.png");
 #[cfg(not(target_os = "macos"))]
 const ICON: &[u8] = include_bytes!("../icons/tray/color-32.png");
 
-/// `tools` are `(id, name)` pairs of registered tools with `tray: true`.
+/// The menu's tool items: `(menu id, label)` for each tool whose metadata
+/// sets `tray: true`, in registration order. Pure, so the tests cover it
+/// while no shipped tool sets `tray` yet.
+pub fn tool_entries<'a>(metas: impl IntoIterator<Item = &'a ToolMeta>) -> Vec<(String, String)> {
+    metas
+        .into_iter()
+        .filter(|meta| meta.tray)
+        .map(|meta| (format!("{TOOL}{}", meta.id), meta.name.clone()))
+        .collect()
+}
+
+/// What a menu item asks for.
+#[derive(Debug, PartialEq, Eq)]
+enum MenuAction {
+    Quit,
+    /// Show the window and open what the request names.
+    Open(Request),
+}
+
+/// Reads a clicked item's menu id. `None` for an id this menu never sets.
+fn menu_action(id: &str) -> Option<MenuAction> {
+    match id {
+        QUIT => Some(MenuAction::Quit),
+        OPEN => Some(MenuAction::Open(Request::default())),
+        SEARCH => Some(MenuAction::Open(Request {
+            tool: None,
+            palette: true,
+        })),
+        _ => id.strip_prefix(TOOL).map(|tool| {
+            MenuAction::Open(Request {
+                tool: Some(tool.to_owned()),
+                palette: false,
+            })
+        }),
+    }
+}
+
+/// `tools` are the entries `tool_entries` built from the registry.
 pub fn create<R: Runtime>(
     app: &AppHandle<R>,
     state: &Arc<AppState>,
@@ -35,7 +73,7 @@ pub fn create<R: Runtime>(
     let search = MenuItem::with_id(app, SEARCH, "Search tools…", true, None::<&str>)?;
     let tool_items = tools
         .iter()
-        .map(|(id, name)| MenuItem::with_id(app, format!("{TOOL}{id}"), name, true, None::<&str>))
+        .map(|(id, label)| MenuItem::with_id(app, id.as_str(), label, true, None::<&str>))
         .collect::<tauri::Result<Vec<_>>>()?;
     let separator = PredefinedMenuItem::separator(app)?;
     let tools_separator = PredefinedMenuItem::separator(app)?;
@@ -69,24 +107,13 @@ pub fn create<R: Runtime>(
 }
 
 fn on_menu_event<R: Runtime>(app: &AppHandle<R>, state: &AppState, event: &MenuEvent) {
-    let id = event.id().as_ref();
-    let request = match id {
-        QUIT => {
+    let request = match menu_action(event.id().as_ref()) {
+        Some(MenuAction::Quit) => {
             crate::quit(app, crate::QuitFrom::Tray);
             return;
         }
-        OPEN => Request::default(),
-        SEARCH => Request {
-            tool: None,
-            palette: true,
-        },
-        _ => match id.strip_prefix(TOOL) {
-            Some(tool) => Request {
-                tool: Some(tool.to_owned()),
-                palette: false,
-            },
-            None => return,
-        },
+        Some(MenuAction::Open(request)) => request,
+        None => return,
     };
     if let Err(error) = window::open(app, &state.window, &request) {
         tracing::warn!(%error, "tray action failed");
@@ -105,5 +132,103 @@ fn on_tray_icon_event<R: Runtime>(tray: &TrayIcon<R>, state: &AppState, event: &
         && let Err(error) = window::toggle_from_tray(tray.app_handle(), &state.window)
     {
         tracing::warn!(%error, "tray toggle failed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use navaja_core::{
+        ActionMeta, Category, Ctx, GeneratorSpec, OutputKind, OutputSpec, Registry, Tool,
+        ToolError, ToolId, UiSpec, Value,
+    };
+
+    use super::*;
+
+    /// A tool that asks for a tray entry, which no shipped tool does yet.
+    struct Pinned;
+
+    impl Tool for Pinned {
+        fn meta(&self) -> ToolMeta {
+            ToolMeta {
+                spec_version: navaja_core::SPEC_VERSION,
+                id: ToolId::from_static("pinned"),
+                name: "Pinned tool".into(),
+                description: "Listed in the tray.".into(),
+                category: Category::GENERATORS,
+                keywords: vec![],
+                icon: r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 12h16"/></svg>"#.into(),
+                capabilities: vec![],
+                actions: vec![ActionMeta::new("make", "Make")],
+                tray: true,
+                ui: UiSpec::Generator(GeneratorSpec {
+                    action: "make".into(),
+                    options: vec![],
+                    outputs: vec![OutputSpec {
+                        key: "text".into(),
+                        label: "Text".into(),
+                        format: OutputKind::Text,
+                    }],
+                    run_on_open: false,
+                }),
+            }
+        }
+
+        fn invoke(&self, _: &str, _: Value, _: &Ctx<'_>) -> Result<Value, ToolError> {
+            Ok(serde_json::json!({ "text": "" }))
+        }
+    }
+
+    /// The shipped tools plus `Pinned`, as `run` builds the registry.
+    fn registry() -> Registry {
+        let mut tools = navaja_tools::all();
+        tools.push(Arc::new(Pinned));
+        Registry::new(tools).unwrap()
+    }
+
+    #[test]
+    fn only_tray_tools_get_an_entry() {
+        let registry = registry();
+        let entries = tool_entries(registry.metas());
+        assert_eq!(
+            entries,
+            [("tool:pinned".to_owned(), "Pinned tool".to_owned())]
+        );
+        let listed = registry.metas().filter(|meta| meta.tray).count();
+        assert_eq!(entries.len(), listed);
+    }
+
+    #[test]
+    fn an_entry_opens_its_tool() {
+        let entries = tool_entries(registry().metas());
+        assert!(!entries.is_empty());
+        for (id, _) in entries {
+            assert_eq!(
+                menu_action(&id),
+                Some(MenuAction::Open(Request {
+                    tool: Some("pinned".to_owned()),
+                    palette: false,
+                }))
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_items_and_unknown_ids() {
+        assert_eq!(menu_action(QUIT), Some(MenuAction::Quit));
+        assert_eq!(
+            menu_action(OPEN),
+            Some(MenuAction::Open(Request::default()))
+        );
+        assert_eq!(
+            menu_action(SEARCH),
+            Some(MenuAction::Open(Request {
+                tool: None,
+                palette: true,
+            }))
+        );
+        // Ids the menu never sets, a bare tool id among them.
+        for id in ["pinned", "", "tools:pinned"] {
+            assert_eq!(menu_action(id), None, "{id:?}");
+        }
     }
 }
