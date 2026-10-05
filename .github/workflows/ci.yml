@@ -203,6 +203,34 @@ jobs:
       - name: nextest
         run: cargo nextest run --workspace
 
+      # TEMPORARY, reverted before merge: the clipboard markers check under
+      # X on Linux, then on every OS with this OS's marker removed from
+      # clipboard.rs, where it must fail and name that marker.
+      - name: TEMP clipboard markers, under X and without the marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          run() { if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a "$@"; else "$@"; fi; }
+          echo "--- positive"
+          run cargo nextest run -p navaja --test clipboard --no-capture
+          case "$RUNNER_OS" in
+            Windows) want=CanIncludeInClipboardHistory ;;
+            macOS) want=org.nspasteboard.ConcealedType ;;
+            Linux) want=x-kde-passwordManagerHint ;;
+          esac
+          sed -i.bak 's/^    set\.exclude_from_history()$/    set/' app/src-tauri/src/clipboard.rs
+          rm app/src-tauri/src/clipboard.rs.bak
+          git diff app/src-tauri/src/clipboard.rs
+          echo "--- negative"
+          log=$RUNNER_TEMP/clipboard-negative.log
+          status=0
+          run cargo nextest run -p navaja --test clipboard --no-capture > "$log" 2>&1 || status=$?
+          sed 's/^/  | /' "$log"
+          git checkout app/src-tauri/src/clipboard.rs
+          [ "$status" -ne 0 ] || { echo "::error::the check passed without $want"; exit 1; }
+          grep -qF "Navaja's copy lacks $want" "$log" || { echo "::error::the check failed for another reason"; exit 1; }
+          echo "The check fails without $want, and names it."
+
       - name: doctests
         run: cargo test --doc --workspace
 
