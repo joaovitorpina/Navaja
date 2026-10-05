@@ -12,7 +12,7 @@ mod windows;
 #[cfg(target_os = "linux")]
 pub use linux::tray_available;
 #[cfg(target_os = "macos")]
-pub use macos::disable_peer_connections;
+pub use macos::{disable_fraudulent_website_warnings, disable_peer_connections};
 #[cfg(unix)]
 pub use unix::is_elevated;
 #[cfg(windows)]

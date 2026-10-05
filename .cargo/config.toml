@@ -6,3 +6,10 @@ xtask = "run --quiet --package xtask --"
 TS_RS_LARGE_INT = "number"
 # ts-rs: generated bindings live with the front end; never edit them by hand.
 TS_RS_EXPORT_DIR = { value = "app/src/bindings", relative = true }
+# macOS 14 is Navaja's minimum (docs/architecture.md §5): the dead
+# proxy's WKWebsiteDataStore.proxyConfigurations needs it. Every cargo build
+# targets it, not only `tauri build` (which reads tauri.conf.json's
+# bundle.macOS.minimumSystemVersion): clippy, nextest and plain dev builds
+# would otherwise use rustc's default (11.0 on arm64, 10.12 on Intel). Only
+# Apple targets read it. scripts/check-macos-target.sh checks the result.
+MACOSX_DEPLOYMENT_TARGET = "14.0"

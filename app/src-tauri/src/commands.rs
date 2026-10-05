@@ -575,6 +575,29 @@ mod tests {
         }
     }
 
+    /// Roadmap M2a exit: a panicking tool returns `core.panicked` and the app
+    /// keeps serving. The next run, on the same state and with the same run
+    /// id, reaches a real tool and returns its output.
+    #[test]
+    fn a_panicking_tool_leaves_the_app_serving() {
+        let app = app();
+        for _ in 0..2 {
+            let envelope = run(&app, "boom", "boom", serde_json::json!({})).unwrap();
+            assert_eq!(code(&envelope), "core.panicked");
+            let envelope = run(&app, "uuid", "generate", serde_json::json!({})).unwrap();
+            let RunEnvelope::Ok(output) = envelope else {
+                panic!("the run after a panic failed: {}", code(&envelope));
+            };
+            let groups: Vec<usize> = output["uuids"]
+                .as_str()
+                .unwrap_or_default()
+                .split('-')
+                .map(str::len)
+                .collect();
+            assert_eq!(groups, [8, 4, 4, 4, 12], "{output}");
+        }
+    }
+
     #[test]
     fn run_ids_are_checked_before_the_run() {
         let app = app();

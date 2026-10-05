@@ -71,6 +71,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "minimumSystemVersion": "14.0"
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser"
