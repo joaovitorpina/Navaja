@@ -9,11 +9,15 @@
 # new one.
 #
 # Environment:
-#   GH_REPO   owner/name of the repository
-#   RUN_URL   the failed run, linked from the issue or comment
-#   GH_TOKEN  for gh: issues: write, or issues: read for a dry run
-#   DRY_RUN   1 looks the issue up and prints what it would do, and writes
-#             nothing (advisories.yml runs it that way on a pull request)
+#   GH_REPO          owner/name of the repository
+#   RUN_URL          the failed run, linked from the issue or comment
+#   GITHUB_REF_NAME  the branch the check ran on, named in the issue or
+#                    comment; Actions sets it, and advisories.yml reports
+#                    only for main
+#   GH_TOKEN         for gh: issues: write, or issues: read for a dry run
+#   DRY_RUN          1 looks the issue up and prints what it would do, and
+#                    writes nothing (advisories.yml runs it that way on a
+#                    pull request)
 #
 # Exit status: 0 when the issue was opened or commented on (or would be, in
 # a dry run); non-zero when gh fails or a variable is missing.
@@ -21,6 +25,7 @@ set -euo pipefail
 
 : "${GH_REPO:?set GH_REPO to owner/name}"
 : "${RUN_URL:?set RUN_URL to the failed run}"
+: "${GITHUB_REF_NAME:?set GITHUB_REF_NAME to the branch the check ran on}"
 dry_run=${DRY_RUN:-0}
 
 # scripts/advisories/issue-test.sh expects these exact values. Changing one
@@ -30,13 +35,13 @@ title='cargo deny check advisories is failing'
 label_color=B60205
 label_description='The daily RustSec advisories check is failing (advisories.yml)'
 
-body="The advisories check failed: $RUN_URL
+body="The advisories check failed on $GITHUB_REF_NAME: $RUN_URL
 
 The run's log names each advisory and the crates it affects. The check also fails when cargo-deny cannot fetch the advisory database or the crate index, so read the log first.
 
 To fix it, update the affected crate, or add the advisory to \`[advisories] ignore\` in deny.toml with a reason. Close this issue once a run passes. Each later failed run comments here while it is open."
 
-comment="The advisories check failed again: $RUN_URL"
+comment="The advisories check failed again on $GITHUB_REF_NAME: $RUN_URL"
 
 # Newest first, so a stray duplicate never hides the latest issue.
 number=$(gh issue list --repo "$GH_REPO" --state open --label "$label" --limit 100 \

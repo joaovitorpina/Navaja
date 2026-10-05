@@ -61,7 +61,8 @@ run_case() {
   : >"$work/calls"
   echo "$case_name"
   if ! env PATH="$work/bin:$PATH" STUB_DIR="$work" GH_REPO=example/repo \
-    RUN_URL=https://example.invalid/runs/42 "$@" bash "$script" >"$work/out" 2>&1; then
+    RUN_URL=https://example.invalid/runs/42 GITHUB_REF_NAME=main "$@" \
+    bash "$script" >"$work/out" 2>&1; then
     fail "issue.sh exited non-zero:"
     sed 's/^/    /' "$work/out"
   fi
@@ -88,11 +89,14 @@ expect_output() {
 # backslash doubled for grep -E.
 q_title=$(printf '%q' "$title" | sed 's/\\/\\\\/g')
 url='https://example.invalid/runs/42'
+# "on main: " before the run's link, as the stub records it: printf %q
+# escapes each space in a one-line argument, but not in a multi-line one.
+on_main='on(\\ | )main:(\\ | )'
 
 run_case 'No open issue, no label: creates the label, then the issue' '' 'bug\n'
 expect_calls "^issue list .*--state open --label $label " 1
 expect_calls "^label create $label " 1
-expect_calls "^issue create .*--title $q_title --label $label --body .*$url" 1
+expect_calls "^issue create .*--title $q_title --label $label --body .*$on_main$url" 1
 expect_calls '^issue comment ' 0
 
 run_case 'No open issue, label exists: creates the issue only' '' "bug\n$label\n"
@@ -107,7 +111,7 @@ expect_calls '^issue comment ' 0
 
 run_case 'Open issue with the title: comments on it, creates nothing' \
   "12\t$title\n" "$label\n"
-expect_calls "^issue comment 12 .*$url" 1
+expect_calls "^issue comment 12 .*$on_main$url" 1
 expect_calls '^issue create ' 0
 expect_calls '^label ' 0
 
@@ -128,12 +132,22 @@ expect_calls '^issue list ' 1
 expect_calls '^(issue (comment|create)|label) ' 0
 expect_output 'would open one'
 
-# The guard on RUN_URL: an issue without the run's link is no use.
+# The guards: an issue without the run's link is no use, and one that does
+# not name the branch could read as main failing when it is not.
 echo 'RUN_URL missing: fails before calling gh'
 : >"$work/calls"
 if env PATH="$work/bin:$PATH" STUB_DIR="$work" GH_REPO=example/repo RUN_URL= \
-  bash "$script" >"$work/out" 2>&1; then
+  GITHUB_REF_NAME=main bash "$script" >"$work/out" 2>&1; then
   fail 'issue.sh passed without RUN_URL'
+fi
+expect_calls '.' 0
+
+echo 'GITHUB_REF_NAME missing: fails before calling gh'
+: >"$work/calls"
+if env PATH="$work/bin:$PATH" STUB_DIR="$work" GH_REPO=example/repo \
+  RUN_URL=https://example.invalid/runs/42 GITHUB_REF_NAME= \
+  bash "$script" >"$work/out" 2>&1; then
+  fail 'issue.sh passed without GITHUB_REF_NAME'
 fi
 expect_calls '.' 0
 
