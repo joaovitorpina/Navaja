@@ -642,6 +642,7 @@ mod tests {
             "tokio",
             "tauri",
             "tauri-runtime-wry",
+            "hyper",
             "hyper-util",
             "reqwest",
             "bollard",
@@ -651,6 +652,96 @@ mod tests {
         for name in ["serde", "uuid", "roxmltree", "tauri_like"] {
             assert!(!is_forbidden(name), "{name}");
         }
+    }
+
+    /// A `cargo metadata` graph. `packages` are names, with whether each is
+    /// a workspace member; `edges` are (from, to, kind), the kind as cargo
+    /// writes it: null for a normal dependency, "dev" or "build".
+    fn graph(packages: &[(&str, bool)], edges: &[(&str, &str, Option<&str>)]) -> Metadata {
+        let id = |name: &str| format!("path+file:///ws/{name}#1.0.0");
+        let nodes: Vec<Value> = packages
+            .iter()
+            .map(|(name, _)| {
+                let out = edges.iter().filter(|(from, _, _)| from == name);
+                let deps: Vec<Value> = out
+                    .clone()
+                    .map(|(_, to, kind)| {
+                        json!({ "name": to.replace('-', "_"), "pkg": id(to),
+                                "dep_kinds": [{ "kind": kind, "target": null }] })
+                    })
+                    .collect();
+                let dependencies: Vec<String> = out.map(|(_, to, _)| id(to)).collect();
+                json!({ "id": id(name), "deps": deps, "dependencies": dependencies,
+                        "features": [] })
+            })
+            .collect();
+        let manifests: Vec<Value> = packages
+            .iter()
+            .map(|(name, _)| {
+                json!({ "name": name, "version": "1.0.0", "id": id(name),
+                        "dependencies": [], "targets": [], "features": {},
+                        "manifest_path": format!("/ws/{name}/Cargo.toml") })
+            })
+            .collect();
+        let members: Vec<String> = packages
+            .iter()
+            .filter(|(_, member)| *member)
+            .map(|(name, _)| id(name))
+            .collect();
+        serde_json::from_value(json!({
+            "packages": manifests, "workspace_members": members,
+            "resolve": { "nodes": nodes, "root": null },
+            "workspace_root": "/ws", "target_directory": "/ws/target", "version": 1,
+        }))
+        .expect("a valid cargo metadata graph")
+    }
+
+    /// Roadmap M2a item 5: tokio, hyper or tauri under navaja-tools fails the
+    /// check, through any chain of normal dependencies. Dev-dependencies do
+    /// not reach a build, and the app may use all three.
+    #[test]
+    fn forbidden_crates_under_navaja_tools_fail_the_check() {
+        let metadata = graph(
+            &[
+                (TOOLS, true),
+                (APP, true),
+                (CORE, true),
+                ("mid", false),
+                ("serde", false),
+                ("tokio", false),
+                ("hyper", false),
+                ("tauri", false),
+            ],
+            &[
+                (TOOLS, CORE, None),
+                (TOOLS, "hyper", None),
+                (TOOLS, "mid", None),
+                (TOOLS, "tauri", Some("dev")),
+                ("mid", "serde", None),
+                ("mid", "tokio", None),
+                (CORE, "serde", None),
+                (APP, TOOLS, None),
+                (APP, "tokio", None),
+                (APP, "tauri", None),
+            ],
+        );
+        assert_eq!(
+            closure_problems(&metadata),
+            [
+                "navaja-tools reaches hyper: navaja-tools -> hyper",
+                "navaja-tools reaches tokio: navaja-tools -> mid -> tokio",
+            ]
+        );
+
+        // The same tauri as a normal dependency, one level down.
+        let metadata = graph(
+            &[(TOOLS, true), ("mid", false), ("tauri", false)],
+            &[(TOOLS, "mid", None), ("mid", "tauri", None)],
+        );
+        assert_eq!(
+            closure_problems(&metadata),
+            ["navaja-tools reaches tauri: navaja-tools -> mid -> tauri"]
+        );
     }
 
     #[test]
