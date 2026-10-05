@@ -6,7 +6,8 @@
 //
 // The service launches the app once, with `--tool uuid`, and every spec drives
 // that same process. launch.e2e.ts checks the window the app opened on, so it
-// runs first; every other spec resets the route itself.
+// runs first; every other spec resets the route itself. last/data-folder.e2e.ts
+// quits the app, so it runs last.
 import { mkdtempSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -19,11 +20,17 @@ const exe = process.platform === 'win32' ? 'navaja.exe' : 'navaja';
 /** The app under test, overridable (the Linux network guard wraps it with strace). */
 export const binary = process.env.NAVAJA_E2E_BINARY ?? join(repo, 'target', 'debug', exe);
 
+/**
+ * Where last/data-folder.e2e.ts records its canary for
+ * app/e2e/data-folder-check.mjs, which reads the same path.
+ */
+export const dataFolderRecord = join(repo, 'app', 'e2e', 'output', 'data-folder.json');
+
 /** The embedded WebDriver port, resolved the way @wdio/tauri-service does. */
-const port = Number.parseInt(process.env.TAURI_WEBDRIVER_PORT ?? '', 10) || 4445;
+export const port = Number.parseInt(process.env.TAURI_WEBDRIVER_PORT ?? '', 10) || 4445;
 
 /** Whether something already accepts connections on 127.0.0.1:`port`. */
-function accepting(port: number): Promise<boolean> {
+export function accepting(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = connect({ host: '127.0.0.1', port });
     socket.setTimeout(5_000);
@@ -59,8 +66,10 @@ if (!process.env.WDIO_WORKER_ID) {
 
 export const config: WebdriverIO.Config = {
   runner: 'local',
-  // Order matters for the first entry only; the glob adds the rest once each.
-  specs: ['./specs/launch.e2e.ts', './specs/**/*.e2e.ts'],
+  // launch.e2e.ts runs first, and the glob adds the rest of specs/ once each.
+  // The data-folder spec quits the app, so it runs last; it lives outside
+  // specs/, where the glob can't place it earlier.
+  specs: ['./specs/launch.e2e.ts', './specs/**/*.e2e.ts', './last/data-folder.e2e.ts'],
   maxInstances: 1,
   services: [
     [

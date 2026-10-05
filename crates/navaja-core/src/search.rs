@@ -164,10 +164,31 @@ mod tests {
         );
     }
 
+    /// Roadmap M2a exit. Both competitors also match "uid", and the tie-break
+    /// alone would put either one first: ULID shares uuid's category and sorts
+    /// before it by name, and Unicode's category comes earlier in the sidebar.
+    /// So uuid leads only if a name match outweighs a keyword match (ULID)
+    /// and a substring outweighs a subsequence (Unicode).
     #[test]
     fn uid_ranks_uuid_first() {
-        let tools = catalog();
-        assert_eq!(ids(&rank("uid", &tools)).first(), Some(&"uuid"));
+        let mut tools = catalog();
+        tools.push(tool(
+            "ulid",
+            "ULID generator",
+            Category::GENERATORS,
+            &["uuid", "sortable"],
+        ));
+        tools.push(tool(
+            "unicode",
+            "Unicode inspector",
+            Category::ENCODERS,
+            &["codepoint"],
+        ));
+        let hits = rank("uid", &tools);
+        assert_eq!(ids(&hits), ["uuid", "ulid", "unicode"]);
+        // Substring in the name; substring in a keyword; subsequence in the name.
+        let scores: Vec<u32> = hits.iter().map(|h| h.score).collect();
+        assert_eq!(scores, [20 + NAME, 20 + KEYWORD, 10 + NAME]);
     }
 
     #[test]
