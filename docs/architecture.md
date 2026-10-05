@@ -11,7 +11,7 @@ This describes the v1 design accepted in [ADR 0001](adr/0001-stack.md): Tauri 2 
 - **The webview** renders data and sends intents. It has no network, filesystem, dialog or shell permission.
 - **Tools are pure and synchronous** (JSON in, JSON out). They never print, prompt, start a runtime, open a connection or receive a file path. In v1, text tools take pasted text; file input and output come after v1.
 - **Generic commands** serve every tool. `UiSpec` renders every text tool. Navigation, search and tray entries all come from `list_tools()`.
-- **OS-specific code sits behind traits**, one module per OS, or per OS family where Linux and macOS share the code: `navaja_ports::Platform` and the app's `ShellPlatform`.
+- **OS-specific code sits behind traits**, one module per OS, or per OS family where Linux and macOS share the code: `navaja_ports::Platform` and the app's `ShellPlatform`. `ShellPlatform` arrives with close behaviour in roadmap M2b, item 1; until then the app's `platform/` modules hold free functions.
 
 ## 2. Repository layout
 
@@ -275,9 +275,9 @@ Rust never runs a destructive action from argv.
 - **WebDriver server:** it listens on 127.0.0.1:4445 (or `TAURI_WEBDRIVER_PORT`) with no authentication, so the app starts it only when a test harness launched it: `@wdio/tauri-service` sets `WDIO_EMBEDDED_SERVER`, and any other harness sets `NAVAJA_E2E_WEBDRIVER`. An e2e binary started by hand (it shares `target/debug/navaja` with ordinary debug builds) opens no port. The harness fails fast when the port already accepts connections, instead of driving whatever holds it, such as an app left over from an aborted run.
 - **App directory:** the harness always points `NAVAJA_APP_DIR` at a fresh temporary directory, even when the developer has exported one, so a run never reads or writes real settings and logs.
 
-**Lifecycle**, implemented through `ShellPlatform`:
-- **Startup:** the window stays hidden until `shell_ready`, and shows an error view after 5 s. A second launch or a tray action that comes earlier waits for it: the requested tool is kept and opened once the shell is ready, so no blank window is shown.
-- **Close:**
+**Lifecycle**, implemented through `ShellPlatform` from roadmap M2b, item 1:
+- **Startup:** the window stays hidden until the front end calls `shell_ready`. If it has not after 5 s, Rust shows the window anyway, with whatever has rendered, and logs "front end did not report ready; showing the window anyway". The error view comes from the front end: it shows when one of its first IPC calls (`list_tools`, `settings_get`, `app_info`) fails, and the front end then reports ready. A second launch or a tray action that comes before ready waits for it: the requested tool is kept and opened once the window shows.
+- **Close:** in M2a nothing handles a close request yet, so closing the window quits the app on every OS, without the `quit` log line. From M2b:
   - Windows asks once whether to go to the tray or quit.
   - macOS hides the window. Dock reopen shows it, Cmd+Q quits, and the menu gains "Settings… ⌘,".
   - Linux hides only when a StatusNotifier host is registered, using a cached zbus check with a 200 ms timeout. Otherwise closing quits.
@@ -316,7 +316,7 @@ Rust never runs a destructive action from argv.
 
   **(S3.1)** tunes these thresholds.
 - **Components:** Bits UI 2 with shadcn-svelte copies, Tailwind v4 tokens and system fonts.
-- **Accessibility:** landmarks, F6 to cycle panes, Esc, a live region, and real tables with `aria-sort`.
+- **Accessibility:** landmarks, F6 to cycle panes (cut from M2a; roadmap M3, item 3), Esc, a live region, and real tables with `aria-sort`.
 - **Lint:** `pnpm lint` checks which files `tools/` holds (§4), then runs ESLint (the recommended JavaScript, TypeScript and Svelte rules, plus the custom-view allowlist from §4) and Prettier over `app/` and `tools/*/ui/`. `pnpm format` applies Prettier.
 - **Tests:** Vitest with `mockIPC` and axe, and WebdriverIO end-to-end tests on all three OSes **(S2.6)**.
   - The end-to-end tests drive the real debug app through its embedded WebDriver server (§5). On Linux they run under the strace network guard (roadmap §2).

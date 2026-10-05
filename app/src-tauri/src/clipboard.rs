@@ -4,7 +4,7 @@
 //!   clipboard monitoring.
 //! - macOS: marked `org.nspasteboard.ConcealedType`, which clipboard-history
 //!   apps honour. Universal Clipboard (Handoff) is not excluded yet; that
-//!   needs NSPasteboard's current-host-only option (a recorded follow-up).
+//!   needs NSPasteboard's current-host-only option (roadmap M2b, item 7).
 //! - Linux: marked `x-kde-passwordManagerHint`, which Klipper and similar
 //!   history managers honour.
 
