@@ -533,9 +533,9 @@ const MAIN_WINDOW: &str = "main";
 /// Release builds start hidden (roadmap M2a exit; docs/architecture.md §5,
 /// "Startup"). Tauri reads both keys below as true when they are missing, so
 /// every entry in `app.windows` must set them:
-/// - `"create": false`: Rust builds the window (`window::create_main` for
-///   "main"), with the builder's hardening. Otherwise Tauri builds it before
-///   setup runs, and shows it unless `visible` is false.
+/// - `"create": false`: otherwise Tauri builds the window itself before setup
+///   runs, without `window::create_main`'s hardening, and shows it unless
+///   `visible` is false. `create_main` builds "main" from its entry.
 /// - `"visible": false`: `window::ready` shows the main window once the front
 ///   end has drawn, so no blank or unthemed window flashes first.
 ///
@@ -556,7 +556,7 @@ fn window_problems(app: &Value) -> Vec<String> {
         if window["create"] != Value::Bool(false) {
             problems.push(format!(
                 "tauri.conf.json: window \"{label}\" must set \"create\": false; \
-                 Rust builds it, not Tauri at start"
+                 otherwise Tauri builds it at start, outside window.rs"
             ));
         }
         if window["visible"] != Value::Bool(false) {
