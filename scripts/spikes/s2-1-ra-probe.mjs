@@ -351,6 +351,11 @@ function position(text, needle, { after = '', offset = 0 } = {}) {
   return { line, character: before.length - (before.lastIndexOf('\n') + 1) };
 }
 
+/** Whether a line of code declares `item`, such as `trait Tool` (and not `trait ToolX`). */
+function declares(line, item) {
+  return new RegExp(`\\b${item}\\b`).test(line);
+}
+
 function show(label, value) {
   console.log(`  ${label}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
 }
@@ -384,7 +389,7 @@ async function definitionCore(server) {
     show(`definition of \`${name}\` in ${MOD}`, targets);
     const hit =
       targets.length > 0 &&
-      targets.every((t) => t.rel === `${CORE}${file}` && t.text.includes(item));
+      targets.every((t) => t.rel === `${CORE}${file}` && declares(t.text, item));
     pass =
       verdict(`b. definition on \`${name}\` lands on \`${item}\` in ${CORE}${file}`, hit) && pass;
   }
@@ -445,7 +450,7 @@ async function loaded(server) {
   const file = `${CORE}registry.rs`;
   const pass =
     targets.length > 0 &&
-    targets.every((t) => t.rel === file && t.text.includes('struct Registry'));
+    targets.every((t) => t.rel === file && declares(t.text, 'struct Registry'));
   return verdict(`workspace loaded: \`Registry\` in ${REGISTRY_TEST} lands in ${file}`, pass);
 }
 
