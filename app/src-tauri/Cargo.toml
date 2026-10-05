@@ -70,5 +70,21 @@ arboard = { version = "3.6.1", default-features = false, features = ["wayland-da
 # Checks for the tray's appindicator library, which tray-icon panics without.
 libloading = "0.7.4"
 
+# tests/clipboard reads the clipboard back through each OS's own API rather
+# than arboard, so an arboard change cannot hide a missing marker. Crates the
+# app already builds with; only features are added.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11rb = "0.13.2"
+# The probe arboard runs to choose Wayland or X11, so the test makes the same
+# choice.
+wl-clipboard-rs = "0.9.4"
+
 [lints]
 workspace = true
