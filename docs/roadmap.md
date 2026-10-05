@@ -346,11 +346,12 @@ The end-to-end build is isolated from a Navaja you already run: it has its own i
   - copied tokens are absent from clipboard history and Klipper:
     - the markers are checked on every PR on Windows and macOS (above). The Linux one is checked only when a developer runs the check with an X display;
     - a person checks that Windows clipboard history honours them (spikes.md, "M2a exit check");
-    - a person checks Klipper on KDE Plasma 6 Wayland. Its compositor offers data-control, so arboard copies over Wayland there, which no automated check reads. Copy a UUID with Navaja's Copy button, and again with Ctrl+C on the output: each pastes, and Klipper's history does not list it. An ordinary copy is listed, as the control;
+    - a person checks Klipper during manual QA on KDE Plasma 6 Wayland (below). Its compositor offers data-control, so arboard copies over Wayland there, which no automated check reads;
     - nothing checks the macOS history apps that follow nspasteboard.org yet.
 
 **Manual QA**, at each milestone end, on Windows 11, Ubuntu GNOME Wayland with AppIndicator, Ubuntu X11, Fedora GNOME (no tray), KDE Plasma 6 Wayland and macOS 26:
 - **Shell:** starts hidden; tray menu; close and quit paths; `--toggle` and `--tool`; keyboard-only use; About's repository link opens the browser and Settings' "Open logs folder" opens the file manager (no automated test opens them).
+- **Klipper, M2a and M6** (KDE Plasma 6 Wayland): a UUID copied with Navaja's Copy button, or with Ctrl+C on the output, pastes, and Klipper's history does not list it. An ordinary copy is listed, as the control.
 - **Wayland focus, from M2b** (GNOME and KDE): `--show`, `--toggle` and `--tool` raise and focus a window that is visible but unfocused. Tray-menu actions may leave it unfocused; that is a known limitation (M2b, item 8).
 - **M2b and M6:** screen readers (NVDA, Narrator, Orca, VoiceOver); 100-200 % scaling; light and dark themes; on macOS, a copy does not reach a Handoff-paired device.
 - **Ports, from M4:** an elevated listener gets a reason and a guarded command; nodemon kill; pm2 respawn.
