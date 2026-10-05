@@ -53,9 +53,9 @@ Copy this for each spike and fill it in.
 - **PASS if:** RustRover and rust-analyzer navigate and complete through `register_tools!`
 - **FAIL then:** the two-line form, `mod x;` plus a list entry (needs sign-off)
 - **Result:** not finished (2026-10-05).
-  - rust-analyzer: PASS. `spikes.yml` run [37254205824](https://github.com/joaovitorpina/Navaja/actions/runs/37254205824), on commit `1b754fe`: checks a to d passed, and both controls failed the checks they should. Every other job of the run passed too.
+  - rust-analyzer: PASS. `spikes.yml` run [37268969385](https://github.com/joaovitorpina/Navaja/actions/runs/37268969385), on commit `77094fd`: checks a to d passed, and both controls failed the checks they should. Every other job of the run passed too.
   - RustRover: not run yet. It needs a person.
-- **Numbers and evidence:** run 37254205824, job `s2-1`, on ubuntu-24.04 (Ubuntu 24.04.5, runner image 20260927.320.1), with rust-analyzer 1.99.0 (b940084 2026-09-28) from the 1.99.0 toolchain. The job took 44 s: 3 to 4 s per check, with rust-analyzer quiescent about 1 s after it started. The `s2-1` jobs of runs [37253656398](https://github.com/joaovitorpina/Navaja/actions/runs/37253656398) on `7b2b934` and [37253862965](https://github.com/joaovitorpina/Navaja/actions/runs/37253862965) on `caf86db` got the same answers. A later push cancelled 5 of the other 6 jobs in the first run and 3 of the 6 in the second; the jobs that finished passed. `caf86db` and `1b754fe` have the same probe; `7b2b934` matched the definitions' names as substrings.
+- **Numbers and evidence:** run 37268969385, job `s2-1`, on ubuntu-24.04 (Ubuntu 24.04.5, runner image 20260927.320.1), with rust-analyzer 1.99.0 (b940084 2026-09-28) from the 1.99.0 toolchain. The job took 45 s: 4 to 5 s per check, with rust-analyzer quiescent about 1 s after it started.
 
   | Check | What rust-analyzer answered |
   |---|---|
@@ -66,7 +66,8 @@ Copy this for each spike and fill it in.
   | Control, entry removed | `Registry` lands on `registry.rs` line 62. `tools/uuid/mod.rs` has one diagnostic, `unlinked-file`: "This file is not included anywhere in the module tree, so rust-analyzer can't offer IDE services." b finds no definitions, and c no completions |
   | Control, entry misspelled `uiud` | `Registry` lands on `registry.rs` line 62. a's definition of `uiud` is the list entry itself, `tools/lib.rs` line 23, and `lib.rs` gets E0583, "unresolved module, can't find module file: uiud.rs, or uiud/mod.rs" |
 
-  - Locally, on Windows 11 Pro 10.0.26300 with rust-analyzer 1.99.0 (b940084d 2026-09-28), the probe gave the same answers, in about 10 s per check.
+  - Three earlier runs, with earlier versions of the probe, got the same answers. Those versions let rust-analyzer start its own file watcher, which logged "notify error" warnings, and showed a check the probe could not ask as FAIL. Run [37254205824](https://github.com/joaovitorpina/Navaja/actions/runs/37254205824) on `1b754fe` passed every job. The `s2-1` jobs of runs [37253656398](https://github.com/joaovitorpina/Navaja/actions/runs/37253656398) on `7b2b934` and [37253862965](https://github.com/joaovitorpina/Navaja/actions/runs/37253862965) on `caf86db` passed too. A later push cancelled 5 of the other 6 jobs in the first of those two runs and 3 of the 6 in the second; the jobs that finished passed. The probe at `7b2b934` also matched the definitions' names as substrings.
+  - Locally, on Windows 11 Pro 10.0.26300 with rust-analyzer 1.99.0 (b940084d 2026-09-28), the probe at `77094fd` gave the same answers, in about 7 s per check.
   - Each check was also run locally with the property it guards broken, then put back:
     - `tools/uuid/` moved to `tools/uuid_moved/`: a fails.
     - The `uuid` entry removed in the checkout itself: b, c and d each fail, d on `unlinked-file`.
