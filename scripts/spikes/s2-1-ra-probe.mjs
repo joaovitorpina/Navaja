@@ -41,7 +41,8 @@
 // delete the copy on exit.
 //
 // rust-analyzer runs without build scripts, proc macros, cargo check, cache
-// priming or its own file watcher. register_tools! is a macro_rules!, which
+// priming or its own file watcher: it leaves watching to the probe, which
+// reports no change. register_tools! is a macro_rules!, which
 // rust-analyzer expands itself, and the build scripts would compile Tauri.
 // Without proc macros it reports a macro-error at each `#[derive]` from a
 // proc macro, and an E0277 where a derived trait is needed; d ignores both.
@@ -155,8 +156,9 @@ class Server {
         waiter.ok(message.result);
       }
     } else if (message.id !== undefined) {
-      // A request from the server, such as a progress token. The client
-      // declared no capability that needs a real answer.
+      // A request from the server, such as a progress token or the file
+      // watcher's registration (client/registerCapability). null is a valid
+      // answer to each: the client declared no capability that needs more.
       this.send({ id: message.id, result: null });
     } else if (message.method === 'experimental/serverStatus') {
       this.status = message.params;
@@ -208,6 +210,11 @@ class Server {
             completion: { completionItem: { snippetSupport: false } },
             diagnostic: { dynamicRegistration: false },
           },
+          // rust-analyzer leaves file watching to the client only when the
+          // client can register watchers (this) and `files.watcher` is
+          // 'client' (below); otherwise it starts its own watcher. The probe
+          // reports no change, so rust-analyzer keeps the tree it loaded.
+          workspace: { didChangeWatchedFiles: { dynamicRegistration: true } },
           experimental: { serverStatusNotification: true },
         },
         initializationOptions: {
