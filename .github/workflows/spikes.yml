@@ -690,7 +690,8 @@ jobs:
       # The checks' own rules on made-up input, so that a broken rule fails
       # before 15 min of capture: on Windows the attribution (WAM's account
       # provider, reused PIDs, pktmon's canary questions), elsewhere whether
-      # a capture covered its phase.
+      # a capture covered its phase, how a capture whose tcpdump exited is
+      # marked, and the search of the host's uplink for the canary's hosts.
       - name: The checks' own rules, on made-up input
         run: bash scripts/spikes/s2-7-egress.sh self-test
 

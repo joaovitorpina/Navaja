@@ -221,11 +221,12 @@ with_timeout() {
 }
 
 # start_capture <name> <command...>: runs a tcpdump command as root in the
-# background, keeps its PID, and waits until it listens.
+# background, keeps its PID, and waits until it listens. A dead mark from an
+# earlier run in the same folder (stop_capture) is cleared first.
 start_capture() {
   local name=$1 pidfile=$OUT/$1.pid log=$OUT/$1.tcpdump.log i
   shift
-  rm -f "$pidfile"
+  rm -f "$pidfile" "$OUT/$name.dead"
   sudo sh -c 'echo $$ > "$1"; shift; exec "$@"' sh "$pidfile" "$@" > "$log" 2>&1 &
   CAPTURES+=("$pidfile")
   for ((i = 0; i < 100; i++)); do
@@ -929,7 +930,7 @@ check_linux() {
   : > "$OUT/$phase-uplink-canary.txt"
   if [ "$phase" != control ]; then
     uplink_flows "$phase"
-    grep -F "$CANARY" "$OUT/$phase-uplink-dns-long.txt" > "$OUT/$phase-uplink-canary.txt" || true
+    uplink_canary "$phase"
     canary=$(lines "$OUT/$phase-uplink-canary.txt")
   fi
   findings=$((sent + lodns + canary))
@@ -1019,6 +1020,13 @@ uplink_flows() {
   questions < "$OUT/$phase-uplink-dns-long.txt" |
     awk -v marker="$MARKER_NAME-" '!index($0, marker)' > "$OUT/$phase-uplink-names.txt"
   echo "$phase: the host sent $(lines "$OUT/$phase-uplink-sent.txt") packet(s) and $(lines "$OUT/$phase-uplink-dns-sent.txt") DNS packet(s) on its uplink, to $(lines "$OUT/$phase-uplink.tsv") remote end(s)."
+}
+
+# Linux: the host's own DNS packets on its uplink that ask for the canary's
+# hosts, from <phase>-uplink-dns-long.txt (uplink_flows, one line a packet),
+# into <phase>-uplink-canary.txt. check_linux counts each as a finding.
+uplink_canary() {
+  grep -F "$CANARY" "$OUT/$1-uplink-dns-long.txt" > "$OUT/$1-uplink-canary.txt" || true
 }
 
 # Linux: the remote ends and names the host's uplink shows in the phase but
@@ -1940,10 +1948,13 @@ in_use_app() {
 
 # The rules that decide whether a capture covered its phase (capture_row,
 # assert_captures), on made-up tcpdump logs: a capture that stopped early,
-# lost its end markers or had packets dropped must not pass idle. spikes.yml
-# runs this before the capture, so a broken rule fails fast.
+# lost its end markers or had packets dropped must not pass idle. Then the
+# wiring that feeds them and the canary's findings: tcpdump_running,
+# stop_capture's dead mark, and the grep of the host's uplink for the
+# canary's hosts. spikes.yml runs this before the capture, so a broken rule
+# fails fast.
 self_test() {
-  local dir stats
+  local dir stats fake other
   dir=$(mktemp -d)
   OUT=$dir
   stats=$'tcpdump: listening on eth0, link-type EN10MB (Ethernet), snapshot length 96 bytes\n10 packets captured\n10 packets received by filter'
@@ -1992,6 +2003,47 @@ self_test() {
     fail "self-test: in use passed with a process of the tree left running"
   fi
   echo "self-test: drops fail idle and only warn in the baseline; a process of the tree left running fails in use."
+
+  # A copy of sleep named tcpdump stands in for a capture: tcpdump_running
+  # goes by the name of the program a PID runs, so that a PID reused after
+  # tcpdump exited does not read as the capture.
+  mkdir "$dir/bin"
+  cp "$(command -v sleep)" "$dir/bin/tcpdump"
+  "$dir/bin/tcpdump" 30 &
+  fake=$!
+  sleep 30 &
+  other=$!
+  tcpdump_running "$fake" || fail "self-test: a running program named tcpdump did not read as a running capture"
+  ! tcpdump_running "$other" || fail "self-test: sleep read as a running capture"
+  kill "$fake" "$other" 2> /dev/null || true
+  wait "$fake" "$other" 2> /dev/null || true
+  ! tcpdump_running "$fake" || fail "self-test: a tcpdump that had exited read as a running capture"
+  # stop_capture on a capture whose tcpdump had already exited marks it
+  # dead without signalling anything, and capture_row reads it as short.
+  echo "$fake" > "$dir/gone.pid"
+  printf '%s\n0 packets dropped by kernel\n' "$stats" > "$dir/gone.tcpdump.log"
+  stop_capture "$dir/gone.pid" > /dev/null
+  [ -f "$dir/gone.dead" ] && [ ! -f "$dir/gone.pid" ] ||
+    fail "self-test: stopping a capture whose tcpdump had exited did not mark it dead"
+  self_case gone 2 short
+  echo "self-test: a capture is running only while its PID runs tcpdump, and one that had exited is marked dead and fails its phase."
+
+  # The host's uplink in tcpdump's long form, as uplink_flows reads it: one
+  # question for a canary host, the phase's end marker and another name.
+  {
+    echo '1791165400.100000 IP (tos 0x0, ttl 64, id 4242, offset 0, flags [none], proto UDP (17), length 80)'
+    echo '    10.1.0.4.53000 > 168.63.129.16.53: 4242+ A? navigate.navaja-canary.example.com. (52)'
+    echo '1791165400.200000 IP (tos 0x0, ttl 64, id 4243, offset 0, flags [none], proto UDP (17), length 73)'
+    echo "    10.1.0.4.53001 > 168.63.129.16.53: 4243+ A? $MARKER_NAME-idle.example.com. (45)"
+    echo '1791165400.300000 IP6 (hlim 64, next-header UDP (17) payload length: 36) fd00::4.53002 > fd00::1.53: 4244+ AAAA? github.com. (28)'
+  } > "$dir/idle-uplink-dns-long.txt"
+  join_lines "$dir/idle-uplink-dns-long.txt"
+  uplink_canary idle
+  [ "$(lines "$dir/idle-uplink-canary.txt")" -eq 1 ] && grep -q '^1791165400\.100000 .*navaja-canary' "$dir/idle-uplink-canary.txt" ||
+    fail "self-test: the host's question for a canary host on its uplink is not one finding: $(cat "$dir/idle-uplink-canary.txt")"
+  [ "$(grep -cF "$MARKER_NAME-idle." "$dir/idle-uplink-dns-long.txt")" -eq 1 ] ||
+    fail "self-test: the uplink's DNS does not hold the phase's end marker once"
+  echo "self-test: the host's question for a canary host on its uplink is one finding, with its time stamp; its end marker is counted once."
   rm -rf "$dir"
 }
 
