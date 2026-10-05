@@ -25,6 +25,142 @@ env:
   RUST_BACKTRACE: short
 
 jobs:
+  # S2.1, the rust-analyzer half: do navigation and completion work through
+  # register_tools! (tools/lib.rs), whose `mod $id;` is the only declaration
+  # of each tool's module? scripts/spikes/s2-1-ra-probe.mjs drives the
+  # rust-analyzer of the toolchain in rust-toolchain.toml over LSP, one check
+  # per step: go to definition from the list into tools/uuid/mod.rs, and from
+  # there into crates/navaja-core; completion through `crate::uuid::` and
+  # inside mod.rs; and no unlinked-file or unresolved-path diagnostics for
+  # mod.rs. The negative controls run it on a throwaway copy whose list has
+  # the uuid entry removed or misspelled. RustRover, the other half, needs a
+  # person (docs/spikes.md). A failed check doesn't stop the ones after it,
+  # and the last step writes a PASS/FAIL table to the run's summary. A step
+  # where the probe could not ask (exit 2) sets its output `result`, and the
+  # table shows "could not ask" for it, not FAIL.
+  # Lifetime: deleted once S2.1 is recorded in docs/spikes.md, RustRover half
+  # included.
+  s2-1:
+    name: S2.1 rust-analyzer through register_tools! (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      # rust-src too: rust-analyzer reads the standard library's sources.
+      - name: Add rust-analyzer and rust-src to that toolchain
+        id: ra
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          rustup component add --toolchain "$channel" rust-analyzer rust-src
+          version=$(rust-analyzer --version)
+          echo "$version, from $(rustup which rust-analyzer)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The probe needs Node only, no npm packages.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      # rust-analyzer reads every dependency's sources. Fetching them first
+      # keeps the downloads out of the checks.
+      - name: Fetch the crates (cargo fetch --locked)
+        id: fetch
+        run: cargo fetch --locked
+
+      - name: a. Go to definition on `uuid` in register_tools! lands in tools/uuid/mod.rs
+        id: definition_list
+        if: ${{ !cancelled() && steps.ra.outcome == 'success' && steps.fetch.outcome == 'success' }}
+        run: node scripts/spikes/s2-1-ra-probe.mjs definition-list
+
+      - name: b. In tools/uuid/mod.rs, go to definition on Tool and ToolMeta lands in navaja-core
+        id: definition_core
+        if: ${{ !cancelled() && steps.ra.outcome == 'success' && steps.fetch.outcome == 'success' }}
+        run: node scripts/spikes/s2-1-ra-probe.mjs definition-core
+
+      - name: c. Completion through `crate::uuid::`, and of `navaja_core::` in mod.rs
+        id: completion
+        if: ${{ !cancelled() && steps.ra.outcome == 'success' && steps.fetch.outcome == 'success' }}
+        run: node scripts/spikes/s2-1-ra-probe.mjs completion
+
+      - name: d. No unlinked-file or unresolved-path diagnostics for tools/uuid/mod.rs
+        id: diagnostics
+        if: ${{ !cancelled() && steps.ra.outcome == 'success' && steps.fetch.outcome == 'success' }}
+        run: node scripts/spikes/s2-1-ra-probe.mjs diagnostics
+
+      # The negative controls, each on a throwaway copy of the checkout with
+      # tools/lib.rs edited, deleted afterwards. Each first checks that
+      # rust-analyzer loaded the copy's workspace.
+      - name: Control, the uuid entry removed; mod.rs is unlinked and b and c fail
+        id: control_removed
+        if: ${{ !cancelled() && steps.ra.outcome == 'success' && steps.fetch.outcome == 'success' }}
+        run: node scripts/spikes/s2-1-ra-probe.mjs control-removed
+
+      - name: Control, the uuid entry misspelled `uiud`; a fails
+        id: control_misspelled
+        if: ${{ !cancelled() && steps.ra.outcome == 'success' && steps.fetch.outcome == 'success' }}
+        run: node scripts/spikes/s2-1-ra-probe.mjs control-misspelled
+
+      - name: The tree is clean
+        id: clean
+        if: always()
+        run: |
+          changes=$(git status --porcelain)
+          if [ -n "$changes" ]; then
+            echo "::error::files changed by the checks:"
+            printf '%s\n' "$changes"
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          VERSION: ${{ steps.ra.outputs.version }}
+          RA: ${{ steps.ra.outcome }}
+          FETCH: ${{ steps.fetch.outcome }}
+          DEFINITION_LIST: ${{ steps.definition_list.outputs.result || steps.definition_list.outcome }}
+          DEFINITION_CORE: ${{ steps.definition_core.outputs.result || steps.definition_core.outcome }}
+          COMPLETION: ${{ steps.completion.outputs.result || steps.completion.outcome }}
+          DIAGNOSTICS: ${{ steps.diagnostics.outputs.result || steps.diagnostics.outcome }}
+          CONTROL_REMOVED: ${{ steps.control_removed.outputs.result || steps.control_removed.outcome }}
+          CONTROL_MISSPELLED: ${{ steps.control_misspelled.outputs.result || steps.control_misspelled.outcome }}
+          CLEAN: ${{ steps.clean.outcome }}
+        run: |
+          result() {
+            case "$1" in
+              success) echo PASS ;;
+              failure) echo FAIL ;;
+              skipped | '') echo 'not run' ;;
+              *) echo "$1" ;;
+            esac
+          }
+          {
+            echo '### S2.1 rust-analyzer through register_tools!: ubuntu-24.04'
+            echo
+            echo "rust-analyzer: \`${VERSION:-not installed}\`"
+            echo
+            echo '| Check | Result |'
+            echo '|---|---|'
+            echo "| rust-analyzer and rust-src added to the pinned toolchain | $(result "$RA") |"
+            echo "| Crates fetched (\`cargo fetch --locked\`) | $(result "$FETCH") |"
+            echo "| a. Definition on \`uuid\` in \`register_tools!\` lands in \`tools/uuid/mod.rs\` | $(result "$DEFINITION_LIST") |"
+            echo "| b. In \`tools/uuid/mod.rs\`, definition on \`Tool\` and \`ToolMeta\` lands in \`crates/navaja-core\` | $(result "$DEFINITION_CORE") |"
+            echo "| c. \`crate::uuid::\` offers \`TOOL\` and \`UuidGenerator\`; \`navaja_core::\` in \`mod.rs\` offers \`Tool\`, \`ToolMeta\` and \`Registry\` | $(result "$COMPLETION") |"
+            echo "| d. No unlinked-file, unresolved import, module, extern crate or name diagnostic for \`tools/uuid/mod.rs\` | $(result "$DIAGNOSTICS") |"
+            echo "| Control: entry removed (copy): \`mod.rs\` unlinked, b and c fail | $(result "$CONTROL_REMOVED") |"
+            echo "| Control: entry misspelled \`uiud\` (copy): a fails | $(result "$CONTROL_MISSPELLED") |"
+            echo "| Tree clean | $(result "$CLEAN") |"
+            echo "| RustRover | needs a person (docs/spikes.md) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # S2.2: can a custom view live in tools/<id>/ui/, outside app/? A throwaway
   # tool with a custom view (scripts/spikes/s2-2-probe.sh) goes through every
   # check the roadmap's PASS names, each in its own step. svelte-check, ESLint

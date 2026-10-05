@@ -30,6 +30,68 @@ Copy this for each spike and fill it in.
 
 ## Results
 
+## S2.1 IDE
+
+- **Milestone / gates:** M2a, item 4: the macro registry. A tool registers with one line in `register_tools!` (`tools/lib.rs`), and the macro's `mod $id;` is the only declaration of the tool's module.
+- **Time box:** none set in the roadmap
+- **Question:** do RustRover and rust-analyzer navigate and complete through `register_tools!`? An IDE that does not expand the macro sees `tools/<id>/mod.rs` as a file outside the crate, with no navigation or completion in it.
+- **Method:**
+  - **rust-analyzer, automated** (`.github/workflows/spikes.yml`, job `s2-1`, on ubuntu-24.04): run by hand, and on a PR that changes the workflow or `scripts/spikes/`.
+    - The job adds the `rust-analyzer` and `rust-src` components to the toolchain in `rust-toolchain.toml` (1.99.0) and fetches the crates (`cargo fetch --locked`).
+    - Then it runs `scripts/spikes/s2-1-ra-probe.mjs` once per check, each in its own step. The probe starts rust-analyzer as an LSP server on the checkout, waits until it reports itself quiescent, asks one thing, and shuts it down. It finds each position by searching the file's text.
+    - rust-analyzer runs without build scripts, proc macros, `cargo check`, cache priming and its own file watcher; it leaves watching to the probe, which reports no change. `register_tools!` is a `macro_rules!`, which rust-analyzer expands itself, and the build scripts would compile Tauri. Its experimental diagnostics are on: rust-analyzer 1.99.0 reports an unresolved import (E0432) or name (E0425) only with them.
+    - a. Go to definition on `uuid` in the `register_tools!` list lands in `tools/uuid/mod.rs`, and nowhere else.
+    - b. In `tools/uuid/mod.rs`, go to definition on `Tool` (`impl Tool for UuidGenerator`) lands on `pub trait Tool` in `crates/navaja-core/src/tool.rs`, and on `ToolMeta` (`fn meta(&self) -> ToolMeta`) on `pub struct ToolMeta` in `meta.rs`.
+    - c. Completion after `crate::uuid::` in `tools/lib.rs` offers `TOOL` and `UuidGenerator`. Completion after `navaja_core::` in `tools/uuid/mod.rs` offers `Tool`, `ToolMeta` and `Registry`. The probe asks each inside a function it appends to the file, sent as an unsaved buffer; nothing on disk changes.
+    - d. For `tools/uuid/mod.rs` as it is on disk, rust-analyzer reports no unlinked file (`unlinked-file`) and no unresolved import (E0432), module (E0583), extern crate (`unresolved-extern-crate`) or name (E0425). The probe asks for the file's diagnostics (LSP pull diagnostics), since rust-analyzer publishes nothing for a file with none.
+    - Two negative controls, each on a throwaway copy of the checkout with `tools/lib.rs` edited. The copy is deleted afterwards.
+      - Each first checks that rust-analyzer loaded the copy's workspace: go to definition on `Registry` in `tools/registry_test.rs`, which `lib.rs` declares outside the macro, must land in `crates/navaja-core`. A rust-analyzer that loaded nothing would also fail the checks below, so without this a control could pass on nothing.
+      - The `uuid` entry removed (`register_tools! {}`): `tools/uuid/mod.rs` must be reported as an unlinked file, and b and c must fail.
+      - The entry misspelled `uiud`: a must fail.
+    - The last steps check that the tree is clean, and write a PASS/FAIL table and rust-analyzer's version to the run summary. A check the probe could not ask (exit code 2, for example rust-analyzer missing or crashed, or a search that found nothing) shows there as "could not ask", not FAIL.
+  - **RustRover: needs a person.** The steps are below.
+- **PASS if:** RustRover and rust-analyzer navigate and complete through `register_tools!`
+- **FAIL then:** the two-line form, `mod x;` plus a list entry (needs sign-off)
+- **Result:** not finished (2026-10-05).
+  - rust-analyzer: PASS. `spikes.yml` run [37268969385](https://github.com/joaovitorpina/Navaja/actions/runs/37268969385), on commit `77094fd`: checks a to d passed, and both controls failed the checks they should. Every other job of the run passed too.
+  - RustRover: not run yet. It needs a person.
+- **Numbers and evidence:** run 37268969385, job `s2-1`, on ubuntu-24.04 (Ubuntu 24.04.5, runner image 20260927.320.1), with rust-analyzer 1.99.0 (b940084 2026-09-28) from the 1.99.0 toolchain. The job took 45 s: 4 to 5 s per check, with rust-analyzer quiescent about 1 s after it started.
+
+  | Check | What rust-analyzer answered |
+  |---|---|
+  | a | `tools/uuid/mod.rs`, line 1 |
+  | b | `Tool`: `crates/navaja-core/src/tool.rs` line 14, `pub trait Tool: Send + Sync + 'static {`. `ToolMeta`: `meta.rs` line 13, `pub struct ToolMeta {` |
+  | c | after `crate::uuid::`: 2 items, `TOOL` and `UuidGenerator`; the module's private items are not offered. After `navaja_core::`: 39 items, `Tool`, `ToolMeta` and `Registry` among them |
+  | d | 4 diagnostics, none of those d looks for: a `macro-error`, "proc-macro expansion is disabled", at each of the 3 `#[derive(…, Deserialize)]` (lines 17, 25 and 35), and E0277 at line 124, "the trait bound `Input: Deserialize<'?0.0>` is not satisfied", which follows from the same disabled derive |
+  | Control, entry removed | `Registry` lands on `registry.rs` line 62. `tools/uuid/mod.rs` has one diagnostic, `unlinked-file`: "This file is not included anywhere in the module tree, so rust-analyzer can't offer IDE services." b finds no definitions, and c no completions |
+  | Control, entry misspelled `uiud` | `Registry` lands on `registry.rs` line 62. a's definition of `uiud` is the list entry itself, `tools/lib.rs` line 23, and `lib.rs` gets E0583, "unresolved module, can't find module file: uiud.rs, or uiud/mod.rs" |
+
+  - Three earlier runs, with earlier versions of the probe, got the same answers. Those versions let rust-analyzer start its own file watcher, which logged "notify error" warnings, and showed a check the probe could not ask as FAIL. Run [37254205824](https://github.com/joaovitorpina/Navaja/actions/runs/37254205824) on `1b754fe` passed every job. The `s2-1` jobs of runs [37253656398](https://github.com/joaovitorpina/Navaja/actions/runs/37253656398) on `7b2b934` and [37253862965](https://github.com/joaovitorpina/Navaja/actions/runs/37253862965) on `caf86db` passed too. A later push cancelled 5 of the other 6 jobs in the first of those two runs and 3 of the 6 in the second; the jobs that finished passed. The probe at `7b2b934` also matched the definitions' names as substrings.
+  - Locally, on Windows 11 Pro 10.0.26300 with rust-analyzer 1.99.0 (b940084d 2026-09-28), the probe at `77094fd` gave the same answers, in about 7 s per check.
+  - Each check was also run locally with the property it guards broken, then put back:
+    - `tools/uuid/` moved to `tools/uuid_moved/`: a fails.
+    - The `uuid` entry removed in the checkout itself: b, c and d each fail, d on `unlinked-file`.
+    - `use navaja_core::NoSuchItem;` added to `tools/uuid/mod.rs`: d fails on E0432. With experimental diagnostics off, d passes on the same file, which is why the probe turns them on.
+    - `#[path = "uuid/mod.rs"] mod uuid_direct;` added to `tools/lib.rs`, so that `mod.rs` no longer depends on the macro: the removed-entry control fails.
+    - Check a weakened to accept any target: the misspelled-entry control fails.
+    - `mod registry_test;` commented out: both controls fail their first check. With a line that is not TOML added to `Cargo.toml`, rust-analyzer reports "Failed to load workspaces", and both controls stop with exit code 2.
+  - Not covered: rust-analyzer with its defaults (build scripts and proc macros on), as an editor runs it. The registry needs neither, but the RustRover steps below use the IDE's defaults.
+
+  **RustRover, by a person.** On any OS, in a clean checkout of the commit to test:
+  1. Open the repository's root folder in RustRover (File > Open), with the default settings. Wait until the Cargo sync and indexing finish. Note RustRover's version (Help > About; RustRover > About RustRover on macOS) and the OS.
+  2. a. In `tools/lib.rs`, put the caret on `uuid` in `register_tools! { uuid, }` (line 23) and use Navigate > Declaration or Usages (Ctrl+B; Cmd+B on macOS). PASS: `tools/uuid/mod.rs` opens.
+  3. b. In `tools/uuid/mod.rs`, use the same action on `Tool` in `impl Tool for UuidGenerator` (line 52), then on `ToolMeta` in `fn meta(&self) -> ToolMeta` (line 53). PASS: the first opens `crates/navaja-core/src/tool.rs` at `pub trait Tool` (line 14), the second `crates/navaja-core/src/meta.rs` at `pub struct ToolMeta` (line 13).
+  4. c. At the end of `tools/lib.rs`, type `fn s21() { let _ = crate::uuid::` and invoke completion (Ctrl+Space) right after the last `::`. PASS: the list offers `TOOL` and `UuidGenerator`. Undo the edit. Then type `fn s21() { let _ = navaja_core::` at the end of `tools/uuid/mod.rs`. PASS: the list offers `Tool`, `ToolMeta` and `Registry`. Undo the edit.
+  5. d. In `tools/uuid/mod.rs`, PASS when the editor shows no "File is not included in module tree" banner, and step 2's action (Ctrl+B; Cmd+B on macOS) on `navaja_core` in `use navaja_core::{` (line 3) opens `crates/navaja-core/src/lib.rs`.
+  6. Negative control. In `tools/lib.rs`, change `uuid,` to `uiud,` and wait for the analysis. PASS: `tools/uuid/mod.rs` shows the "not included in module tree" banner, step 3's action on `Tool` no longer opens `tool.rs`, and the action on `uiud` does not open `tools/uuid/mod.rs`. Put the line back (`git checkout tools/lib.rs`), wait, and check that step 3 works again.
+  7. Record here the RustRover version, the OS, and PASS or FAIL for steps 2 to 6. Attach a screenshot of any failure to the PR; do not commit images (Rules).
+
+  Optionally, the same steps in VS Code with the rust-analyzer extension at its defaults (F12 goes to the definition, Ctrl+Space completes; its "unlinked file" warning is the banner) cover what the job leaves out.
+- **Decision:** pending until both halves are recorded here.
+  - If RustRover passes steps 2 to 6, `register_tools!` stays as it is.
+  - If either IDE fails, the fallback, `mod x;` plus a list entry, needs the maintainer's sign-off and becomes an ADR (Rules).
+  - **The job's lifetime:** `spikes.yml`'s `s2-1` job is deleted once S2.1 is recorded here, RustRover half included, together with `scripts/spikes/s2-1-ra-probe.mjs`.
+
 ## S2.2 Views outside `app/`
 
 - **Milestone / gates:** M2a, custom-view discovery (`import.meta.glob('@tools/*/ui/View.svelte')` in ToolHost) and the custom views that follow it
