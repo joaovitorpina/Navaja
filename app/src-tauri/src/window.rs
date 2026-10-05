@@ -23,21 +23,30 @@ const READY_TIMEOUT: Duration = Duration::from_secs(5);
 /// taskbar before the click arrives. KeePassXC allows the same 500 ms.
 const TRAY_BLUR_GRACE: Duration = Duration::from_millis(500);
 
-/// Where the webview's web traffic goes, on every OS: a closed, privileged
-/// loopback port (the discard service's). The engine hands a proxied
-/// request's host name to the proxy instead of resolving it, so through this
-/// one nothing is resolved and nothing leaves the machine
+/// Where the webview's web traffic goes, on every OS: a closed loopback port
+/// (the discard service's). The engine hands a proxied request's host name
+/// to the proxy instead of resolving it, so through this one nothing is
+/// resolved and, while nothing listens there, nothing leaves the machine
 /// (docs/architecture.md §5, spike S2.7). Without it:
 /// - WebKitGTK and macOS's WebKit look a link's host up while they wait for
 ///   the navigation decision, even one the guard then denies;
 /// - WebView2's network service fetches its own configuration and component
 ///   update checks, and probes `wpad` for proxy auto-detection.
 ///
+/// Port 9 is privileged only on Linux, while
+/// `net.ipv4.ip_unprivileged_port_start` keeps its default of 1024. On
+/// Windows any local process may listen on 127.0.0.1:9, and on macOS any
+/// user on the wildcard address, 0.0.0.0:9, which also receives connections
+/// to 127.0.0.1:9. Such a listener would get the engine's proxied requests,
+/// host names included, and could pass them on: ADR 0003 discloses that.
+///
 /// How each engine gets it:
 /// - Windows: wry adds `--proxy-server=http://127.0.0.1:9` to WebView2's
-///   browser arguments, after its defaults. Navaja passes no arguments of
-///   its own: they would replace both, so they would have to repeat them
-///   (docs/architecture.md §5).
+///   browser arguments, after its defaults (wry 0.57.0:
+///   `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`, and
+///   `--autoplay-policy=no-user-gesture-required` while autoplay is on, its
+///   default). Navaja passes no arguments of its own: they would replace all
+///   three, so they would have to repeat them (docs/architecture.md §5).
 /// - Linux: wry sets it on the web context's `WebsiteDataManager`.
 /// - macOS: Tauri's `macos-proxy` feature sets it on the webview's
 ///   `WKWebsiteDataStore` (`proxyConfigurations`). That API needs macOS 14,
@@ -413,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn the_dead_proxy_is_a_closed_loopback_port() {
+    fn the_dead_proxy_is_loopback_port_9() {
         // create_main skips a proxy that does not parse, and wry needs an
         // explicit port (Url::port is None for http's default, 80).
         let proxy = tauri::Url::parse(DEAD_PROXY).expect("DEAD_PROXY parses");

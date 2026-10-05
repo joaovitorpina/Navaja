@@ -209,7 +209,7 @@ This is the execution plan accepted with [ADR 0001](adr/0001-stack.md). The desi
    - install.md covers SmartScreen "More info → Run anyway", Smart App Control, Gatekeeper "Open Anyway", the Linux tray host and the NVIDIA variables.
    - privacy.md lists the OS services in a macOS text field's context menu: Look Up, Translate, Search With Google, Share and Services. They send the selected text only when the user picks one.
    - Optional, later: on macOS, replace that menu with a native one built from `PredefinedMenuItem` cut, copy, paste and select all.
-   - privacy.md carries S2.7's disclosed list word for word: the traffic of system services that the webview wakes and that Navaja cannot stop ([ADR 0003](adr/0003-webview-network.md), "What is disclosed").
+   - privacy.md carries ADR 0003's text for privacy.md word for word ([ADR 0003](adr/0003-webview-network.md), "What is disclosed"): the traffic of system services that the webview wakes and that Navaja cannot stop, and who could listen on the dead proxy's port. The ADR's table and `scripts/spikes/s2-7-disclosed.tsv` are S2.7's labels for that traffic, not the text.
    - Next to those services, privacy.md lists the hand-offs (architecture §5): About's repository link opens in the default browser and the logs folder in the file manager, only when the user asks. The browser or file manager loads them, not Navaja, even when Windows starts the browser as Navaja's child process.
 7. **Final QA:**
    - `measure`;
