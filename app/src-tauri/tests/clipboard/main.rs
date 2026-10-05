@@ -9,21 +9,30 @@
 //! - Windows (`windows.rs`): the three registered formats, through Win32.
 //! - macOS (`macos.rs`): `org.nspasteboard.ConcealedType`, through
 //!   `NSPasteboard`.
-//! - Linux (`linux.rs`): the `x-kde-passwordManagerHint` target, over X11.
-//!   With no X display, or in a Wayland session, it prints why and passes
-//!   without checking. CI's nextest step has no display, so CI checks
-//!   Windows and macOS only.
+//! - Linux (`linux.rs`): the `x-kde-passwordManagerHint` target, over X11,
+//!   which is also how arboard copies on GNOME Wayland (through Xwayland).
+//!   With no X display, or where arboard copies over Wayland (a compositor
+//!   with data-control, such as KDE's), it prints why and passes without
+//!   checking. CI's nextest step has no display, so CI checks Windows and
+//!   macOS only.
 //!
-//! It replaces what is on the clipboard with two random canaries, and leaves
-//! the second, Navaja's own copy, there. The first, the ordinary copy, can
-//! reach a clipboard history like any other copy. The clipboard belongs to
-//! the whole machine, so this binary holds one test, and
-//! `.config/nextest.toml` runs it in a test group of one thread and shows
-//! its output on a pass too.
+//! It replaces what is on the clipboard with two random canaries. On Windows
+//! and macOS it leaves the second, Navaja's own copy, there. On X11 the
+//! clipboard ends up empty: the copy carries the hint, so the last arboard
+//! handle to drop gives the selection up rather than hand it to a clipboard
+//! manager. The first, the ordinary copy, can reach a clipboard history,
+//! cloud clipboard or Universal Clipboard like any other copy.
+//!
+//! The clipboard belongs to the whole desktop session. So this binary holds
+//! one test, `.config/nextest.toml` runs it in a test group of one thread,
+//! and the test takes a lock file in the temp directory against a run from
+//! another worktree or terminal (`take_turn`). nextest also shows its output
+//! on a pass.
 
 #![cfg(any(windows, target_os = "macos", target_os = "linux"))]
 
 use std::collections::hash_map::RandomState;
+use std::fs::{File, OpenOptions, TryLockError};
 use std::hash::BuildHasher;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -44,6 +53,11 @@ mod os;
 /// How long a clipboard that is busy, or still taking a copy, gets.
 const PATIENCE: Duration = Duration::from_secs(10);
 const PAUSE: Duration = Duration::from_millis(50);
+/// How many times in all a copy is made, when something else replaces it
+/// before it is read.
+const COPIES: u32 = 5;
+/// How long another run of this test may hold the clipboard.
+const TURN: Duration = Duration::from_secs(120);
 
 /// A marker Navaja's copy must carry: a clipboard format (Windows), a
 /// pasteboard type (macOS) or a selection target (Linux).
@@ -83,6 +97,8 @@ fn copy_carries_the_privacy_markers() {
             return;
         }
     };
+    // Released last, after the clipboard handles below.
+    let _turn = take_turn();
     // Held to the end: on X11, the last handle to drop takes the copied
     // text with it.
     let mut ordinary = retry("opening the clipboard", || {
@@ -93,10 +109,9 @@ fn copy_carries_the_privacy_markers() {
 
     // The control: a reader that saw markers on every copy fails here.
     let plain = canary("ordinary");
-    retry("an ordinary copy", || {
+    let seen = copy_and_read(&reader, &plain, "an ordinary copy", || {
         ordinary.set_text(plain.as_str()).map_err(|e| e.to_string())
     });
-    let seen = wait_for(&reader, &plain, "an ordinary copy");
     for marker in os::MARKERS {
         assert!(
             seen.marker(marker.name).is_none(),
@@ -109,8 +124,9 @@ fn copy_carries_the_privacy_markers() {
 
     // Navaja's copy, through the call `copy_text` makes.
     let copied = canary("navaja");
-    retry("Navaja's copy", || app.clipboard.copy(copied.clone()));
-    let seen = wait_for(&reader, &copied, "Navaja's copy");
+    let seen = copy_and_read(&reader, &copied, "Navaja's copy", || {
+        app.clipboard.copy(copied.clone())
+    });
     for marker in os::MARKERS {
         let Some(data) = seen.marker(marker.name) else {
             panic!(
@@ -160,23 +176,77 @@ fn retry<T>(what: &str, mut attempt: impl FnMut() -> Result<T, String>) -> T {
     }
 }
 
-/// Reads the clipboard until it holds `canary`, through busy moments and
-/// copies still on their way. A failure never prints what the clipboard
-/// held instead, which may be someone's own text.
-fn wait_for(reader: &os::Reader, canary: &str, what: &str) -> Contents {
-    let deadline = Instant::now() + PATIENCE;
+/// Copies `canary` with `copy`, then reads the clipboard until it holds it,
+/// through busy moments and copies still on their way. Something else may
+/// replace the copy before it is read: a cloud clipboard item, an item from
+/// a nearby device, or the user copying. Then it copies again, `COPIES`
+/// times in all. A failure never prints what the clipboard held instead,
+/// which may be someone's own text.
+fn copy_and_read(
+    reader: &os::Reader,
+    canary: &str,
+    what: &str,
+    mut copy: impl FnMut() -> Result<(), String>,
+) -> Contents {
+    for _ in 0..COPIES {
+        retry(what, &mut copy);
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let problem = match reader.read() {
+                Ok(contents) if contents.text.as_deref() == Some(canary) => return contents,
+                Ok(contents) if contents.text.is_some() => {
+                    say(&format!(
+                        "after {what}, the clipboard holds another text; copying again"
+                    ));
+                    thread::sleep(PAUSE);
+                    break;
+                }
+                Ok(_) => "it holds no text".to_owned(),
+                Err(error) => error,
+            };
+            assert!(
+                Instant::now() < deadline,
+                "after {what}, the clipboard did not hold the copied text within {PATIENCE:?}: {problem}"
+            );
+            thread::sleep(PAUSE);
+        }
+    }
+    panic!("after {what}, the clipboard held another text each time; {COPIES} copies in all");
+}
+
+/// Waits until no other run of this test on the machine holds the
+/// clipboard. nextest's test group orders the tests of one run only, and a
+/// run from another worktree or terminal would replace this run's copy.
+/// Worktrees do not share `target/`, so the lock is a fixed file in the
+/// temp directory. The OS releases it when the file is closed or the
+/// process ends.
+fn take_turn() -> File {
+    let path = std::env::temp_dir().join("navaja-clipboard-test.lock");
+    // Another user's file in a shared temp directory opens read-only, which
+    // is enough to lock it.
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .or_else(|_| File::open(&path))
+        .unwrap_or_else(|error| panic!("cannot open {}: {error}", path.display()));
+    let deadline = Instant::now() + TURN;
     loop {
-        let problem = match reader.read() {
-            Ok(contents) if contents.text.as_deref() == Some(canary) => return contents,
-            Ok(contents) if contents.text.is_none() => "it holds no text".to_owned(),
-            Ok(_) => "it holds another text".to_owned(),
-            Err(error) => error,
-        };
-        assert!(
-            Instant::now() < deadline,
-            "after {what}, the clipboard did not hold the copied text within {PATIENCE:?}: {problem}"
-        );
-        thread::sleep(PAUSE);
+        match file.try_lock() {
+            Ok(()) => return file,
+            Err(TryLockError::WouldBlock) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "another run of this test held {} for {TURN:?}",
+                    path.display(),
+                );
+                thread::sleep(PAUSE);
+            }
+            Err(TryLockError::Error(error)) => {
+                panic!("cannot lock {}: {error}", path.display())
+            }
+        }
     }
 }
 

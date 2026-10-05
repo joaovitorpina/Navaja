@@ -44,13 +44,22 @@ fn message<E: std::fmt::Display>(error: E) -> String {
 
 impl Reader {
     /// An error is why this machine has no X11 clipboard to check, and the
-    /// test skips. arboard copies over X11 only when `WAYLAND_DISPLAY` is
-    /// unset, so a Wayland session skips too, rather than read through
-    /// Xwayland's bridge what arboard wrote over Wayland.
+    /// test skips.
+    ///
+    /// With `WAYLAND_DISPLAY` set, arboard 3.6 copies over Wayland only if
+    /// the compositor offers a data-control protocol (KDE, wlroots), which
+    /// it learns from wl-clipboard-rs's `is_primary_selection_supported`.
+    /// Otherwise it falls back to X11, through Xwayland (GNOME). This runs
+    /// the same probe, so it skips only where the copy really goes over
+    /// Wayland, rather than read through Xwayland's bridge what arboard
+    /// wrote there, and checks the X11 copy GNOME users get. It must follow
+    /// arboard's choice when arboard is updated.
     pub fn open() -> Result<Self, String> {
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        if std::env::var_os("WAYLAND_DISPLAY").is_some()
+            && wl_clipboard_rs::utils::is_primary_selection_supported().is_ok()
+        {
             return Err(format!(
-                "WAYLAND_DISPLAY is set, so arboard copies over Wayland, and this check reads X11; {HOW}"
+                "the Wayland compositor offers data-control, so arboard copies over Wayland, and this check reads X11; {HOW}"
             ));
         }
         if std::env::var_os("DISPLAY").is_none() {
