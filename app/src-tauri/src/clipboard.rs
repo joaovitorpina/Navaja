@@ -11,8 +11,17 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Mutex, PoisonError};
 
-/// Larger copies are refused.
+/// Larger copies are refused (docs/architecture.md §5, "Input limits").
 const MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// The size check, apart from the clipboard, so a test can cover it without
+/// touching the real one.
+fn check_size(bytes: usize) -> Result<(), String> {
+    if bytes > MAX_BYTES {
+        return Err("text is too large to copy".to_owned());
+    }
+    Ok(())
+}
 
 /// One long-lived clipboard handle: on Linux the copying process serves the
 /// data, so it must stay alive after the copy.
@@ -21,9 +30,7 @@ pub struct Clipboard(Mutex<Option<arboard::Clipboard>>);
 
 impl Clipboard {
     pub fn copy(&self, text: String) -> Result<(), String> {
-        if text.len() > MAX_BYTES {
-            return Err("text is too large to copy".to_owned());
-        }
+        check_size(text.len())?;
         let mut handle = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         // A panic in arboard fails this copy instead of the app. The panic
         // hook records only where it happened, never the payload.
@@ -72,4 +79,20 @@ fn exclude(set: arboard::Set<'_>) -> arboard::Set<'_> {
 fn exclude(set: arboard::Set<'_>) -> arboard::Set<'_> {
     use arboard::SetExtLinux;
     set.exclude_from_history()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copies_over_64_mib_are_refused() {
+        assert_eq!(MAX_BYTES, 64 * 1024 * 1024);
+        assert_eq!(check_size(0), Ok(()));
+        assert_eq!(check_size(MAX_BYTES), Ok(()));
+        assert_eq!(
+            check_size(MAX_BYTES + 1),
+            Err("text is too large to copy".to_owned())
+        );
+    }
 }
