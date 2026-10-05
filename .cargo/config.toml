@@ -1,5 +1,8 @@
 [alias]
-xtask = "run --quiet --package xtask --"
+# --locked: a stale Cargo.lock fails every `cargo xtask` run instead of being
+# rewritten before xtask starts, so CI's `cargo xtask check` catches a
+# lockfile left out of a commit (docs/adding-a-tool.md §5).
+xtask = "run --locked --quiet --package xtask --"
 
 [env]
 # ts-rs: emit u64/i64 as `number`, not `bigint` (values stay below 2^53).

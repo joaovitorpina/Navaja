@@ -225,7 +225,11 @@ Each `OptionSpec` becomes one key of the input object:
 - **What the view sends:** every option that applies to the current mode, starting at its default ([`options.ts`](../app/src/generic/options.ts)). Options for other modes are left out.
 - **Nothing clamps:** the registry checks the spec, never the values, and the view applies `min`, `max` and `limit` through HTML form validation only. `invoke` re-checks any bound it relies on (§4).
 - **Integer type:** deserialize into any integer type that holds `min..=max` (uuid uses `u32`). A number that doesn't fit the type fails `typed()` with `core.invalid_input`.
-- **Defaults:** each default lives twice, in the `Control` (what the view sends) and in the serde default (used when the key is missing: options outside the current mode, and tests that send `{}`). Nothing checks that the two agree, so use one const for both, like `DEFAULT_WIDTH` above.
+- **Defaults:** each default lives twice, in the `Control` (what the view sends) and in the serde default (used when the key is missing: options outside the current mode, and tests that send `{}`). Nothing checks that the two agree, so tie them together:
+  - `Integer`: one const for both, like `DEFAULT_WIDTH` above.
+  - `Choice`: deserialize into an enum with `#[serde(rename_all = "snake_case")]`, whose `#[default]` variant is the `Control`'s default, and give the field `#[serde(default)]`. uuid's `Version` does this: `V4` is the default variant, and `"v4"` the default choice.
+  - `Toggle`: `#[serde(default)]` gives `false`. A default of `true` needs `#[serde(default = "...")]` with a function that returns `true`.
+  - `Text`: `#[serde(default)]` gives an empty string. Any other default needs a const and `#[serde(default = "...")]`, as for an `Integer`.
 
 ### Writing a custom view
 
@@ -252,9 +256,13 @@ Each output in the spec has a `key` and a format. `invoke` returns one JSON obje
 | Format | Value |
 |---|---|
 | `Text`, `Code { lang }` | string |
-| `KeyValue` | `[{ key, value, note?, secret }]` (`KeyValueRow`) |
-| `Diagnostics` | `[{ severity, code, message, line, column, details }]` (`Diagnostic`) |
+| `KeyValue` | an array of `navaja_core::KeyValueRow`: `key` and `value` strings; `secret`, a bool, always present; `note`, a string, left out when there is none, never `null` |
+| `Diagnostics` | an array of `navaja_core::Diagnostic`: `severity` (`"error"`, `"warning"` or `"info"`); `code`, one of your `<id>.*` codes; `message`, a string; `line` and `column` (1-based, the column in UTF-16 code units) and `details`, each always present, `null` when unknown |
 | `Binary` | `{ len, hex }` (`BinaryValue::from_bytes`) |
+
+- **Build these values from the types,** such as a `Vec<KeyValueRow>` passed to `serde_json::to_value`, rather than writing the JSON by hand. The registry checks that each value survives a round trip through its type unchanged, so a missing field, an extra one or `"note": null` fails.
+- **`null`** stands for a whole output with nothing to show, never for one field of a row.
+- **A wrong shape** fails with `core.invalid_output` and "output `<key>` does not match its format". The message names the output, not the field, and only debug builds check it.
 
 ## 4. Rules every tool follows
 
@@ -277,7 +285,8 @@ These are enforced by lints, cargo-deny, `registry_test.rs` and review:
 - **No secrets in logs.** Tools don't log. The shell logs only the tool id, action, duration and error code.
 - **Dependencies** go in [`tools/Cargo.toml`](../tools/Cargo.toml), never in the root `Cargo.toml`: `tool-gate` rejects any change to it.
   - **Already there:** `navaja-core`, `serde`, `serde_json`, `uuid`.
-  - **In the root `[workspace.dependencies]`:** write `<crate> = { workspace = true }`. Available: `proptest` (under `[dev-dependencies]`), `roxmltree`, `serde_path_to_error`, `ts-rs`. The `tauri` entries are for the app only.
+  - **In the root `[workspace.dependencies]`:** write `<crate> = { workspace = true }`. Available: `proptest` (under `[dev-dependencies]`), `roxmltree`, `serde_path_to_error`, `ts-rs`. The `tauri` entries are for the app only. `tools/Cargo.toml` has no `[dev-dependencies]` table yet; the first tool that needs one adds it.
+  - **`Cargo.lock`:** any change to `tools/Cargo.toml` changes it too. The first tool to use proptest adds about a dozen packages. Commit the lockfile with the tool (§5).
   - **Anything else:** write its version in `tools/Cargo.toml`, such as `<crate> = "1.2.3"`; cargo-deny rejects `*`. Moving it into the workspace table is a separate `host-change` PR.
   - **A new crate in a system-tool PR:** `crates/navaja-<x>/` is a workspace member already (`crates/*`). Write `navaja-<x> = { path = "../crates/navaja-<x>" }` in `tools/Cargo.toml`, with no version: `deny.toml` sets `allow-wildcard-paths`. The crate's own dependencies go in its own `Cargo.toml` under the same rule, `workspace = true` or a version. Of Navaja's crates, it may use only `navaja-core` ([architecture](architecture.md) §2).
   - **Allowed:** small, maintained crates with a licence on the `deny.toml` allowlist.
@@ -296,6 +305,9 @@ pnpm check && pnpm lint && pnpm test  # custom views only: svelte-check, the imp
 ```
 
 `cargo fmt` never sees your tool's files: `tools/lib.rs` declares them inside `register_tools!`, and rustfmt does not expand macros. Running rustfmt on `mod.rs` also checks the files it declares, such as `tests.rs`; without `--check`, it formats them. CI runs the same check on every tool folder.
+
+- **If you changed `tools/Cargo.toml`,** a dev-dependency such as proptest included: build once, so that Cargo updates `Cargo.lock`, commit the lockfile with the tool, and run the cargo-deny line above. CI catches a lockfile left behind: its checks job runs cargo-deny and `cargo xtask check` with `--locked`, so a stale `Cargo.lock` fails there instead of being rewritten. `tool-gate` sees committed changes only. On your machine, `cargo xtask` runs with `--locked` too, and fails the same way until a build updates the lockfile.
+- **On Windows, keep the checkout path short,** such as `C:\src\Navaja`. With a long one, MSVC's linker failed with LNK1104 on a build script's path over 260 characters, even with long paths turned on in Windows.
 
 Then commit, and check what your PR touches:
 

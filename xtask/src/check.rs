@@ -27,11 +27,16 @@ const ALLOWED_CSP_ORIGINS: &[&str] = &["http://ipc.localhost"];
 
 pub fn run() -> Result<()> {
     let root = root();
+    // --locked: a Cargo.lock that no longer matches the manifests fails here
+    // instead of being rewritten, so a lockfile left out of a commit fails
+    // CI (docs/adding-a-tool.md §5). The `cargo xtask` alias passes --locked
+    // to `cargo run` as well, which would otherwise rewrite it first.
     let metadata = MetadataCommand::new()
         .manifest_path(root.join("Cargo.toml"))
         .features(CargoOpt::AllFeatures)
+        .other_options(vec!["--locked".to_owned()])
         .exec()
-        .context("cargo metadata")?;
+        .context("cargo metadata --locked (is Cargo.lock up to date?)")?;
 
     let mut problems = Vec::new();
     match metadata
