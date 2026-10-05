@@ -24,6 +24,7 @@
 // exist and doesn't, a folder that always holds files and is empty, zero
 // files searched, a folder or file it can't read, and folders that are still
 // changing after a minute.
+import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
   closeSync,
@@ -112,6 +113,18 @@ function readRecord() {
   return record;
 }
 
+/** One of macOS's per-user folders under /var/folders, as `getconf` gives it. */
+function darwinDir(name) {
+  try {
+    const dir = execFileSync('getconf', [name], { encoding: 'utf8' }).trim();
+    if (isAbsolute(dir)) return dir;
+    fail(`getconf ${name} gave no absolute path: ${dir}`);
+  } catch (error) {
+    fail(`getconf ${name} failed: ${error.message}`);
+  }
+  return null;
+}
+
 /**
  * The folders to search, each with why and whether it must exist. `full`
  * marks one that always holds files once the app has run, so an empty one
@@ -175,8 +188,9 @@ function locations(record, identifier) {
       list.push(
         {
           path: join(data, identifier),
-          why: "Tauri's app data and app local data folder ($XDG_DATA_HOME). Tauri creates it and sets it as the webview's data directory; wry makes it the base data and cache folder of a WebKitGTK website data manager, cookies included. The webview is incognito, so wry gives it an ephemeral context instead, and this folder should stay empty",
+          why: "Tauri's app data and app local data folder ($XDG_DATA_HOME). Tauri creates it and sets it as the webview's data directory, and wry makes it the base data and cache folder of a WebKitGTK website data manager, with its cookie file. WebKitGTK writes its storage salts and HSTS database there on start (seen on ubuntu-24.04). The webview itself is incognito, so wry gives it an ephemeral context",
           required: true,
+          full: true,
         },
         {
           path: join(cache, identifier),
@@ -188,21 +202,12 @@ function locations(record, identifier) {
           why: "Tauri's app config folder ($XDG_CONFIG_HOME)",
           required: false,
         },
+        {
+          path: join(cache, 'gstreamer-1.0'),
+          why: "GStreamer's plugin registry, which WebKitGTK's media code rewrites when the app starts. It is shared with other programs, but the run writes it",
+          required: false,
+        },
       );
-      for (const name of ['navaja', 'webkitgtk']) {
-        list.push(
-          {
-            path: join(data, name),
-            why: `WebKitGTK's default data folder for a context that names none, for ${name}`,
-            required: false,
-          },
-          {
-            path: join(cache, name),
-            why: `WebKitGTK's default cache folder for a context that names none, for ${name}`,
-            required: false,
-          },
-        );
-      }
       break;
     }
     case 'darwin': {
@@ -212,19 +217,20 @@ function locations(record, identifier) {
         why: "Tauri's app data, app local data and app config folder",
         required: false,
       });
-      // WebKit and CFNetwork name their folders after the bundle identifier,
-      // or after the process when there is no bundle, as for the bare
-      // target/debug/navaja that the suite runs.
-      for (const name of [identifier, 'navaja']) {
+      // WebKit names a client's folders after its bundle identifier, or
+      // after the process when the binary has no bundle, as the bare
+      // target/debug/navaja that the suite runs has none.
+      const names = [identifier, 'navaja'];
+      for (const name of names) {
         list.push(
           {
             path: join(library, 'WebKit', name),
-            why: `WebKit's website data folder, for ${name}`,
+            why: `WebKit's folder for a persistent data store, for ${name}. The webview's store is not persistent, so it should not exist`,
             required: false,
           },
           {
             path: join(library, 'Caches', name),
-            why: `WebKit's and NSURLCache's cache folder, for ${name}; for the identifier, Tauri's app cache folder too`,
+            why: `the cache folder of WebKit and of NSURLCache, for ${name}; for the identifier, Tauri's app cache folder too`,
             required: false,
           },
           {
@@ -233,6 +239,47 @@ function locations(record, identifier) {
             required: false,
           },
         );
+      }
+      // WebKit's processes keep per-client caches, such as Metal's shader
+      // cache, in the user's cache and temporary folders under /var/folders,
+      // named like com.apple.WebKit.WebContent+navaja-<hash>.
+      const client = new RegExp(
+        `^com\\.apple\\.WebKit\\.[A-Za-z]+\\+(${names.map((name) => name.replaceAll('.', '\\.')).join('|')})(-|$)`,
+      );
+      const clients = (dir) => {
+        try {
+          return readdirSync(dir)
+            .filter((name) => client.test(name))
+            .map((name) => join(dir, name));
+        } catch {
+          return [];
+        }
+      };
+      const userCache = darwinDir('DARWIN_USER_CACHE_DIR');
+      const userTemp = darwinDir('DARWIN_USER_TEMP_DIR');
+      if (!userCache || !userTemp) return list;
+      const caches = clients(userCache);
+      if (!caches.some((path) => path.includes('.WebContent+'))) {
+        list.push({
+          path: join(userCache, 'com.apple.WebKit.WebContent+navaja-<hash>'),
+          why: "the web content process's cache for the app, which WebKit makes on start (seen on macos-26)",
+          required: true,
+        });
+      }
+      for (const path of caches) {
+        list.push({
+          path,
+          why: "a WebKit process's cache for the app, in the user's cache folder (DARWIN_USER_CACHE_DIR). The web content process's holds Metal's shader cache once it has drawn the page (seen on macos-26)",
+          required: true,
+          full: path.includes('.WebContent+'),
+        });
+      }
+      for (const path of clients(userTemp)) {
+        list.push({
+          path,
+          why: "a WebKit process's temporary folder for the app (DARWIN_USER_TEMP_DIR)",
+          required: false,
+        });
       }
       break;
     }
