@@ -90,7 +90,7 @@ $RootImages = @('navaja.exe')
 $StartupSeconds = 15
 # Services that the webview wakes outside its tree, by identity (see
 # Format-Identity): WAM's Microsoft-account provider and the sign-in service,
-# which looked login.live.com up 1.2 to 2.3 s after WebView2's browser
+# which looked login.live.com up 1.2 to 4.7 s after WebView2's browser
 # process started, in every S2.7 run checked, though no log names them as
 # acting for it. Their connections in the $StartupSeconds after those
 # starts count as the app's.
