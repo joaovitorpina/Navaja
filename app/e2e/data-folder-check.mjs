@@ -1,8 +1,10 @@
 // Roadmap §2, "the webview data folder holds no input text", on every PR.
 //
-// The suite's last spec, app/e2e/last/data-folder.e2e.ts, types a fresh
-// canary into every text field the app has, quits the app through its
-// `quit` command, and records the canary in app/e2e/output/data-folder.json.
+// The suite's last spec, app/e2e/last/data-folder.e2e.ts, enters a fresh
+// canary into every text field the app has through WebDriver (from script,
+// not as real keystrokes; the spec says why that matters), quits the app
+// through its `quit` command, and records the canary in
+// app/e2e/output/data-folder.json.
 // This script then searches every folder where the end-to-end build keeps
 // data on this OS, listed with the reason for each in `locations` below. The
 // spec runs it in both modes once the app has quit, so `pnpm e2e` (and CI's
@@ -112,7 +114,7 @@ function readRecord() {
     return null;
   }
   if (!Array.isArray(record.fields) || record.fields.length === 0) {
-    fail('the record names no field the canary was typed into');
+    fail('the record names no field the canary was entered into');
     return null;
   }
   return record;
@@ -517,7 +519,7 @@ function report(list, files) {
 }
 
 function check(record, list) {
-  console.log(`Canary: ${record.canary}, typed into: ${record.fields.join('; ')}.`);
+  console.log(`Canary: ${record.canary}, entered into: ${record.fields.join('; ')}.`);
   console.log(`The app quit at ${record.quitAt}. Searching:`);
   const { files, links } = settle(list);
   report(list, files);

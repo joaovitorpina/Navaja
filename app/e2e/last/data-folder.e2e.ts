@@ -8,8 +8,8 @@ import { $, browser, expect } from '@wdio/globals';
 import { accepting, dataFolderRecord, port } from '../wdio.conf';
 import { goHome } from '../support/app';
 
-// Roadmap §2: the webview data folder holds no input text. This spec types a
-// fresh canary into every text field the app has, then quits the app the
+// Roadmap §2: the webview data folder holds no input text. This spec enters
+// a fresh canary into every text field the app has, then quits the app the
 // normal way, so the webview writes what it keeps on exit. It records the
 // canary for app/e2e/data-folder-check.mjs and runs that script twice, once
 // the app is gone: it must find the canary in no folder where the end-to-end
@@ -61,8 +61,17 @@ function freshCanary(): string {
   return Array.from(randomBytes(32), (byte) => alphabet[byte % alphabet.length]).join('');
 }
 
-/** Types `canary` into a field and checks that the field holds it. */
-async function typeInto(selector: string, canary: string): Promise<void> {
+/**
+ * Enters `canary` into a field and checks that the field holds it.
+ *
+ * The embedded WebDriver (tauri-plugin-wdio-webdriver) sets the value from
+ * script and fires input and change events, or uses `insertText` in a
+ * contenteditable. Its key actions are synthetic events too. So no real
+ * keystroke reaches the engine, and the check does not cover anything the
+ * engine would keep only for trusted keyboard or IME input. That would need
+ * input injected by the OS, which this suite does not have.
+ */
+async function enterInto(selector: string, canary: string): Promise<void> {
   const field = $(selector);
   await field.waitForDisplayed();
   await field.setValue(canary);
@@ -77,7 +86,7 @@ async function typeInto(selector: string, canary: string): Promise<void> {
 /**
  * Marks the text fields of the page's main area and names each one by its
  * label, placeholder or id. The sidebar filter and the palette, outside it,
- * are typed into on their own.
+ * get the canary on their own.
  */
 function markMainFields(selector: string): Promise<string[]> {
   return browser.execute((fields: string) => {
@@ -187,7 +196,7 @@ describe('webview data folder', () => {
       await $('main h1').waitForDisplayed();
       const names = await markMainFields(TEXT_FIELDS);
       for (const [index, name] of names.entries()) {
-        await typeInto(`main [data-canary-field="${index}"]`, canary);
+        await enterInto(`main [data-canary-field="${index}"]`, canary);
         fields.push(`${route} ${name}`);
       }
     }
@@ -195,14 +204,14 @@ describe('webview data folder', () => {
     // The palette asks Rust's `search` for the canary.
     await goHome();
     await browser.keys([process.platform === 'darwin' ? 'Meta' : 'Control', 'k']);
-    await typeInto(PALETTE, canary);
+    await enterInto(PALETTE, canary);
     await expect($('[role="dialog"]')).toHaveText(expect.stringContaining(NO_MATCH));
     fields.push('command palette search');
     await browser.keys('Escape');
     await expect($('[role="dialog"]')).not.toBeExisting();
 
     // So does the sidebar's filter, which keeps the canary until the app quits.
-    await typeInto(FILTER, canary);
+    await enterInto(FILTER, canary);
     await expect($(FILTER_RESULTS)).toHaveText(expect.stringContaining(NO_MATCH));
     fields.push('sidebar filter');
 
@@ -259,7 +268,9 @@ describe('webview data folder', () => {
         2,
       )}\n`,
     );
-    console.log(`data folder: typed a fresh canary into ${fields.join(', ')}, then quit the app.`);
+    console.log(
+      `data folder: entered a fresh canary into ${fields.join(', ')}, then quit the app.`,
+    );
     recorded = true;
   });
 
