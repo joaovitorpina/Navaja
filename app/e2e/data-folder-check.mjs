@@ -589,6 +589,8 @@ function control(record, list) {
   const folders = present.map((path) =>
     join(path, `navaja-control-${randomBytes(6).toString('hex')}`),
   );
+  const planted = (path) => folders.some((folder) => path.startsWith(folder + sep));
+  let hits;
   try {
     for (const folder of folders) {
       mkdirSync(folder);
@@ -596,7 +598,7 @@ function control(record, list) {
         writeFileSync(join(folder, sample.name), sample.bytes(record.canary));
     }
     const { files } = snapshot(list);
-    const hits = search(list, files, record.canary);
+    hits = search(list, files, record.canary);
     for (const folder of folders) {
       for (const sample of SAMPLES) {
         const path = join(folder, sample.name);
@@ -608,22 +610,32 @@ function control(record, list) {
       }
     }
     for (const hit of hits) {
-      if (!folders.some((folder) => hit.path.startsWith(folder + sep))) {
+      if (!planted(hit.path)) {
         fail(`${hit.path} holds ${hit.forms.join('; ')}, and the control did not plant it`);
       }
     }
     console.log(`Planted ${SAMPLES.length} files in each of ${folders.length} folders:`);
     for (const folder of folders) console.log(`- ${folder}`);
-    console.log(`The search found ${hits.length} of ${SAMPLES.length * folders.length}.`);
+    const found = hits.filter((hit) => planted(hit.path)).length;
+    console.log(`The search found ${found} of ${SAMPLES.length * folders.length}.`);
   } finally {
     for (const folder of folders) rmSync(folder, { recursive: true, force: true });
   }
+  // Only a hit inside a planted folder means the removal failed. A hit
+  // elsewhere is the app's own copy, which the loop above already reported,
+  // unless it showed up after that search.
   const left = search(list, snapshot(list).files, record.canary);
-  if (left.length > 0 || folders.some((folder) => existsSync(folder))) {
+  if (left.some((hit) => planted(hit.path)) || folders.some((folder) => existsSync(folder))) {
     fail('the planted files are still there after their removal');
-  } else if (!failed) {
-    console.log('Removed them again; the folders hold no canary.');
   }
+  for (const hit of left) {
+    if (!planted(hit.path) && !hits.some((earlier) => earlier.path === hit.path)) {
+      fail(
+        `${hit.path} holds ${hit.forms.join('; ')}, which the control did not plant and its first search did not find`,
+      );
+    }
+  }
+  if (!failed) console.log('Removed them again; the folders hold no canary.');
 }
 
 const mode = process.argv[2] ?? 'check';
