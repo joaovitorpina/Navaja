@@ -62,7 +62,7 @@ navaja (app) ─► navaja-tools ─► navaja-ports ─► navaja-core
 - Crates under `crates/*` depend only on `navaja-core`. The one exception is `navaja-docker`, which also depends on `navaja-ports` for the `ContainerEngine` trait and the model types.
 - Tools may use any `crates/navaja-*` crate except `navaja-docker`.
 - Nothing depends on `tools/` or on the app.
-- **No networking outside `navaja-docker` and the app.** Only their dependency trees may contain Tauri, tokio, mio, socket2, an HTTP client or bollard. `cargo xtask check` asserts this over every other crate's normal dependencies, at any depth, and names the path to each one it finds. cargo-deny `wrappers` back it up.
+- **No networking outside `navaja-docker` and the app.** Only their dependency trees may contain Tauri, tokio, mio, socket2, an HTTP client or bollard. The one other exception is xtask, a repository tool that never ships: it resolves the app's ACL with tauri-utils (§5). `cargo xtask check` asserts this over the normal dependencies of every other workspace crate, at any depth, and names the path to each one it finds. cargo-deny `wrappers` back it up for reqwest, hyper and bollard, and they cover xtask too.
 - **Two network dependencies, each with one owner.** Only `navaja-docker` pulls in bollard and hyper, and only `tauri-plugin-updater` pulls in reqwest.
   - **Test builds only:** hyper also comes in through axum, the WebDriver server inside `tauri-plugin-wdio-webdriver`. That plugin is part of the app's test-only `e2e` feature (§5), never of a release build, and cargo-deny allows axum under it alone.
 - **Lints** ban printing, `exit`, `unsafe` outside FFI modules, socket and resolver calls, and `Command::new`.

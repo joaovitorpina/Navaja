@@ -742,7 +742,9 @@ mod tests {
 
     /// Roadmap M2a item 5: tokio, hyper or tauri under navaja-tools fails the
     /// check, through any chain of normal dependencies. Dev-dependencies do
-    /// not reach a build, and the app may use all three.
+    /// not reach a build. The app, navaja-docker and xtask are exempt
+    /// (docs/architecture.md §2), so their tokio, tauri, hyper and
+    /// tauri-utils are not reported.
     #[test]
     fn forbidden_crates_under_navaja_tools_fail_the_check() {
         let metadata = graph(
@@ -750,11 +752,14 @@ mod tests {
                 (TOOLS, true),
                 (APP, true),
                 (CORE, true),
+                (DOCKER, true),
+                (XTASK, true),
                 ("mid", false),
                 ("serde", false),
                 ("tokio", false),
                 ("hyper", false),
                 ("tauri", false),
+                ("tauri-utils", false),
             ],
             &[
                 (TOOLS, CORE, None),
@@ -767,6 +772,8 @@ mod tests {
                 (APP, TOOLS, None),
                 (APP, "tokio", None),
                 (APP, "tauri", None),
+                (DOCKER, "hyper", None),
+                (XTASK, "tauri-utils", None),
             ],
         );
         assert_eq!(
