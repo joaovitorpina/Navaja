@@ -22,8 +22,13 @@ describe('shell', () => {
     await browser.keys('Backspace');
     await expect(input).toHaveValue('uid');
 
-    // Look the option up again: one looked up while the list was empty stays
-    // "not found".
+    // Look the option up only now. `$()` queries as soon as it is called, and an
+    // option found in the opening list is removed when the list empties. Linux
+    // and macOS report that element as stale, and WebdriverIO finds it again.
+    // On Windows, WebView2 turns the embedded WebDriver's stale-element error
+    // into a null result, so the text reads "null" and nothing finds it again
+    // (run 37253449385). An option not found yet is fine: WebdriverIO waits
+    // for it.
     const first = $(option);
     await expect(first).toHaveText(expect.stringContaining('UUID generator'));
     await expect(first).toHaveAttribute('aria-selected', 'true');
