@@ -84,7 +84,8 @@ fn read(path: &Path) -> Result<String> {
 
 /// Runs `pnpm licenses list --json --recursive` in the repository root.
 /// Without `--recursive`, pnpm looks only at the root package, which has no
-/// dependencies, and prints a plain-text "No licenses in packages found".
+/// dependencies, and lists nothing: pnpm 12 prints `{}`, and pnpm 11 printed
+/// a plain-text "No licenses in packages found".
 fn pnpm_licenses(root: &Path) -> Result<String> {
     let args = ["licenses", "list", "--json", "--recursive"];
     let output = run_pnpm(root, &args)?;
@@ -99,9 +100,9 @@ fn pnpm_licenses(root: &Path) -> Result<String> {
     String::from_utf8(output.stdout).context("pnpm output is not UTF-8")
 }
 
-/// What a failed pnpm run said. Under `--json`, pnpm 11 prints its error
-/// as JSON on stdout, `{ "error": { "code", "message" } }`, and leaves
-/// stderr empty.
+/// What a failed pnpm run said. pnpm 12 writes its error as text on stderr.
+/// Under `--json`, pnpm 11 printed it as JSON on stdout,
+/// `{ "error": { "code", "message" } }`, and left stderr empty.
 fn pnpm_error(stdout: &[u8], stderr: &[u8]) -> String {
     let stderr = String::from_utf8_lossy(stderr);
     if !stderr.trim().is_empty() {
@@ -805,7 +806,8 @@ mod tests {
     #[test]
     fn a_failed_pnpm_run_reports_what_pnpm_said() {
         let error = |stdout: &str, stderr: &str| pnpm_error(stdout.as_bytes(), stderr.as_bytes());
-        // What pnpm 11 prints under --json when there is no lockfile.
+        // What pnpm 11 printed under --json when there was no lockfile.
+        // pnpm 12 prints `{}` there and exits 0, which parse_pnpm rejects.
         let json = r#"{
           "error": {
             "code": "ERR_PNPM_LICENSES_NO_LOCKFILE",
@@ -831,7 +833,8 @@ mod tests {
     #[test]
     fn an_empty_or_foreign_listing_is_an_error() {
         for stdout in [
-            // What pnpm prints at the root without --recursive.
+            // What pnpm 11 printed at the root without --recursive; pnpm 12
+            // prints `{}`, below.
             "No licenses in packages found",
             "",
             "{}",
