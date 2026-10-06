@@ -47,7 +47,7 @@ tauri-plugin-wdio = { version = "1.4.0", optional = true }
 # Pinned to upstream PR webdriverio/desktop-mobile#687, which fixes the
 # webview2-com 0.38/0.39 clash with Tauri 2.12 on Windows (issue #684).
 # Back to crates.io once a release includes it. Test-only (feature `e2e`).
-tauri-plugin-wdio-webdriver = { git = "https://github.com/webdriverio/desktop-mobile", rev = "fb4a544bcc49605f6c6fb34f04b292abf428a72a", optional = true }
+tauri-plugin-wdio-webdriver = { git = "https://github.com/webdriverio/desktop-mobile", rev = "790ab91e89cabbfc494d235150ee9b6d757ed881", optional = true }
 toml = "1.1.6"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
