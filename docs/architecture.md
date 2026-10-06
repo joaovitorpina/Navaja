@@ -20,7 +20,7 @@ Navaja/
 ├── Cargo.toml            virtual workspace: crates/*, tools, app/src-tauri, xtask · [workspace.lints]
 ├── rust-toolchain.toml · clippy.toml · deny.toml · js-licenses.toml · release-plz.toml · renovate.json · .gitattributes (eol=lf)
 ├── .config/nextest.toml  test groups for tests that share machine state (the clipboard)
-├── package.json · pnpm-workspace.yaml   (pnpm 11 pinned via packageManager; workspace root lets Vite serve ../tools)
+├── package.json · pnpm-workspace.yaml   (pnpm 12 pinned via packageManager; workspace root lets Vite serve ../tools)
 ├── eslint.config.mjs · prettier.config.mjs · .prettierignore   (load app/'s configs from the root, so they also cover tools/*/ui)
 ├── .github/workflows/    ci · advisories · bundle · spikes · release · release-build
 ├── crates/
