@@ -17,7 +17,7 @@ pub fn tray_available() -> bool {
         // SAFETY: loading runs the library's initialisers. These are the
         // libraries tray-icon loads moments later anyway, so the probe runs
         // nothing the tray would not.
-        match unsafe { libloading::Library::new(name) } {
+        match unsafe { libloading::Library::new(*name) } {
             // Kept loaded for tray-icon: GLib libraries are not always safe
             // to unload.
             Ok(library) => {
