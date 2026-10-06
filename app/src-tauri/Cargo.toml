@@ -81,7 +81,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-x11rb = "0.13.2"
+x11rb = "0.14.0"
 # The probe arboard runs to choose Wayland or X11, so the test makes the same
 # choice.
 wl-clipboard-rs = "0.9.4"
