@@ -68,7 +68,7 @@ objc2 = "0.6.4"
 # Clipboard on Wayland through the data-control protocol (X11 works without it).
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 # Checks for the tray's appindicator library, which tray-icon panics without.
-libloading = "0.7.4"
+libloading = "0.9.0"
 
 # tests/clipboard reads the clipboard back through each OS's own API rather
 # than arboard, so an arboard change cannot hide a missing marker. Crates the
