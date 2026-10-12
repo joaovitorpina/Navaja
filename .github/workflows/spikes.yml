@@ -522,7 +522,7 @@ jobs:
       # the app's own output (*.log on macOS; navaja.out and .err on Windows).
       - name: Upload the captures
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: s2-3-${{ matrix.os }}
           path: |
@@ -897,7 +897,7 @@ jobs:
       # packet: the script deletes them, teardown too if a phase failed or
       # timed out first, and the upload leaves them out in case both missed.
       # Anyone who can see the run can download it, so it is kept 14 days.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: s2-7-${{ matrix.os }}
